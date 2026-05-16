@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use tokio::process::Command;
 
 use crate::{
@@ -54,6 +54,28 @@ impl DockerRunner {
             ));
         }
 
+        if matches!(spec.provider, ProviderKind::Codex) && self.config.codex.mount_host_home {
+            let Some(host_home) = &self.config.codex.host_home else {
+                bail!("codex.mount_host_home is enabled but codex.host_home is not configured");
+            };
+            if !host_home.exists() {
+                bail!(
+                    "Configured Codex home does not exist: {}",
+                    host_home.display()
+                );
+            }
+            parts.push("--env".to_string());
+            parts.push(format!("CODEX_HOME={}", self.config.codex.container_home));
+            parts.push("--env".to_string());
+            parts.push("HOME=/home/agent".to_string());
+            parts.push("--mount".to_string());
+            parts.push(codex_home_mount(
+                host_home,
+                &self.config.codex.container_home,
+                self.config.codex.mount_read_only,
+            ));
+        }
+
         parts.push("--mount".to_string());
         parts.push(project_mount(spec));
         parts.push(self.config.docker.agent_image.clone());
@@ -96,6 +118,16 @@ async fn provider_command(spec: &AgentRunSpec) -> Result<ProviderCommand> {
     }
 }
 
+fn codex_home_mount(host_home: &std::path::Path, container_home: &str, read_only: bool) -> String {
+    let readonly = if read_only { ",readonly" } else { "" };
+    format!(
+        "type=bind,source={},target={}{}",
+        mount_source(host_home),
+        container_home,
+        readonly
+    )
+}
+
 fn project_mount(spec: &AgentRunSpec) -> String {
     let readonly = match spec.mount_mode {
         MountMode::ReadOnly => ",readonly",
@@ -103,7 +135,18 @@ fn project_mount(spec: &AgentRunSpec) -> String {
     };
     format!(
         "type=bind,source={},target=/workspace/project{}",
-        spec.project_path.display(),
+        mount_source(&spec.project_path),
         readonly
     )
+}
+
+fn mount_source(path: &std::path::Path) -> String {
+    let raw = path.display().to_string();
+    if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{stripped}")
+    } else if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+        stripped.to_string()
+    } else {
+        raw
+    }
 }

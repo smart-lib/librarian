@@ -57,6 +57,9 @@ Prerequisites:
 ```powershell
 .\scripts\bootstrap-windows.ps1
 cargo +stable-x86_64-pc-windows-gnu run -- auth codex
+cargo +stable-x86_64-pc-windows-gnu run -- auth codex --enable-container-mount
+cargo +stable-x86_64-pc-windows-gnu run -- runtime build-agent-image
+cargo +stable-x86_64-pc-windows-gnu run -- doctor
 cargo +stable-x86_64-pc-windows-gnu run -- project add c:\path\to\project
 cargo +stable-x86_64-pc-windows-gnu run -- admin
 ```
@@ -177,15 +180,19 @@ default is Docker. The runtime command is configurable.
 ## Codex Authentication
 
 Librarian does not store Codex credentials in project files. The MVP expects you
-to authenticate Codex on the host first, then later uses a scoped runtime profile
-for containers.
+to authenticate Codex on the host first. Containerized Codex runs can then mount
+the host Codex profile explicitly.
 
 ```powershell
 codex
+cargo +stable-x86_64-pc-windows-gnu run -- auth codex --enable-container-mount
+cargo +stable-x86_64-pc-windows-gnu run -- runtime build-agent-image
+cargo +stable-x86_64-pc-windows-gnu run -- doctor
 ```
 
-Future work will add a secret broker so containers can request provider actions
-without receiving plaintext credentials.
+This mount is intentionally opt-in: the current self-hosting path exposes the
+host Codex profile to the Codex process inside the project container. Use it for
+trusted local self-hosting while the stronger brokered provider path matures.
 
 ## Default Safety Model
 

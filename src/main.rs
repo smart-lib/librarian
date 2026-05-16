@@ -27,6 +27,7 @@ use domain::{
 };
 use secrets::SecretVault;
 use serde_json::json;
+use tokio::process::Command as TokioCommand;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug, Parser)]
@@ -43,6 +44,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Init,
+    Doctor,
     Admin {
         #[arg(long)]
         bind: Option<String>,
@@ -50,6 +52,10 @@ enum Command {
     Broker {
         #[arg(long)]
         bind: Option<String>,
+    },
+    Runtime {
+        #[command(subcommand)]
+        command: RuntimeCommand,
     },
     Auth {
         #[command(subcommand)]
@@ -132,7 +138,22 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum AuthCommand {
-    Codex,
+    Codex {
+        #[arg(long)]
+        enable_container_mount: bool,
+        #[arg(long)]
+        codex_home: Option<PathBuf>,
+        #[arg(long)]
+        read_only: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RuntimeCommand {
+    BuildAgentImage {
+        #[arg(long)]
+        no_codex: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -220,7 +241,17 @@ enum ScheduleCommand {
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
     Show,
-    SetConcurrency { max_concurrent_jobs: usize },
+    SetConcurrency {
+        max_concurrent_jobs: usize,
+    },
+    SetCodexHome {
+        path: PathBuf,
+    },
+    SetCodexMount {
+        enabled: bool,
+        #[arg(long)]
+        read_only: Option<bool>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -411,6 +442,32 @@ async fn main() -> Result<()> {
             println!("Initialized Librarian at {}", config.home.display());
             println!("Admin UI: http://{}", config.admin.bind);
         }
+        Command::Doctor => {
+            config.ensure_layout()?;
+            println!("Librarian home: {}", config.home.display());
+            println!("Runtime command: {}", config.docker.runtime_command);
+            println!("Agent image: {}", config.docker.agent_image);
+            println!(
+                "Codex host home: {}",
+                optional_path(&config.codex.host_home)
+            );
+            println!("Codex mount enabled: {}", config.codex.mount_host_home);
+            println!("Codex mount read-only: {}", config.codex.mount_read_only);
+            println!("Codex container home: {}", config.codex.container_home);
+            print_command_check(
+                "container runtime",
+                &config.docker.runtime_command,
+                &["--version"],
+            )
+            .await;
+            print_command_check(
+                "agent image",
+                &config.docker.runtime_command,
+                &["image", "inspect", &config.docker.agent_image],
+            )
+            .await;
+            print_command_check("host codex", "codex", &["--version"]).await;
+        }
         Command::Admin { bind } => {
             config.ensure_layout()?;
             let db = Database::connect(&config).await?;
@@ -425,11 +482,59 @@ async fn main() -> Result<()> {
             let bind = bind.unwrap_or_else(|| config.broker.bind.clone());
             broker::serve(bind, db, config).await?;
         }
+        Command::Runtime { command } => match command {
+            RuntimeCommand::BuildAgentImage { no_codex } => {
+                let install_codex = if no_codex { "false" } else { "true" };
+                println!(
+                    "Building {} from Dockerfile.agent (INSTALL_CODEX={install_codex})",
+                    config.docker.agent_image
+                );
+                let build_arg = format!("INSTALL_CODEX={install_codex}");
+                let status = TokioCommand::new(&config.docker.runtime_command)
+                    .args([
+                        "build",
+                        "-t",
+                        &config.docker.agent_image,
+                        "--build-arg",
+                        &build_arg,
+                        "-f",
+                        "Dockerfile.agent",
+                        ".",
+                    ])
+                    .status()
+                    .await?;
+                if !status.success() {
+                    anyhow::bail!("Agent image build failed with status {status}");
+                }
+            }
+        },
         Command::Auth { command } => match command {
-            AuthCommand::Codex => {
+            AuthCommand::Codex {
+                enable_container_mount,
+                codex_home,
+                read_only,
+            } => {
                 println!("Starting Codex auth bootstrap.");
                 println!("Run `codex` in this terminal and complete the OpenAI sign-in flow.");
                 println!("Librarian will avoid copying Codex credentials into project files.");
+                if enable_container_mount || codex_home.is_some() {
+                    let mut config = config;
+                    if let Some(codex_home) = codex_home {
+                        config.codex.host_home = Some(codex_home.canonicalize()?);
+                    }
+                    config.codex.mount_host_home = enable_container_mount;
+                    config.codex.mount_read_only = read_only;
+                    config.save()?;
+                    println!(
+                        "Saved Codex runtime profile. host_home={} mount_host_home={} read_only={}",
+                        optional_path(&config.codex.host_home),
+                        config.codex.mount_host_home,
+                        config.codex.mount_read_only
+                    );
+                } else {
+                    println!("For containerized Codex runs, enable the explicit mount with:");
+                    println!("  librarian auth codex --enable-container-mount");
+                }
             }
         },
         Command::Project { command } => {
@@ -820,6 +925,27 @@ async fn main() -> Result<()> {
                     config.config_path.display()
                 );
             }
+            ConfigCommand::SetCodexHome { path } => {
+                let mut config = config;
+                config.codex.host_home = Some(path.canonicalize()?);
+                config.save()?;
+                println!(
+                    "Codex host home set to {}",
+                    optional_path(&config.codex.host_home)
+                );
+            }
+            ConfigCommand::SetCodexMount { enabled, read_only } => {
+                let mut config = config;
+                config.codex.mount_host_home = enabled;
+                if let Some(read_only) = read_only {
+                    config.codex.mount_read_only = read_only;
+                }
+                config.save()?;
+                println!(
+                    "Codex mount enabled={} read_only={}",
+                    config.codex.mount_host_home, config.codex.mount_read_only
+                );
+            }
         },
         Command::Secrets { command } => {
             config.ensure_layout()?;
@@ -1185,4 +1311,29 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn optional_path(path: &Option<PathBuf>) -> String {
+    path.as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+async fn print_command_check(label: &str, program: &str, args: &[&str]) {
+    let output = TokioCommand::new(program).args(args).output().await;
+    match output {
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let first_line = text.lines().next().unwrap_or("ok");
+            println!("{label}: ok ({first_line})");
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let first_line = stderr.lines().next().unwrap_or("command failed");
+            println!("{label}: failed ({first_line})");
+        }
+        Err(error) => {
+            println!("{label}: unavailable ({error})");
+        }
+    }
 }

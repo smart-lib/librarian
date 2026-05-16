@@ -17,6 +17,7 @@ pub struct Config {
     pub worker: WorkerConfig,
     pub memory: MemoryConfig,
     pub broker: BrokerConfig,
+    pub codex: CodexRuntimeConfig,
     pub third_eye: ThirdEyeConfig,
 }
 
@@ -50,11 +51,30 @@ pub struct BrokerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CodexRuntimeConfig {
+    pub host_home: Option<PathBuf>,
+    pub mount_host_home: bool,
+    pub mount_read_only: bool,
+    pub container_home: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ThirdEyeConfig {
     pub enabled: bool,
     pub base_url: String,
     pub db_path: Option<PathBuf>,
     pub project_export_dir: PathBuf,
+}
+
+impl Default for CodexRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            host_home: default_codex_home(),
+            mount_host_home: false,
+            mount_read_only: false,
+            container_home: "/home/agent/.codex".to_string(),
+        }
+    }
 }
 
 impl Default for ThirdEyeConfig {
@@ -114,6 +134,7 @@ impl Config {
             },
             memory: MemoryConfig::default(),
             broker: BrokerConfig::default(),
+            codex: CodexRuntimeConfig::default(),
             third_eye: ThirdEyeConfig::default(),
             home,
         };
@@ -151,6 +172,7 @@ impl Config {
             worker: self.worker.clone(),
             memory: self.memory.clone(),
             broker: self.broker.clone(),
+            codex: self.codex.clone(),
             third_eye: self.third_eye.clone(),
             database_path: path_to_stored(&self.home, &self.database_path),
             vault_path: path_to_stored(&self.home, &self.vault_path),
@@ -169,6 +191,10 @@ impl Config {
         self.worker = stored.worker;
         self.memory = stored.memory;
         self.broker = stored.broker;
+        self.codex = stored.codex;
+        if let Some(path) = self.codex.host_home.clone() {
+            self.codex.host_home = Some(stored_path(&self.home, path));
+        }
         self.third_eye = stored.third_eye;
         self.third_eye.project_export_dir =
             stored_path(&self.home, self.third_eye.project_export_dir.clone());
@@ -191,6 +217,8 @@ struct StoredConfig {
     #[serde(default)]
     broker: BrokerConfig,
     #[serde(default)]
+    codex: CodexRuntimeConfig,
+    #[serde(default)]
     third_eye: ThirdEyeConfig,
     database_path: Option<PathBuf>,
     vault_path: Option<PathBuf>,
@@ -201,6 +229,12 @@ fn default_home() -> Result<PathBuf> {
         .or_else(dirs::home_dir)
         .context("Could not determine a home directory for Librarian")?;
     Ok(base.join("librarian"))
+}
+
+fn default_codex_home() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
 }
 
 fn stored_path(home: &Path, path: PathBuf) -> PathBuf {

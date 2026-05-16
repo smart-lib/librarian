@@ -158,6 +158,11 @@ Done:
 
 - Provider registry with model metadata, defaults, cost hints, and task-fit
   hints.
+- Explicit Codex runtime profile configuration for self-hosted container runs:
+  host `CODEX_HOME` can be mounted into the agent container only after opt-in.
+- Runtime diagnostics for container engine, agent image, host Codex CLI, and
+  Codex mount config.
+- Agent image build command through the configured Docker/Podman runtime.
 - Prompt/response gate pipeline entry points for lightweight validation,
   filtering, transformation, provider-specific prompt shaping, and redaction.
 - Automatic secret detection before prompt enrichment: move raw tokens into the
@@ -175,6 +180,8 @@ Done:
 
 Remaining:
 
+- Run a real containerized Codex self-hosting task after Podman/Docker is
+  connected and the agent image is built.
 - Add richer structured parsing for provider responses and CLI error formats.
 - Route new work to fallback providers when the selected provider/model is
   paused and a fallback policy is configured.
