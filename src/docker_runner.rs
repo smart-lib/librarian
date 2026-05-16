@@ -1,4 +1,6 @@
-use anyhow::{bail, Result};
+use std::fs;
+
+use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 
 use crate::{
@@ -22,8 +24,9 @@ impl DockerRunner {
 
     pub async fn docker_command_parts(&self, spec: &AgentRunSpec) -> Result<Vec<String>> {
         let provider_command = provider_command(spec).await?;
-        let mut parts = vec![
-            self.config.docker.runtime_command.clone(),
+        let run_dir = self.prepare_run_dir(spec)?;
+        let mut parts = runtime_prefix(&self.config);
+        parts.extend([
             "run".to_string(),
             "--rm".to_string(),
             "--name".to_string(),
@@ -34,7 +37,7 @@ impl DockerRunner {
             format!("librarian.job_id={}", spec.job_id),
             "--workdir".to_string(),
             "/workspace/project".to_string(),
-        ];
+        ]);
 
         match spec.network_mode {
             NetworkMode::None => {
@@ -70,6 +73,7 @@ impl DockerRunner {
             parts.push("HOME=/home/agent".to_string());
             parts.push("--mount".to_string());
             parts.push(codex_home_mount(
+                &self.config,
                 host_home,
                 &self.config.codex.container_home,
                 self.config.codex.mount_read_only,
@@ -77,22 +81,35 @@ impl DockerRunner {
         }
 
         parts.push("--mount".to_string());
-        parts.push(project_mount(spec));
+        parts.push(run_mount(&self.config, &run_dir));
+        parts.push("--mount".to_string());
+        parts.push(project_mount(&self.config, spec));
         parts.push(self.config.docker.agent_image.clone());
         parts.push(provider_command.program);
         parts.extend(provider_command.args);
         Ok(parts)
     }
 
+    fn prepare_run_dir(&self, spec: &AgentRunSpec) -> Result<std::path::PathBuf> {
+        let run_dir = self.config.home.join("runs").join(spec.job_id.to_string());
+        fs::create_dir_all(&run_dir)
+            .with_context(|| format!("Failed to create {}", run_dir.display()))?;
+        fs::write(run_dir.join("prompt.txt"), &spec.prompt)
+            .with_context(|| format!("Failed to write prompt for job {}", spec.job_id))?;
+        Ok(run_dir)
+    }
+
     pub async fn cleanup_stopped_librarian_containers(&self) -> Result<CleanupReport> {
+        let mut args = self.config.docker.runtime_args.clone();
+        args.extend([
+            "container".to_string(),
+            "prune".to_string(),
+            "--force".to_string(),
+            "--filter".to_string(),
+            "label=librarian.managed=true".to_string(),
+        ]);
         let output = Command::new(&self.config.docker.runtime_command)
-            .args([
-                "container",
-                "prune",
-                "--force",
-                "--filter",
-                "label=librarian.managed=true",
-            ])
+            .args(args)
             .output()
             .await?;
         Ok(CleanupReport {
@@ -118,35 +135,72 @@ async fn provider_command(spec: &AgentRunSpec) -> Result<ProviderCommand> {
     }
 }
 
-fn codex_home_mount(host_home: &std::path::Path, container_home: &str, read_only: bool) -> String {
+fn runtime_prefix(config: &Config) -> Vec<String> {
+    let mut parts = vec![config.docker.runtime_command.clone()];
+    parts.extend(config.docker.runtime_args.clone());
+    parts
+}
+
+fn codex_home_mount(
+    config: &Config,
+    host_home: &std::path::Path,
+    container_home: &str,
+    read_only: bool,
+) -> String {
     let readonly = if read_only { ",readonly" } else { "" };
     format!(
         "type=bind,source={},target={}{}",
-        mount_source(host_home),
+        mount_source(config, host_home),
         container_home,
         readonly
     )
 }
 
-fn project_mount(spec: &AgentRunSpec) -> String {
+fn project_mount(config: &Config, spec: &AgentRunSpec) -> String {
     let readonly = match spec.mount_mode {
         MountMode::ReadOnly => ",readonly",
         MountMode::ReadWrite => "",
     };
     format!(
         "type=bind,source={},target=/workspace/project{}",
-        mount_source(&spec.project_path),
+        mount_source(config, &spec.project_path),
         readonly
     )
 }
 
-fn mount_source(path: &std::path::Path) -> String {
+fn run_mount(config: &Config, run_dir: &std::path::Path) -> String {
+    format!(
+        "type=bind,source={},target=/workspace/run",
+        mount_source(config, run_dir)
+    )
+}
+
+fn mount_source(config: &Config, path: &std::path::Path) -> String {
     let raw = path.display().to_string();
-    if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
+    let host_path = if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{stripped}")
     } else if let Some(stripped) = raw.strip_prefix(r"\\?\") {
         stripped.to_string()
     } else {
         raw
+    };
+
+    if config.docker.mount_path_style.eq_ignore_ascii_case("wsl") {
+        windows_path_to_wsl(&host_path).unwrap_or(host_path)
+    } else {
+        host_path
     }
+}
+
+fn windows_path_to_wsl(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 3 || bytes[1] != b':' || bytes[2] != b'\\' {
+        return None;
+    }
+    let drive = (bytes[0] as char).to_ascii_lowercase();
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    let rest = path[3..].replace('\\', "/");
+    Some(format!("/mnt/{drive}/{rest}"))
 }

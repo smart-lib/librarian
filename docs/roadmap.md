@@ -163,6 +163,10 @@ Done:
 - Runtime diagnostics for container engine, agent image, host Codex CLI, and
   Codex mount config.
 - Agent image build command through the configured Docker/Podman runtime.
+- WSL Podman fallback runtime for Windows when the global Podman CLI connection
+  metadata is broken but the `podman-machine-default` WSL distro is usable.
+- Per-run prompt file mount at `/workspace/run/prompt.txt`; Codex reads prompts
+  through stdin instead of a long command-line argument.
 - Prompt/response gate pipeline entry points for lightweight validation,
   filtering, transformation, provider-specific prompt shaping, and redaction.
 - Automatic secret detection before prompt enrichment: move raw tokens into the
@@ -181,7 +185,9 @@ Done:
 Remaining:
 
 - Run a real containerized Codex self-hosting task after Podman/Docker is
-  connected and the agent image is built.
+  connected, the agent image is built, and host Codex auth is present.
+- Add clearer Codex auth diagnostics; missing/invalid auth currently appears as
+  provider output with `401 Missing bearer`.
 - Add richer structured parsing for provider responses and CLI error formats.
 - Route new work to fallback providers when the selected provider/model is
   paused and a fallback policy is configured.

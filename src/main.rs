@@ -150,6 +150,14 @@ enum AuthCommand {
 
 #[derive(Debug, Subcommand)]
 enum RuntimeCommand {
+    UseWslPodman {
+        #[arg(long, default_value = "podman-machine-default")]
+        distro: String,
+    },
+    UseHostRuntime {
+        #[arg(long, default_value_t = default_runtime_command_arg())]
+        command: String,
+    },
     BuildAgentImage {
         #[arg(long)]
         no_codex: bool,
@@ -445,8 +453,9 @@ async fn main() -> Result<()> {
         Command::Doctor => {
             config.ensure_layout()?;
             println!("Librarian home: {}", config.home.display());
-            println!("Runtime command: {}", config.docker.runtime_command);
+            println!("Runtime command: {}", runtime_display(&config));
             println!("Agent image: {}", config.docker.agent_image);
+            println!("Mount path style: {}", config.docker.mount_path_style);
             println!(
                 "Codex host home: {}",
                 optional_path(&config.codex.host_home)
@@ -454,15 +463,10 @@ async fn main() -> Result<()> {
             println!("Codex mount enabled: {}", config.codex.mount_host_home);
             println!("Codex mount read-only: {}", config.codex.mount_read_only);
             println!("Codex container home: {}", config.codex.container_home);
-            print_command_check(
-                "container runtime",
-                &config.docker.runtime_command,
-                &["--version"],
-            )
-            .await;
-            print_command_check(
+            print_runtime_check("container runtime", &config, &["--version"]).await;
+            print_runtime_check(
                 "agent image",
-                &config.docker.runtime_command,
+                &config,
                 &["image", "inspect", &config.docker.agent_image],
             )
             .await;
@@ -483,6 +487,27 @@ async fn main() -> Result<()> {
             broker::serve(bind, db, config).await?;
         }
         Command::Runtime { command } => match command {
+            RuntimeCommand::UseWslPodman { distro } => {
+                let mut config = config;
+                config.docker.runtime_command = "wsl.exe".to_string();
+                config.docker.runtime_args = vec![
+                    "-d".to_string(),
+                    distro,
+                    "--".to_string(),
+                    "podman".to_string(),
+                ];
+                config.docker.mount_path_style = "wsl".to_string();
+                config.save()?;
+                println!("Runtime set to {}", runtime_display(&config));
+            }
+            RuntimeCommand::UseHostRuntime { command } => {
+                let mut config = config;
+                config.docker.runtime_command = command;
+                config.docker.runtime_args.clear();
+                config.docker.mount_path_style = "host".to_string();
+                config.save()?;
+                println!("Runtime set to {}", runtime_display(&config));
+            }
             RuntimeCommand::BuildAgentImage { no_codex } => {
                 let install_codex = if no_codex { "false" } else { "true" };
                 println!(
@@ -490,8 +515,9 @@ async fn main() -> Result<()> {
                     config.docker.agent_image
                 );
                 let build_arg = format!("INSTALL_CODEX={install_codex}");
-                let status = TokioCommand::new(&config.docker.runtime_command)
-                    .args([
+                let mut args = config.docker.runtime_args.clone();
+                args.extend(
+                    [
                         "build",
                         "-t",
                         &config.docker.agent_image,
@@ -500,7 +526,12 @@ async fn main() -> Result<()> {
                         "-f",
                         "Dockerfile.agent",
                         ".",
-                    ])
+                    ]
+                    .into_iter()
+                    .map(str::to_string),
+                );
+                let status = TokioCommand::new(&config.docker.runtime_command)
+                    .args(args)
                     .status()
                     .await?;
                 if !status.success() {
@@ -1319,7 +1350,37 @@ fn optional_path(path: &Option<PathBuf>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn runtime_display(config: &Config) -> String {
+    std::iter::once(config.docker.runtime_command.as_str())
+        .chain(config.docker.runtime_args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn default_runtime_command_arg() -> String {
+    if cfg!(windows) {
+        "podman".to_string()
+    } else {
+        "docker".to_string()
+    }
+}
+
+async fn print_runtime_check(label: &str, config: &Config, args: &[&str]) {
+    let mut all_args = config.docker.runtime_args.clone();
+    all_args.extend(args.iter().map(|arg| arg.to_string()));
+    print_command_check_owned(label, &config.docker.runtime_command, &all_args).await;
+}
+
 async fn print_command_check(label: &str, program: &str, args: &[&str]) {
+    print_command_check_owned(
+        label,
+        program,
+        &args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+    )
+    .await;
+}
+
+async fn print_command_check_owned(label: &str, program: &str, args: &[String]) {
     let output = TokioCommand::new(program).args(args).output().await;
     match output {
         Ok(output) if output.status.success() => {

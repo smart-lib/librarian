@@ -30,6 +30,10 @@ pub struct AdminConfig {
 pub struct DockerConfig {
     pub agent_image: String,
     pub runtime_command: String,
+    #[serde(default)]
+    pub runtime_args: Vec<String>,
+    #[serde(default = "default_mount_path_style")]
+    pub mount_path_style: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -125,6 +129,8 @@ impl Config {
             docker: DockerConfig {
                 agent_image: "librarian-agent:latest".to_string(),
                 runtime_command: default_runtime_command(),
+                runtime_args: Vec::new(),
+                mount_path_style: "host".to_string(),
             },
             worker: WorkerConfig {
                 max_concurrent_jobs: std::env::var("LIBRARIAN_WORKER_CONCURRENCY")
@@ -235,6 +241,10 @@ fn default_codex_home() -> Option<PathBuf> {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
+}
+
+fn default_mount_path_style() -> String {
+    "host".to_string()
 }
 
 fn stored_path(home: &Path, path: PathBuf) -> PathBuf {

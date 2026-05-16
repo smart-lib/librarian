@@ -64,6 +64,14 @@ cargo +stable-x86_64-pc-windows-gnu run -- project add c:\path\to\project
 cargo +stable-x86_64-pc-windows-gnu run -- admin
 ```
 
+If the Windows Podman CLI loses its machine connection while the WSL
+`podman-machine-default` distro is still usable, switch Librarian to the WSL
+fallback runtime:
+
+```powershell
+cargo +stable-x86_64-pc-windows-gnu run -- runtime use-wsl-podman
+```
+
 Then open `http://127.0.0.1:17377`.
 
 Queue a job from the UI or CLI:
@@ -193,6 +201,10 @@ cargo +stable-x86_64-pc-windows-gnu run -- doctor
 This mount is intentionally opt-in: the current self-hosting path exposes the
 host Codex profile to the Codex process inside the project container. Use it for
 trusted local self-hosting while the stronger brokered provider path matures.
+
+Codex prompts are written to a per-run `/workspace/run/prompt.txt` mount and
+fed through stdin. This avoids brittle long prompt arguments, especially through
+Windows-to-WSL runtime wrappers.
 
 ## Default Safety Model
 
