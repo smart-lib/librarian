@@ -1,0 +1,25 @@
+FROM alpine:3.20
+
+ARG INSTALL_CODEX=true
+
+RUN apk add --no-cache \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    nodejs \
+    npm \
+    openssh-client \
+    ripgrep \
+    sqlite \
+    tini
+
+RUN if [ "$INSTALL_CODEX" = "true" ]; then npm install -g @openai/codex; fi
+
+RUN addgroup -S agent && adduser -S agent -G agent
+
+USER agent
+WORKDIR /workspace/project
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["bash"]

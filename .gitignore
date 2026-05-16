@@ -1,0 +1,10 @@
+/target/
+/third-eye-export/
+/.librarian/
+/.librarian-*/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
