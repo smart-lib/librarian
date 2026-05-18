@@ -336,3 +336,40 @@ fn default_runtime_command() -> String {
         "docker".to_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn persists_routing_and_budget_config_portably() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-config-{}", Uuid::new_v4()));
+        let mut config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.routing.fallback_enabled = true;
+        config.routing.fallback_order = vec!["openrouter".to_string(), "codex".to_string()];
+        config.budget.enabled = true;
+        config.budget.daily_total_usd = Some(5.0);
+        config.budget.daily_provider_usd = Some(3.0);
+        config.budget.daily_project_usd = Some(2.0);
+        config.save().expect("save");
+
+        let stored = std::fs::read_to_string(home.join("config.toml")).expect("stored config");
+        assert!(stored.contains("database_path = \"librarian.db\""));
+        assert!(stored.contains("host_home = \"codex-home\""));
+
+        let reloaded = Config::load_or_default(Some(home.clone())).expect("reload");
+        assert!(reloaded.routing.fallback_enabled);
+        assert_eq!(
+            reloaded.routing.fallback_order,
+            vec!["openrouter".to_string(), "codex".to_string()]
+        );
+        assert!(reloaded.budget.enabled);
+        assert_eq!(reloaded.budget.daily_total_usd, Some(5.0));
+        assert_eq!(reloaded.budget.daily_provider_usd, Some(3.0));
+        assert_eq!(reloaded.budget.daily_project_usd, Some(2.0));
+        std::fs::remove_dir_all(home).ok();
+    }
+}

@@ -307,14 +307,20 @@ Dependencies:
 
 ## Priority 6: Minimal Automated Test Harness
 
+Status: In progress. No-container tests now cover routing fallback selection,
+budget blocking, routing/budget config persistence, schedule-created provider
+selection, provider diagnostics, and worker failure categorization.
+
 Goal: make regression checks possible before full environment automation exists.
 
 Tasks:
 
-- Add tests for routing fallback selection and budget blocking.
-- Add tests for config persistence of routing and budget settings.
+- Add tests for routing fallback selection and budget blocking. First pass done.
+- Add tests for config persistence of routing and budget settings. First pass
+  done.
 - Add tests for schedule-created agent jobs preserving provider selection.
-- Add tests around provider diagnostic parsing.
+  First pass done.
+- Add tests around provider diagnostic parsing. First pass done.
 - Add a no-container integration path for job preflight once Priority 2 exists.
 
 Dependencies:

@@ -348,7 +348,14 @@ fn truncate(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        config::Config,
+        db::Database,
+        domain::{MountMode, NetworkMode, ScheduleKind},
+        scheduler,
+    };
     use chrono::Utc;
+    use std::path::PathBuf;
     use uuid::Uuid;
 
     fn codex_job() -> Job {
@@ -385,5 +392,115 @@ mod tests {
         )
         .expect("diagnostic");
         assert_eq!(diagnostic["code"], "codex_cli_missing");
+    }
+
+    async fn test_config_and_db(name: &str) -> (Config, Database, PathBuf) {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-{}-{name}", Uuid::new_v4()));
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        (config, db, home)
+    }
+
+    #[tokio::test]
+    async fn selects_configured_fallback_when_provider_paused() {
+        let (mut config, db, home) = test_config_and_db("fallback").await;
+        config.routing.fallback_enabled = true;
+        config.routing.fallback_order = vec![
+            "codex".to_string(),
+            "openrouter".to_string(),
+            "claude-code".to_string(),
+        ];
+        db.set_provider_pause(
+            "codex",
+            Some("codex-cli-default"),
+            Utc::now() + chrono::Duration::minutes(30),
+            "test pause",
+        )
+        .await
+        .expect("pause");
+
+        let job = codex_job();
+        let selection = select_provider_for_job(&config, &db, &job)
+            .await
+            .expect("selection");
+        assert_eq!(selection.provider, ProviderKind::OpenRouter);
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn blocks_dispatch_when_provider_budget_is_spent() {
+        let (mut config, db, home) = test_config_and_db("budget").await;
+        config.budget.enabled = true;
+        config.budget.daily_provider_usd = Some(1.0);
+        let project_dir = home.join("project");
+        std::fs::create_dir_all(&project_dir).expect("project dir");
+        let project = db
+            .add_project("budget-project", &project_dir)
+            .await
+            .expect("project");
+        let job = db
+            .create_job(
+                project.id,
+                ProviderKind::Codex,
+                "test",
+                MountMode::ReadWrite,
+                NetworkMode::None,
+            )
+            .await
+            .expect("job");
+        db.add_usage_observation(
+            "codex",
+            Some("codex-cli-default"),
+            Some(job.id),
+            None,
+            None,
+            Some(2.0),
+            false,
+            serde_json::json!({ "source": "test" }),
+        )
+        .await
+        .expect("usage");
+
+        let error = ensure_budget_available(&config, &db, &job)
+            .await
+            .expect_err("budget should block");
+        assert!(error.to_string().contains("daily_provider"));
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn scheduled_agent_task_preserves_provider_selection() {
+        let (config, db, home) = test_config_and_db("schedule-provider").await;
+        let project_dir = home.join("project");
+        std::fs::create_dir_all(&project_dir).expect("project dir");
+        db.add_project("scheduled-project", &project_dir)
+            .await
+            .expect("project");
+        let schedule = db
+            .add_schedule(
+                "test.agent",
+                ScheduleKind::AgentTask,
+                3600,
+                serde_json::json!({
+                    "project": "scheduled-project",
+                    "goal": "test scheduled provider",
+                    "provider": "claude-code",
+                }),
+            )
+            .await
+            .expect("schedule");
+
+        scheduler::run_schedule_now(&db, &config, schedule.id)
+            .await
+            .expect("run schedule");
+        let jobs = db.list_jobs().await.expect("jobs");
+        assert!(jobs
+            .iter()
+            .any(|job| matches!(job.provider, ProviderKind::ClaudeCode)));
+        std::fs::remove_dir_all(home).ok();
     }
 }
