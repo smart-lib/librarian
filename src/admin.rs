@@ -15,11 +15,10 @@ use uuid::Uuid;
 use crate::{
     config::Config,
     db::Database,
-    domain::{
-        JobStatus, MemoryKind, MountMode, NetworkMode, ProviderKind, ScheduleKind, ScheduleStatus,
-    },
-    gates, memory, scheduler,
+    domain::{JobStatus, MemoryKind, MountMode, NetworkMode, ScheduleKind, ScheduleStatus},
+    gates, memory, router, scheduler,
     secrets::SecretVault,
+    third_eye,
 };
 
 #[derive(Clone)]
@@ -32,6 +31,7 @@ struct AppState {
 struct CreateJobRequest {
     project: String,
     goal: String,
+    provider: Option<String>,
     allow_network: Option<bool>,
     read_only: Option<bool>,
 }
@@ -43,6 +43,7 @@ struct CreateScheduleRequest {
     every_seconds: i64,
     project: Option<String>,
     goal: Option<String>,
+    provider: Option<String>,
     message: Option<String>,
     allow_network: Option<bool>,
     read_only: Option<bool>,
@@ -51,6 +52,20 @@ struct CreateScheduleRequest {
 #[derive(Debug, Deserialize)]
 struct UpdateWorkerRequest {
     max_concurrent_jobs: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateRoutingRequest {
+    fallback_enabled: bool,
+    fallback_order: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateBudgetRequest {
+    enabled: bool,
+    daily_total_usd: Option<f64>,
+    daily_provider_usd: Option<f64>,
+    daily_project_usd: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +85,14 @@ struct CreateSecretGrantRequest {
     max_uses: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProviderControlRequest {
+    provider: String,
+    model: Option<String>,
+    seconds: Option<i64>,
+    reason: Option<String>,
+}
+
 pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
     let state = AppState {
         db,
@@ -82,6 +105,8 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/jobs", get(jobs).post(create_job))
         .route("/api/schedules", get(schedules).post(create_schedule))
         .route("/api/settings/worker", post(update_worker_settings))
+        .route("/api/settings/routing", post(update_routing_settings))
+        .route("/api/settings/budget", post(update_budget_settings))
         .route("/api/secrets", get(secrets).post(create_secret))
         .route(
             "/api/secrets/grants",
@@ -89,6 +114,11 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         )
         .route("/api/secrets/audit", get(secret_audit))
         .route("/api/system-events", get(system_events))
+        .route("/api/providers", get(providers_status))
+        .route("/api/providers/pause", post(pause_provider))
+        .route("/api/providers/resume", post(resume_provider))
+        .route("/api/usage", get(usage_observations))
+        .route("/api/third-eye", get(third_eye_status))
         .route("/api/jobs/:id/events", get(job_events))
         .route("/api/jobs/:id/cancel", post(cancel_job))
         .route("/api/jobs/:id/retry", post(retry_job))
@@ -150,6 +180,16 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "running_jobs": running_jobs,
             "queued_jobs": queued_jobs,
             "available_slots": available_slots,
+        },
+        "routing": {
+            "fallback_enabled": config.routing.fallback_enabled,
+            "fallback_order": config.routing.fallback_order,
+        },
+        "budget": {
+            "enabled": config.budget.enabled,
+            "daily_total_usd": config.budget.daily_total_usd,
+            "daily_provider_usd": config.budget.daily_provider_usd,
+            "daily_project_usd": config.budget.daily_project_usd,
         },
         "memory": {
             "embedding_backend": config.memory.embedding_backend,
@@ -240,6 +280,87 @@ async fn delete_schedule(
 
 async fn system_events(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.db.list_system_events(50).await?))
+}
+
+async fn providers_status(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let states = state.db.list_provider_states().await?;
+    let catalog = router::model_catalog();
+    Ok(Json(serde_json::json!({
+        "catalog": catalog,
+        "states": states,
+    })))
+}
+
+async fn usage_observations(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.db.list_usage_observations(50).await?))
+}
+
+async fn third_eye_status(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let health = third_eye::health(&config).await?;
+    let db_summary = third_eye::db_summary(&config).await?;
+    Ok(Json(serde_json::json!({
+        "enabled": config.third_eye.enabled,
+        "base_url": config.third_eye.base_url,
+        "db_path": config.third_eye.db_path,
+        "project_export_dir": config.third_eye.project_export_dir,
+        "health": health,
+        "db_summary": db_summary,
+    })))
+}
+
+async fn pause_provider(
+    State(state): State<AppState>,
+    Json(input): Json<ProviderControlRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let seconds = input.seconds.unwrap_or(1800).max(1);
+    let reason = input
+        .reason
+        .unwrap_or_else(|| "manual admin pause".to_string());
+    let paused_until = chrono::Utc::now() + chrono::Duration::seconds(seconds);
+    let provider = state
+        .db
+        .set_provider_pause(
+            &input.provider,
+            input.model.as_deref(),
+            paused_until,
+            &reason,
+        )
+        .await?;
+    state
+        .db
+        .add_system_event(
+            "provider_paused",
+            serde_json::json!({
+                "provider": provider.provider,
+                "model": provider.model,
+                "paused_until": provider.paused_until,
+                "reason": provider.reason,
+            }),
+        )
+        .await?;
+    Ok(Json(provider))
+}
+
+async fn resume_provider(
+    State(state): State<AppState>,
+    Json(input): Json<ProviderControlRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let provider = state
+        .db
+        .resume_provider(&input.provider, input.model.as_deref())
+        .await?;
+    state
+        .db
+        .add_system_event(
+            "provider_resumed",
+            serde_json::json!({
+                "provider": provider.provider,
+                "model": provider.model,
+            }),
+        )
+        .await?;
+    Ok(Json(provider))
 }
 
 async fn secrets(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
@@ -415,6 +536,102 @@ async fn update_worker_settings(
     })))
 }
 
+async fn update_routing_settings(
+    State(state): State<AppState>,
+    Json(input): Json<UpdateRoutingRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if input.fallback_order.is_empty() {
+        return Err(anyhow::anyhow!("fallback_order must include at least one provider").into());
+    }
+    for provider in &input.fallback_order {
+        router::parse_provider_kind(provider)?;
+    }
+    let (fallback_enabled, fallback_order, config_path) = {
+        let mut config = state.config.write().await;
+        config.routing.fallback_enabled = input.fallback_enabled;
+        config.routing.fallback_order = input.fallback_order;
+        config.save()?;
+        (
+            config.routing.fallback_enabled,
+            config.routing.fallback_order.clone(),
+            config.config_path.clone(),
+        )
+    };
+    state
+        .db
+        .add_system_event(
+            "routing_settings_updated",
+            serde_json::json!({
+                "fallback_enabled": fallback_enabled,
+                "fallback_order": fallback_order,
+                "config_path": config_path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "routing": {
+            "fallback_enabled": fallback_enabled,
+            "fallback_order": fallback_order,
+        },
+    })))
+}
+
+async fn update_budget_settings(
+    State(state): State<AppState>,
+    Json(input): Json<UpdateBudgetRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    for (label, value) in [
+        ("daily_total_usd", input.daily_total_usd),
+        ("daily_provider_usd", input.daily_provider_usd),
+        ("daily_project_usd", input.daily_project_usd),
+    ] {
+        if let Some(value) = value {
+            if value < 0.0 {
+                return Err(anyhow::anyhow!("{label} must be non-negative").into());
+            }
+        }
+    }
+
+    let (enabled, daily_total_usd, daily_provider_usd, daily_project_usd, config_path) = {
+        let mut config = state.config.write().await;
+        config.budget.enabled = input.enabled;
+        config.budget.daily_total_usd = input.daily_total_usd;
+        config.budget.daily_provider_usd = input.daily_provider_usd;
+        config.budget.daily_project_usd = input.daily_project_usd;
+        config.save()?;
+        (
+            config.budget.enabled,
+            config.budget.daily_total_usd,
+            config.budget.daily_provider_usd,
+            config.budget.daily_project_usd,
+            config.config_path.clone(),
+        )
+    };
+    state
+        .db
+        .add_system_event(
+            "budget_settings_updated",
+            serde_json::json!({
+                "enabled": enabled,
+                "daily_total_usd": daily_total_usd,
+                "daily_provider_usd": daily_provider_usd,
+                "daily_project_usd": daily_project_usd,
+                "config_path": config_path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "budget": {
+            "enabled": enabled,
+            "daily_total_usd": daily_total_usd,
+            "daily_provider_usd": daily_provider_usd,
+            "daily_project_usd": daily_project_usd,
+        },
+    })))
+}
+
 async fn create_job(
     State(state): State<AppState>,
     Json(input): Json<CreateJobRequest>,
@@ -460,7 +677,7 @@ async fn create_job(
         .db
         .create_job(
             project.id,
-            ProviderKind::Codex,
+            router::parse_provider_kind(input.provider.as_deref().unwrap_or("codex"))?,
             &gated.content,
             mount_mode,
             network_mode,
@@ -511,6 +728,7 @@ fn schedule_payload(kind: &ScheduleKind, input: &CreateScheduleRequest) -> serde
         ScheduleKind::AgentTask => serde_json::json!({
             "project": input.project.clone().unwrap_or_default(),
             "goal": input.goal.clone().unwrap_or_default(),
+            "provider": input.provider.clone().unwrap_or_else(|| "codex".to_string()),
             "allow_network": input.allow_network.unwrap_or(false),
             "read_only": input.read_only.unwrap_or(false),
         }),
@@ -648,6 +866,34 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       height: 32px;
       font-size: 12px;
     }}
+    .mini {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 8px;
+    }}
+    .pill {{
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin: 2px 4px 2px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }}
+    details {{
+      margin-top: 8px;
+    }}
+    summary {{
+      cursor: pointer;
+      color: var(--accent);
+    }}
+    pre {{
+      overflow: auto;
+      white-space: pre-wrap;
+      margin: 8px 0 0;
+      color: var(--muted);
+    }}
     .secondary {{
       background: #27313a;
       color: var(--text);
@@ -675,12 +921,46 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       <div id="worker" class="item">Loading...</div>
       <h2>Memory</h2>
       <div id="memory" class="item">Loading...</div>
+      <h2>Providers</h2>
+      <div id="providers" class="muted">Loading...</div>
+      <h2>Usage</h2>
+      <div id="usage" class="muted">Loading...</div>
+      <h2>Third Eye</h2>
+      <div id="third-eye" class="item">Loading...</div>
       <form id="worker-form" class="item">
         <label for="worker_concurrency">Max concurrent jobs</label>
         <div class="grid-2">
           <input id="worker_concurrency" type="number" min="1" value="{worker_concurrency}">
           <button type="submit">Save</button>
         </div>
+      </form>
+      <form id="routing-form" class="item">
+        <div class="row">
+          <input id="fallback_enabled" type="checkbox">
+          <label for="fallback_enabled">Use fallback provider when paused</label>
+        </div>
+        <label for="fallback_order">Fallback order</label>
+        <input id="fallback_order" autocomplete="off" value="codex, openrouter, claude-code">
+        <button type="submit">Save Routing</button>
+      </form>
+      <form id="budget-form" class="item">
+        <div class="row">
+          <input id="budget_enabled" type="checkbox">
+          <label for="budget_enabled">Enforce daily budget guardrails</label>
+        </div>
+        <div class="grid-2">
+          <div>
+            <label for="budget_total">Total USD/day</label>
+            <input id="budget_total" type="number" min="0" step="0.01">
+          </div>
+          <div>
+            <label for="budget_provider">Provider USD/day</label>
+            <input id="budget_provider" type="number" min="0" step="0.01">
+          </div>
+        </div>
+        <label for="budget_project">Project USD/day</label>
+        <input id="budget_project" type="number" min="0" step="0.01">
+        <button type="submit">Save Budget</button>
       </form>
       <h2>Projects</h2>
       <div id="projects" class="muted">Loading...</div>
@@ -708,6 +988,12 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
         <input id="schedule_message" autocomplete="off">
         <label for="schedule_project">Project</label>
         <input id="schedule_project" autocomplete="off">
+        <label for="schedule_provider">Provider</label>
+        <select id="schedule_provider">
+          <option value="codex">Codex</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="claude-code">Claude Code</option>
+        </select>
         <label for="schedule_goal">Agent goal</label>
         <textarea id="schedule_goal"></textarea>
         <div class="row">
@@ -734,24 +1020,48 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       <form id="chat">
         <label for="project">Project name or id</label>
         <input id="project" name="project" autocomplete="off">
+        <label for="provider">Provider</label>
+        <select id="provider" name="provider">
+          <option value="codex">Codex</option>
+          <option value="openrouter">OpenRouter</option>
+          <option value="claude-code">Claude Code</option>
+        </select>
         <label for="goal">Goal</label>
         <textarea id="goal" name="goal"></textarea>
         <div class="row">
           <input id="allow_network" name="allow_network" type="checkbox">
           <label for="allow_network">Allow network for this session</label>
         </div>
-        <button type="submit">Queue Codex Job</button>
+        <button type="submit">Queue Agent Job</button>
       </form>
     </section>
   </main>
   <script>
+    function escapeHtml(value) {{
+      return String(value ?? '').replace(/[&<>"']/g, character => ({{
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }}[character]));
+    }}
+    function asJson(value) {{
+      return escapeHtml(JSON.stringify(value, null, 2));
+    }}
+    function shortId(value) {{
+      return String(value || '').slice(0, 8);
+    }}
     async function load() {{
-      const [health, projects, jobs, schedules, systemEvents] = await Promise.all([
+      const [health, projects, jobs, schedules, systemEvents, providers, usage, thirdEye] = await Promise.all([
         fetch('/api/health').then(r => r.json()),
         fetch('/api/projects').then(r => r.json()),
         fetch('/api/jobs').then(r => r.json()),
         fetch('/api/schedules').then(r => r.json()),
-        fetch('/api/system-events').then(r => r.json())
+        fetch('/api/system-events').then(r => r.json()),
+        fetch('/api/providers').then(r => r.json()),
+        fetch('/api/usage').then(r => r.json()),
+        fetch('/api/third-eye').then(r => r.json())
       ]);
       document.querySelector('#worker').innerHTML = `
         <b>${{health.worker.running_jobs}} / ${{health.worker.max_concurrent_jobs}}</b> slots used<br>
@@ -759,25 +1069,104 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       `;
       document.querySelector('#memory').innerHTML = `
         <b>${{health.memory.embedded_items}} / ${{health.memory.items}}</b> embedded<br>
-        <span class="muted">${{health.memory.embedding_backend}} · ${{health.memory.embedding_model}} · ${{health.memory.embedding_dimensions}}d<br>Missing: ${{health.memory.missing_embeddings}}</span>
+        <span class="muted">${{escapeHtml(health.memory.embedding_backend)}} &middot; ${{escapeHtml(health.memory.embedding_model)}} &middot; ${{health.memory.embedding_dimensions}}d<br>Missing: ${{health.memory.missing_embeddings}}</span>
+      `;
+      const stateByKey = new Map((providers.states || []).map(state => [`${{state.provider}}:${{state.model || ''}}`, state]));
+      document.querySelector('#providers').innerHTML = providers.catalog.length
+        ? providers.catalog.map(model => {{
+            const state = stateByKey.get(`${{model.provider}}:${{model.model}}`) || stateByKey.get(`${{model.provider}}:`) || {{}};
+            const paused = state.status === 'Paused';
+            return `<div class="item">
+              <b>${{escapeHtml(model.provider)}}</b><br>
+              <span class="muted">${{escapeHtml(model.model)}} &middot; ${{escapeHtml(state.status || 'Ready')}}</span><br>
+              ${{(model.task_hints || []).map(hint => `<span class="pill">${{escapeHtml(hint)}}</span>`).join('')}}
+              ${{paused ? `<br><span class="muted">Paused until ${{escapeHtml(state.paused_until || '-')}}<br>${{escapeHtml(state.reason || '')}}</span>` : ''}}
+              <div class="mini">
+                <button type="button" class="secondary" onclick="pauseProvider('${{escapeHtml(model.provider)}}', '${{escapeHtml(model.model)}}')">Pause 30m</button>
+                <button type="button" onclick="resumeProvider('${{escapeHtml(model.provider)}}', '${{escapeHtml(model.model)}}')">Resume</button>
+              </div>
+            </div>`;
+          }}).join('')
+        : 'No providers.';
+      document.querySelector('#usage').innerHTML = usage.length
+        ? usage.slice(0, 8).map(event => `<div class="item action">
+            <b>${{escapeHtml(event.provider)}}</b> <span class="muted">${{escapeHtml(event.model || '-')}}</span><br>
+            <span class="muted">${{escapeHtml(event.observed_at)}} &middot; job ${{escapeHtml(shortId(event.job_id) || '-')}}</span><br>
+            input=${{event.input_tokens ?? '-'}} output=${{event.output_tokens ?? '-'}} cost=${{event.cost_usd ?? '-'}} limit=${{event.limit_event}}
+          </div>`).join('')
+        : 'No usage observations.';
+      document.querySelector('#third-eye').innerHTML = `
+        <b>${{thirdEye.enabled ? 'Enabled' : 'Disabled'}}</b><br>
+        <span class="muted">${{escapeHtml(thirdEye.base_url)}}<br>
+        API: ${{thirdEye.health.reachable ? 'reachable' : 'offline'}} / ${{thirdEye.health.api_ok ? 'ok' : 'not ok'}}<br>
+        DB: ${{thirdEye.db_summary ? `${{thirdEye.db_summary.api_calls}} calls, $${{Number(thirdEye.db_summary.total_cost_usd || 0).toFixed(4)}}` : 'not configured'}}</span>
       `;
       worker_concurrency.value = health.worker.max_concurrent_jobs;
+      fallback_enabled.checked = Boolean(health.routing.fallback_enabled);
+      fallback_order.value = (health.routing.fallback_order || []).join(', ');
+      budget_enabled.checked = Boolean(health.budget.enabled);
+      budget_total.value = health.budget.daily_total_usd ?? '';
+      budget_provider.value = health.budget.daily_provider_usd ?? '';
+      budget_project.value = health.budget.daily_project_usd ?? '';
       document.querySelector('#projects').innerHTML = projects.length
-        ? projects.map(p => `<div class="item"><b>${{p.name}}</b><br><span class="muted">${{p.path}}</span></div>`).join('')
+        ? projects.map(p => `<div class="item"><b>${{escapeHtml(p.name)}}</b><br><span class="muted">${{escapeHtml(p.path)}}</span></div>`).join('')
         : 'No projects registered.';
       document.querySelector('#jobs').innerHTML = jobs.length
-        ? jobs.map(j => `<div class="item"><b>${{j.status}}</b><br>${{j.goal}}<br><span class="muted">Heartbeat: ${{j.last_heartbeat_at || '-'}}</span><div class="actions"><button type="button" class="secondary" onclick="eventsFor('${{j.id}}')">Events</button><button type="button" class="danger" onclick="cancelJob('${{j.id}}')">Cancel</button><button type="button" onclick="retryJob('${{j.id}}')">Retry</button></div></div>`).join('')
+        ? jobs.map(j => `<div class="item"><b>${{escapeHtml(j.status)}}</b> <span class="muted">${{escapeHtml(j.provider)}}</span><br>${{escapeHtml(j.goal)}}<br><span class="muted">Created: ${{escapeHtml(j.created_at)}}<br>Started: ${{escapeHtml(j.started_at || '-')}}<br>Heartbeat: ${{escapeHtml(j.last_heartbeat_at || '-')}}<br>Finished: ${{escapeHtml(j.finished_at || '-')}}</span><div class="actions"><button type="button" class="secondary" onclick="eventsFor('${{j.id}}')">Events</button><button type="button" class="danger" onclick="cancelJob('${{j.id}}')">Cancel</button><button type="button" onclick="retryJob('${{j.id}}')">Retry</button></div></div>`).join('')
         : 'No jobs yet.';
       document.querySelector('#schedules').innerHTML = schedules.length
         ? schedules.map(s => `<div class="item"><b>${{s.name}}</b><br><span class="muted">${{s.kind}} · ${{s.status}} · every ${{s.interval_seconds}}s<br>Next: ${{s.next_run_at}}</span><div class="actions"><button type="button" onclick="runSchedule('${{s.id}}')">Run</button><button type="button" class="secondary" onclick='editSchedule(${{JSON.stringify(s)}})'>Edit</button><button type="button" class="danger" onclick="deleteSchedule('${{s.id}}')">Delete</button><button type="button" class="secondary" onclick="enableSchedule('${{s.id}}')">Enable</button><button type="button" class="danger" onclick="disableSchedule('${{s.id}}')">Disable</button></div></div>`).join('')
         : 'No schedules.';
       document.querySelector('#system-events').innerHTML = systemEvents.length
-        ? systemEvents.map(e => `<div class="item action"><b>${{e.kind}}</b><br><span class="muted">${{e.created_at}}</span><br>${{JSON.stringify(e.payload)}}</div>`).join('')
+        ? systemEvents.map(e => `<div class="item action"><b>${{escapeHtml(e.kind)}}</b><br><span class="muted">${{escapeHtml(e.created_at)}}</span><br><pre>${{asJson(e.payload)}}</pre></div>`).join('')
         : 'No actions recorded yet.';
     }}
     async function eventsFor(id) {{
       const data = await fetch(`/api/jobs/${{id}}/events`).then(r => r.json());
+      output.innerHTML = renderJobEvents(data);
+    }}
+    function renderJobEvents(events) {{
+      if (!events.length) {{
+        return 'No events for this job.';
+      }}
+      return events.map(event => {{
+        const payload = event.payload || {{}};
+        let body = '';
+        if (event.kind === 'context_pack') {{
+          const hits = payload.hits || [];
+          body = `<div class="muted">Query: ${{escapeHtml(payload.query || '-')}}<br>Hits: ${{hits.length}}</div>` +
+            hits.slice(0, 5).map(hit => `<details><summary>${{escapeHtml(hit.reason || 'memory hit')}} score=${{Number(hit.score || 0).toFixed(3)}}</summary><pre>${{asJson(hit.item || hit)}}</pre></details>`).join('');
+        }} else if (event.kind === 'gate_events') {{
+          body = (payload.events || []).map(gate => `<div><span class="pill">${{escapeHtml(gate.kind || gate.action || 'gate')}}</span><pre>${{asJson(gate)}}</pre></div>`).join('') || '<span class="muted">No gate changes.</span>';
+        }} else if (event.kind === 'provider_diagnostic') {{
+          const diagnostic = payload.diagnostic || {{}};
+          body = `<div><span class="pill">${{escapeHtml(diagnostic.severity || 'info')}}</span> ${{escapeHtml(diagnostic.code || 'provider_diagnostic')}}</div>
+            <div>${{escapeHtml(diagnostic.message || '')}}</div>
+            <div class="muted">${{escapeHtml(diagnostic.next_step || '')}}</div>
+            <details><summary>Raw line</summary><pre>${{escapeHtml(payload.line || '')}}</pre></details>`;
+        }} else {{
+          body = `<pre>${{asJson(payload)}}</pre>`;
+        }}
+        return `<div class="item action"><b>${{escapeHtml(event.kind)}}</b><br><span class="muted">${{escapeHtml(event.created_at)}}</span>${{body}}</div>`;
+      }}).join('');
+    }}
+    async function pauseProvider(provider, model) {{
+      const data = await fetch('/api/providers/pause', {{
+        method: 'POST',
+        headers: {{ 'content-type': 'application/json' }},
+        body: JSON.stringify({{ provider, model, seconds: 1800, reason: 'manual admin pause' }})
+      }}).then(r => r.json());
       output.textContent = JSON.stringify(data, null, 2);
+      await load();
+    }}
+    async function resumeProvider(provider, model) {{
+      const data = await fetch('/api/providers/resume', {{
+        method: 'POST',
+        headers: {{ 'content-type': 'application/json' }},
+        body: JSON.stringify({{ provider, model }})
+      }}).then(r => r.json());
+      output.textContent = JSON.stringify(data, null, 2);
+      await load();
     }}
     async function cancelJob(id) {{
       const data = await fetch(`/api/jobs/${{id}}/cancel`, {{ method: 'POST' }}).then(r => r.json());
@@ -815,6 +1204,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       schedule_every.value = schedule.interval_seconds;
       schedule_message.value = schedule.payload.message || schedule.payload.task || '';
       schedule_project.value = schedule.payload.project || '';
+      schedule_provider.value = schedule.payload.provider || 'codex';
       schedule_goal.value = schedule.payload.goal || '';
       schedule_network.checked = Boolean(schedule.payload.allow_network);
       schedule_form.dataset.scheduleId = schedule.id;
@@ -832,6 +1222,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
         every_seconds: Number(schedule_every.value || 1),
         message: schedule_message.value,
         project: schedule_project.value,
+        provider: schedule_provider.value,
         goal: schedule_goal.value,
         allow_network: schedule_network.checked
       }};
@@ -857,10 +1248,44 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       output.textContent = JSON.stringify(data, null, 2);
       await load();
     }});
+    document.querySelector('#routing-form').addEventListener('submit', async event => {{
+      event.preventDefault();
+      const response = await fetch('/api/settings/routing', {{
+        method: 'POST',
+        headers: {{ 'content-type': 'application/json' }},
+        body: JSON.stringify({{
+          fallback_enabled: fallback_enabled.checked,
+          fallback_order: fallback_order.value.split(',').map(value => value.trim()).filter(Boolean)
+        }})
+      }});
+      const data = await response.json();
+      output.textContent = JSON.stringify(data, null, 2);
+      await load();
+    }});
+    function optionalNumber(value) {{
+      return value === '' ? null : Number(value);
+    }}
+    document.querySelector('#budget-form').addEventListener('submit', async event => {{
+      event.preventDefault();
+      const response = await fetch('/api/settings/budget', {{
+        method: 'POST',
+        headers: {{ 'content-type': 'application/json' }},
+        body: JSON.stringify({{
+          enabled: budget_enabled.checked,
+          daily_total_usd: optionalNumber(budget_total.value),
+          daily_provider_usd: optionalNumber(budget_provider.value),
+          daily_project_usd: optionalNumber(budget_project.value)
+        }})
+      }});
+      const data = await response.json();
+      output.textContent = JSON.stringify(data, null, 2);
+      await load();
+    }});
     document.querySelector('#chat').addEventListener('submit', async event => {{
       event.preventDefault();
       const body = {{
         project: project.value,
+        provider: provider.value,
         goal: goal.value,
         allow_network: allow_network.checked
       }};

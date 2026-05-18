@@ -8,9 +8,9 @@ the product direction.
 
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
-- Current phase: Milestone 7, provider routing, gates, and cost/limit telemetry.
-- Next implementation focus: admin UI surfaces for provider status, Third Eye
-  status, queue/worker diagnostics, and gate/action rendering.
+- Current phase: MVP readiness after Milestone 7 feature buildout.
+- Next implementation focus: make the core flow testable end to end, then hand
+  off to environment setup for real manual and automated testing.
 
 ## Product Defaults
 
@@ -27,7 +27,11 @@ the product direction.
   project/git policy, not by hardcoded global blocking.
 - Worker parallelism defaults to `1` and can be raised through config or CLI.
 
-## Completed
+## Completed Baseline
+
+The milestones below describe completed capability groups. Follow-up work from
+these milestones is tracked in `Backlog From Completed Milestones` instead of
+being left as unfinished items inside the completed sections.
 
 ## Milestone 1: Local Core
 
@@ -44,8 +48,7 @@ Status: Done.
 
 ## Milestone 2: Usable Agent Runs
 
-Status: Done for MVP behavior, with provider/runtime hardening continuing in
-later milestones.
+Status: Done for MVP code path. Runtime hardening is tracked below.
 
 - Build `librarian-agent` image.
 - Run Codex in a container.
@@ -58,7 +61,7 @@ later milestones.
 
 ## Milestone 3: Admin UI
 
-Status: MVP done, richer operational views planned.
+Status: MVP shell done. Richer operator views are tracked below.
 
 - Chat-first interface.
 - Manual settings panels.
@@ -69,18 +72,6 @@ Status: MVP done, richer operational views planned.
 - Recent Librarian actions panel backed by structured system events.
 - Vault editor for basic notes.
 - Codex auth status check and onboarding.
-
-Remaining:
-
-- Show running jobs separately from queued, completed, failed, and cancelled
-  jobs.
-- Show per-job lifecycle fields: created, started, last heartbeat, finished,
-  cancellation requested.
-- Show recent job events inline: context pack, prepared command, stdout/stderr,
-  vault summary, retry source.
-- Add compact expandable action blocks in chat for command execution, task
-  creation, agent launch, memory retrieval, scheduling decisions, and provider
-  routing.
 
 ## Milestone 4: Schedules and Heartbeats
 
@@ -98,15 +89,9 @@ Status: Done.
   hosts.
 - Schedule create/update/delete, enable/disable, and manual run controls.
 
-Remaining:
-
-- Promote memory compaction candidate scans into summarization jobs once the
-  provider router and compaction prompt policy are in place.
-- Add memory/cost guardrails before allowing high worker parallelism.
-
 ## Milestone 5: Vector Memory
 
-Status: Done for local MVP, richer backends planned.
+Status: Done for local MVP.
 
 - Embedding provider abstraction with a local deterministic backend.
 - SQLite-backed vector storage in `memory_embeddings`.
@@ -117,20 +102,9 @@ Status: Done for local MVP, richer backends planned.
 - Contradiction and supersession handling.
 - CLI/admin memory status and embedding backfill.
 
-Remaining:
-
-- Replace or augment `local-hash` with `sqlite-vec` or official SQLite `vec1`
-  when a portable extension packaging story is chosen.
-- Add model-backed embedding providers after the secret broker/provider router
-  can safely expose API credentials.
-- Add explicit project multi-select filters to context retrieval.
-- Add admin UI controls for memory backfill and context inspection.
-- Add contradiction/supersession editing tools instead of only honoring stored
-  links.
-
 ## Milestone 6: Secret Broker
 
-Status: Done for local MVP, hardening planned.
+Status: Done for local MVP backend.
 
 - Local encrypted vault.
 - Windows DPAPI and explicit AES-GCM fallback encryption modes.
@@ -139,22 +113,10 @@ Status: Done for local MVP, hardening planned.
 - Audited secret store, grant, and resolve/proxy use.
 - Provider proxy mode for OpenAI/OpenRouter-style HTTP APIs.
 
-Remaining:
-
-- Add admin UI forms for storing secrets and creating grants.
-- Add per-job secret grant selection when queueing a job.
-- Add provider-specific proxy policies for allowed paths and HTTP methods.
-- Add short-lived derived provider credentials where providers support them.
-- Add Unix-domain/named-pipe broker transport as a tighter local alternative to
-  localhost HTTP.
-
-## In Progress
-
 ## Milestone 7: Provider Router, Gates, and Limits
 
-Status: In progress.
-
-Done:
+Status: Feature buildout done for MVP readiness. Real runtime validation is
+next.
 
 - Provider registry with model metadata, defaults, cost hints, and task-fit
   hints.
@@ -181,28 +143,262 @@ Done:
 - Rate-limit event detection from CLI/log text and manual observations.
 - Third Eye probes for health, provider list, refresh, and direct read-only
   SQLite summaries.
+- Admin UI cards for provider catalog/state, recent usage observations, Third
+  Eye health/DB summary, provider pause/resume, job lifecycle timestamps, and
+  compact gate/context event rendering.
+- Clearer Codex auth/runtime diagnostics: `doctor` now reports Codex profile
+  presence/mount state, Codex container preflight catches missing CLI/profile
+  mount, and worker logs emit structured diagnostics for missing bearer/login
+  failures.
+- Admin job creation and scheduled agent tasks can select Codex, OpenRouter, or
+  Claude Code instead of always defaulting to Codex.
+- Persistent fallback routing policy: fallback enablement/order in config, CLI
+  and admin controls, and worker reroute to the first available fallback when
+  the selected provider/model is paused.
+- Daily budget guardrails before dispatch for total, provider, and project
+  cost, based on observed `cost_usd` telemetry for the current UTC day.
+- Portable local Librarian root: default state now lives under `./.librarian`
+  instead of OS profile directories such as AppData, and in-root config paths
+  are stored relative to support moving the folder between systems.
+- Actionable `doctor` readiness report with `ready / degraded / blocked`
+  summary, severity-tagged checks, runtime engine validation, Codex profile
+  mount diagnostics, and the MVP setup command sequence.
 
-Remaining:
+## MVP Readiness
+
+These tasks come before new product milestones. The goal is not more breadth;
+it is making the current MVP reliable enough that the environment can be set up
+and the core flows can be tested manually and automatically.
+
+## Priority 1: Actionable Bootstrap and Doctor
+
+Status: Done for code readiness. Environment validation remains with the user
+once Podman/Docker and portable Codex auth are configured.
+
+Goal: a new local setup should reach a clear `ready / blocked / degraded`
+answer without reading source code.
+
+Tasks:
+
+- Convert `doctor` output into structured severity checks: `ok`, `warn`,
+  `error`, with concise next steps.
+- Cover the MVP bootstrap chain in diagnostics: config layout, SQLite open,
+  vault path, runtime command, agent image, Codex host CLI, Codex profile path,
+  Codex container mount setting, and project mount path style.
+- Add an explicit preflight result for the selected runtime path: host Docker or
+  Podman, and WSL Podman fallback on Windows.
+- Document the expected handoff command sequence for environment setup:
+  `init`, `auth codex`, `auth codex --enable-container-mount`,
+  `runtime build-agent-image`, `doctor`, `project add`, `admin`, `worker`.
+
+Dependencies:
+
+- Existing runtime config and Codex mount diagnostics from Milestone 7.
+- No real container job needs to succeed before this lands, but the output must
+  make failures easy to act on.
+
+Owner split:
+
+- Code: Librarian.
+- Environment validation: user, after the readiness code is in place.
+
+## Priority 2: Job Dispatch Dry Run and Preflight
+
+Goal: test the expensive/risky part of the worker path without launching a real
+agent container.
+
+Tasks:
+
+- Add a job dispatch dry-run path that resolves provider selection, budget
+  checks, project lookup, context pack, prompt build, prompt mount, and prepared
+  runtime command.
+- Expose dry run through CLI, likely `worker --once --dry-run` or a dedicated
+  `jobs preflight <job-id>` command.
+- Store dry-run/preflight results as job events so the admin UI can show what
+  would happen.
+- Keep dry run side-effect-light: it may add diagnostic events, but it must not
+  mark the job completed or launch the container.
+
+Dependencies:
+
+- Provider routing and budget checks.
+- Prompt file mount and Docker command construction.
+
+## Priority 3: Core Manual MVP Smoke Flow
+
+Goal: prove the main path once the user's environment is ready.
+
+Manual flow to validate:
+
+- Initialize Librarian home, DB, and vault.
+- Configure Codex host authentication and explicit container mount.
+- Build `librarian-agent`.
+- Register a local test project.
+- Queue a Codex job from CLI and admin UI.
+- Run `worker --once`.
+- Confirm status transitions, stdout/stderr events, provider diagnostics,
+  usage observation, vault run summary, and memory run observation.
+- Retry a failed job and cancel a queued/running job.
+
+Dependencies:
+
+- Priority 1 diagnostics.
+- User environment setup: container runtime, Codex auth, agent image.
+
+Acceptance notes:
+
+- This flow is allowed to fail on the first real environment attempt, but every
+  failure should produce an actionable diagnostic rather than a mystery stack.
+
+## Priority 4: Admin Job Detail and Operations View
+
+Goal: the UI should be useful during the smoke flow instead of requiring CLI and
+database inspection.
+
+Tasks:
+
+- Split jobs by status: queued, preparing/running, completed, failed,
+  cancelled, and heartbeat-missed.
+- Add a job detail view or detail panel for lifecycle timestamps,
+  cancellation state, provider/model, retry source, and prepared command.
+- Render key event types compactly: context pack, gate events, provider
+  fallback, budget check/block, provider diagnostics, stdout/stderr, vault
+  summary, and retry source.
+- Surface failure categories prominently: runtime unavailable, image missing,
+  Codex CLI missing, Codex auth missing, provider paused, rate limit, budget
+  blocked, and cancelled.
+
+Dependencies:
+
+- Existing job events.
+- Priority 2 preflight events improve this view but do not block the first UI
+  pass.
+
+## Priority 5: Runtime Cleanup and Failure Categories
+
+Goal: failed or cancelled agent runs should leave the host in a predictable
+state.
+
+Tasks:
+
+- Verify stopped-container cleanup against actual container names/labels from
+  real runs.
+- Ensure cancellation kills the child process and leaves a clear event trail.
+- Add structured failure categories where the worker currently records generic
+  errors.
+- Keep recovery conservative: never delete or reset project files, only
+  Librarian-managed runtime artifacts/containers.
+
+Dependencies:
+
+- Priority 3 smoke flow, because cleanup behavior must be checked against the
+  real runtime.
+
+## Priority 6: Minimal Automated Test Harness
+
+Goal: make regression checks possible before full environment automation exists.
+
+Tasks:
+
+- Add tests for routing fallback selection and budget blocking.
+- Add tests for config persistence of routing and budget settings.
+- Add tests for schedule-created agent jobs preserving provider selection.
+- Add tests around provider diagnostic parsing.
+- Add a no-container integration path for job preflight once Priority 2 exists.
+
+Dependencies:
+
+- Priority 2 for preflight integration tests.
+- No container runtime required for the first test layer.
+
+## Priority 7: Secret and API Provider MVP Path
+
+Goal: support OpenRouter-style provider testing without putting raw API keys
+inside agent containers.
+
+Tasks:
+
+- Add admin UI forms for storing secrets and creating grants.
+- Add per-job secret grant selection when queueing a job.
+- Verify OpenRouter through the host broker/proxy path.
+- Add provider-specific proxy policies for allowed paths and HTTP methods.
+- Keep Codex CLI as the primary MVP path; this is the secondary provider/API
+  validation path.
+
+Dependencies:
+
+- Secret broker backend from Milestone 6.
+- Provider routing and job creation provider selection from Milestone 7.
+
+## Backlog From Completed Milestones
+
+These are real tasks, but they are not allowed to hide inside completed
+milestones. They should be pulled into active work only when they support MVP
+readiness or a later planned milestone.
+
+## Admin UI Backlog
+
+- Show running jobs separately from queued, completed, failed, and cancelled
+  jobs. Covered by MVP Priority 4.
+- Show per-job lifecycle fields: created, started, last heartbeat, finished,
+  cancellation requested. Covered by MVP Priority 4.
+- Show recent job events inline: context pack, prepared command, stdout/stderr,
+  vault summary, retry source. Covered by MVP Priority 4.
+- Add compact expandable action blocks in chat for command execution, task
+  creation, agent launch, memory retrieval, scheduling decisions, and provider
+  routing.
+
+## Scheduler and Worker Backlog
+
+- Promote memory compaction candidate scans into summarization jobs once the
+  provider router and compaction prompt policy are in place.
+- Add stronger memory/cost guardrails before allowing high worker parallelism.
+  The first observed-cost daily budget guardrail exists; estimated reservations
+  and concurrency-aware budget checks remain.
+
+## Memory Backlog
+
+- Replace or augment `local-hash` with `sqlite-vec` or official SQLite `vec1`
+  when a portable extension packaging story is chosen.
+- Add model-backed embedding providers after the secret broker/provider router
+  can safely expose API credentials.
+- Add explicit project multi-select filters to context retrieval.
+- Add admin UI controls for memory backfill and context inspection.
+- Add contradiction/supersession editing tools instead of only honoring stored
+  links.
+
+## Secret Broker Backlog
+
+- Add admin UI forms for storing secrets and creating grants. Covered by MVP
+  Priority 7.
+- Add per-job secret grant selection when queueing a job. Covered by MVP
+  Priority 7.
+- Add provider-specific proxy policies for allowed paths and HTTP methods.
+  Covered by MVP Priority 7.
+- Add short-lived derived provider credentials where providers support them.
+- Add Unix-domain/named-pipe broker transport as a tighter local alternative to
+  localhost HTTP.
+
+## Provider, Gates, and Limits Backlog
 
 - Run a real containerized Codex self-hosting task after Podman/Docker is
-  connected, the agent image is built, and host Codex auth is present.
-- Add clearer Codex auth diagnostics; missing/invalid auth currently appears as
-  provider output with `401 Missing bearer`.
+  connected, the agent image is built, and host Codex auth is present. Covered
+  by MVP Priority 3 and user environment setup.
 - Add richer structured parsing for provider responses and CLI error formats.
-- Route new work to fallback providers when the selected provider/model is
-  paused and a fallback policy is configured.
-- Add budget policies before dispatch, including per-provider, per-project, and
-  per-day caps.
+- Add estimated-cost reservation before dispatch once provider adapters can
+  predict request cost, so budget checks can account for the pending run instead
+  of only already-observed `cost_usd`.
 - Add per-project Third Eye mapping/export policy: host-visible provider logs,
   mounted container `CODEX_HOME`/Claude dirs, or Librarian-generated export
   from `usage_observations`.
-- Add admin UI cards for Third Eye status, last refresh, total cost, provider
-  limits, and project mapping diagnostics.
-- Add admin UI controls for provider pause/resume and routing preferences.
+- Add richer Third Eye project mapping diagnostics and last-refresh display.
 - Keep gates cheap and automatic by default; expensive gates should be opt-in
   per provider, project, or session.
 
 ## Planned
+
+These milestones stay behind MVP readiness. Items can move forward only when
+they unblock testing or stabilize the MVP path.
 
 ## Milestone 8: Context Economy
 
@@ -290,7 +486,7 @@ Status: Planned.
   provider-proxy mode be required before running real tasks?
 - Should the local encrypted vault support an app passphrase, OS keychain
   wrapping, or both?
-- What budget policy should block dispatch before full provider routing is
-  finished?
+- Should budget guardrails reserve estimated spend before dispatch, or only
+  block on already-observed spend until provider cost prediction is reliable?
 - Should Third Eye be read-only observer only, or should Librarian generate
   Third Eye-compatible exports for all provider sessions?

@@ -6,7 +6,8 @@ use crate::{
     config::Config,
     db::Database,
     docker_runner::DockerRunner,
-    domain::{JobStatus, MountMode, NetworkMode, ProviderKind, Schedule, ScheduleKind},
+    domain::{JobStatus, MountMode, NetworkMode, Schedule, ScheduleKind},
+    router,
 };
 
 pub const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: i64 = 120;
@@ -147,6 +148,13 @@ async fn run_system_schedule(db: &Database, config: &Config, schedule: &Schedule
 async fn run_agent_task_schedule(db: &Database, schedule: &Schedule) -> Result<()> {
     let project_ref = required_payload_string(schedule, "project")?;
     let goal = required_payload_string(schedule, "goal")?;
+    let provider = router::parse_provider_kind(
+        schedule
+            .payload
+            .get("provider")
+            .and_then(|value| value.as_str())
+            .unwrap_or("codex"),
+    )?;
     let project = db.get_project_by_name_or_id(project_ref).await?;
     let mount_mode = if schedule
         .payload
@@ -170,13 +178,7 @@ async fn run_agent_task_schedule(db: &Database, schedule: &Schedule) -> Result<(
     };
 
     let job = db
-        .create_job(
-            project.id,
-            ProviderKind::Codex,
-            goal,
-            mount_mode,
-            network_mode,
-        )
+        .create_job(project.id, provider, goal, mount_mode, network_mode)
         .await?;
     db.add_job_event(
         job.id,

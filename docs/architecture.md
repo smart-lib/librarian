@@ -117,6 +117,12 @@ knowledge across chats, projects, and background runs:
 The vault is Obsidian-compatible: Markdown files, YAML frontmatter, and ordinary
 folder structure under version control.
 
+By default, the Librarian root is the portable `./.librarian` directory under
+the current working directory. `--home` and `LIBRARIAN_HOME` can point it
+elsewhere, but the default avoids OS profile locations such as AppData. Paths
+inside `config.toml` are stored relative to the Librarian root when possible so
+the folder can be moved between systems.
+
 ## Provider Adapters
 
 Providers are command or API adapters behind one trait:
@@ -128,7 +134,10 @@ Providers are command or API adapters behind one trait:
 
 The first provider is Codex CLI, with OpenRouter and Claude Code adapters behind
 the same boundary. Provider routing records observed usage, limit hits, and
-pause windows in SQLite.
+pause windows in SQLite. Before a worker dispatches a job, routing also checks
+configured daily budget guardrails against observed `cost_usd` telemetry for the
+current UTC day. These checks cover global, provider, and project scopes; future
+provider adapters can add estimated-cost reservation before execution.
 
 Third Eye can be attached as an optional external usage observer. Librarian
 talks to its localhost API for health, refresh, and provider summaries, and can

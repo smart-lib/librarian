@@ -16,6 +16,8 @@ pub struct Config {
     pub docker: DockerConfig,
     pub worker: WorkerConfig,
     pub memory: MemoryConfig,
+    pub routing: RoutingConfig,
+    pub budget: BudgetConfig,
     pub broker: BrokerConfig,
     pub codex: CodexRuntimeConfig,
     pub third_eye: ThirdEyeConfig,
@@ -49,6 +51,20 @@ pub struct MemoryConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RoutingConfig {
+    pub fallback_enabled: bool,
+    pub fallback_order: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct BudgetConfig {
+    pub enabled: bool,
+    pub daily_total_usd: Option<f64>,
+    pub daily_provider_usd: Option<f64>,
+    pub daily_project_usd: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BrokerConfig {
     pub bind: String,
     pub container_url: String,
@@ -73,7 +89,7 @@ pub struct ThirdEyeConfig {
 impl Default for CodexRuntimeConfig {
     fn default() -> Self {
         Self {
-            host_home: default_codex_home(),
+            host_home: None,
             mount_host_home: false,
             mount_read_only: false,
             container_home: "/home/agent/.codex".to_string(),
@@ -111,6 +127,19 @@ impl Default for MemoryConfig {
     }
 }
 
+impl Default for RoutingConfig {
+    fn default() -> Self {
+        Self {
+            fallback_enabled: false,
+            fallback_order: vec![
+                "codex".to_string(),
+                "openrouter".to_string(),
+                "claude-code".to_string(),
+            ],
+        }
+    }
+}
+
 impl Config {
     pub fn load_or_default(home: Option<PathBuf>) -> Result<Self> {
         let home = match home {
@@ -139,11 +168,18 @@ impl Config {
                     .unwrap_or(1),
             },
             memory: MemoryConfig::default(),
+            routing: RoutingConfig::default(),
+            budget: BudgetConfig::default(),
             broker: BrokerConfig::default(),
             codex: CodexRuntimeConfig::default(),
             third_eye: ThirdEyeConfig::default(),
             home,
         };
+        if config.codex.host_home.is_none() {
+            config.codex.host_home = Some(default_codex_home(&config.home));
+        }
+        config.third_eye.project_export_dir =
+            stored_path(&config.home, config.third_eye.project_export_dir.clone());
 
         if config.config_path.exists() {
             let stored: StoredConfig = toml::from_str(&fs::read_to_string(&config.config_path)?)?;
@@ -177,9 +213,11 @@ impl Config {
             docker: self.docker.clone(),
             worker: self.worker.clone(),
             memory: self.memory.clone(),
+            routing: self.routing.clone(),
+            budget: self.budget.clone(),
             broker: self.broker.clone(),
-            codex: self.codex.clone(),
-            third_eye: self.third_eye.clone(),
+            codex: stored_codex_config(&self.home, &self.codex),
+            third_eye: stored_third_eye_config(&self.home, &self.third_eye),
             database_path: path_to_stored(&self.home, &self.database_path),
             vault_path: path_to_stored(&self.home, &self.vault_path),
         };
@@ -196,6 +234,8 @@ impl Config {
         self.docker = stored.docker;
         self.worker = stored.worker;
         self.memory = stored.memory;
+        self.routing = stored.routing;
+        self.budget = stored.budget;
         self.broker = stored.broker;
         self.codex = stored.codex;
         if let Some(path) = self.codex.host_home.clone() {
@@ -221,6 +261,10 @@ struct StoredConfig {
     #[serde(default)]
     memory: MemoryConfig,
     #[serde(default)]
+    routing: RoutingConfig,
+    #[serde(default)]
+    budget: BudgetConfig,
+    #[serde(default)]
     broker: BrokerConfig,
     #[serde(default)]
     codex: CodexRuntimeConfig,
@@ -231,16 +275,15 @@ struct StoredConfig {
 }
 
 fn default_home() -> Result<PathBuf> {
-    let base = dirs::data_local_dir()
-        .or_else(dirs::home_dir)
-        .context("Could not determine a home directory for Librarian")?;
-    Ok(base.join("librarian"))
+    Ok(std::env::current_dir()
+        .context("Could not determine the current directory for Librarian")?
+        .join(".librarian"))
 }
 
-fn default_codex_home() -> Option<PathBuf> {
+fn default_codex_home(home: &Path) -> PathBuf {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
+        .unwrap_or_else(|| home.join("codex-home"))
 }
 
 fn default_mount_path_style() -> String {
@@ -260,6 +303,26 @@ fn path_to_stored(home: &Path, path: &Path) -> Option<PathBuf> {
         .ok()
         .map(Path::to_path_buf)
         .or_else(|| Some(path.to_path_buf()))
+}
+
+fn stored_codex_config(home: &Path, codex: &CodexRuntimeConfig) -> CodexRuntimeConfig {
+    let mut stored = codex.clone();
+    stored.host_home = codex
+        .host_home
+        .as_ref()
+        .and_then(|path| path_to_stored(home, path));
+    stored
+}
+
+fn stored_third_eye_config(home: &Path, third_eye: &ThirdEyeConfig) -> ThirdEyeConfig {
+    let mut stored = third_eye.clone();
+    stored.project_export_dir = path_to_stored(home, &third_eye.project_export_dir)
+        .unwrap_or_else(|| third_eye.project_export_dir.clone());
+    stored.db_path = third_eye
+        .db_path
+        .as_ref()
+        .and_then(|path| path_to_stored(home, path));
+    stored
 }
 
 fn ensure_dir(path: &Path) -> Result<()> {

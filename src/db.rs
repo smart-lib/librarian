@@ -613,6 +613,16 @@ impl Database {
         Ok(())
     }
 
+    pub async fn update_job_provider(&self, job_id: Uuid, provider: ProviderKind) -> Result<()> {
+        sqlx::query("UPDATE jobs SET provider = ?, updated_at = ? WHERE id = ?")
+            .bind(format!("{:?}", provider))
+            .bind(Utc::now().to_rfc3339())
+            .bind(job_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn mark_job_started(&self, job_id: Uuid) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -1184,6 +1194,75 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(row_to_usage_observation).collect()
+    }
+
+    pub async fn usage_cost_since(
+        &self,
+        since: DateTime<Utc>,
+        provider: Option<&str>,
+        project_id: Option<Uuid>,
+    ) -> Result<f64> {
+        let row = match (provider, project_id) {
+            (Some(provider), Some(project_id)) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(u.cost_usd), 0.0) AS total
+                    FROM usage_observations u
+                    LEFT JOIN jobs j ON j.id = u.job_id
+                    WHERE u.observed_at >= ?
+                      AND u.provider = ?
+                      AND j.project_id = ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .bind(provider)
+                .bind(project_id.to_string())
+                .fetch_one(&self.pool)
+                .await?
+            }
+            (Some(provider), None) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(cost_usd), 0.0) AS total
+                    FROM usage_observations
+                    WHERE observed_at >= ?
+                      AND provider = ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .bind(provider)
+                .fetch_one(&self.pool)
+                .await?
+            }
+            (None, Some(project_id)) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(u.cost_usd), 0.0) AS total
+                    FROM usage_observations u
+                    LEFT JOIN jobs j ON j.id = u.job_id
+                    WHERE u.observed_at >= ?
+                      AND j.project_id = ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .bind(project_id.to_string())
+                .fetch_one(&self.pool)
+                .await?
+            }
+            (None, None) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(cost_usd), 0.0) AS total
+                    FROM usage_observations
+                    WHERE observed_at >= ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
+        Ok(row.get::<f64, _>("total"))
     }
 
     pub async fn list_system_events(&self, limit: i64) -> Result<Vec<SystemEvent>> {

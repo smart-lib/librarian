@@ -46,7 +46,7 @@ pub async fn run_batch(config: Config, db: Database, concurrency: usize) -> Resu
     Ok(ran)
 }
 
-async fn run_job(config: Config, db: Database, job: Job) -> Result<()> {
+async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
     if db.get_job(job.id).await?.cancel_requested_at.is_some() {
         db.mark_job_finished(job.id, JobStatus::Cancelled).await?;
         db.add_job_event(
@@ -60,15 +60,56 @@ async fn run_job(config: Config, db: Database, job: Job) -> Result<()> {
 
     db.add_job_event(job.id, "status", json!({ "status": "Preparing" }))
         .await?;
-    if let Err(error) = router::ensure_provider_available(&db, &job).await {
-        db.update_job_status(job.id, JobStatus::Queued).await?;
-        db.add_job_event(
-            job.id,
-            "provider_paused",
-            json!({ "error": error.to_string() }),
-        )
-        .await?;
-        return Ok(());
+    match router::select_provider_for_job(&config, &db, &job).await {
+        Ok(selection) => {
+            if selection.provider != job.provider {
+                let fallback_from = selection
+                    .fallback_from
+                    .clone()
+                    .unwrap_or(job.provider.clone());
+                db.update_job_provider(job.id, selection.provider.clone())
+                    .await?;
+                db.add_job_event(
+                    job.id,
+                    "provider_fallback_selected",
+                    json!({
+                        "from": router::provider_name(&fallback_from),
+                        "to": router::provider_name(&selection.provider),
+                        "reason": selection.reason,
+                    }),
+                )
+                .await?;
+                job.provider = selection.provider;
+            }
+        }
+        Err(error) => {
+            db.update_job_status(job.id, JobStatus::Queued).await?;
+            db.add_job_event(
+                job.id,
+                "provider_paused",
+                json!({ "error": error.to_string() }),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
+    match router::ensure_budget_available(&config, &db, &job).await {
+        Ok(checks) if !checks.is_empty() => {
+            db.add_job_event(job.id, "budget_checked", json!({ "checks": checks }))
+                .await?;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            db.update_job_status(job.id, JobStatus::Queued).await?;
+            db.add_job_event(
+                job.id,
+                "budget_blocked",
+                json!({ "error": error.to_string() }),
+            )
+            .await?;
+            return Ok(());
+        }
     }
 
     let project = db.get_project_by_id(job.project_id).await?;
@@ -306,6 +347,14 @@ where
             )
             .await?;
             crate::router::record_limit_event(&db, &job, &safe_line).await?;
+        }
+        if let Some(diagnostic) = crate::router::detect_provider_diagnostic(&job, &safe_line) {
+            db.add_job_event(
+                job.id,
+                "provider_diagnostic",
+                json!({ "diagnostic": diagnostic, "line": safe_line }),
+            )
+            .await?;
         }
         db.add_job_event(job.id, kind, json!({ "line": safe_line }))
             .await?;

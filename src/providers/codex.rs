@@ -17,7 +17,15 @@ impl ProviderAdapter for CodexProvider {
             crate::domain::MountMode::ReadWrite => "workspace-write",
         };
         let command = format!(
-            "codex exec --json --skip-git-repo-check --sandbox {sandbox} --cd /workspace/project --output-last-message /workspace/run/last-message.txt - < /workspace/run/prompt.txt"
+            r#"if ! command -v codex >/dev/null 2>&1; then
+  echo "LIBRARIAN_DIAGNOSTIC codex_cli_missing: codex is not installed in the agent image" >&2
+  exit 127
+fi
+if [ -n "${{CODEX_HOME:-}}" ] && [ ! -d "$CODEX_HOME" ]; then
+  echo "LIBRARIAN_DIAGNOSTIC codex_home_missing: CODEX_HOME=$CODEX_HOME is not mounted in the agent container" >&2
+  exit 126
+fi
+codex exec --json --skip-git-repo-check --sandbox {sandbox} --cd /workspace/project --output-last-message /workspace/run/last-message.txt - < /workspace/run/prompt.txt"#
         );
         Ok(ProviderCommand {
             program: "sh".to_string(),

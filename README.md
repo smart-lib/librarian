@@ -54,6 +54,12 @@ Prerequisites:
 - Podman on Windows, or Docker/Podman on Linux and macOS.
 - Codex CLI installed on the host for authentication bootstrap.
 
+By default, Librarian stores its portable state in `./.librarian` under the
+current working directory: `config.toml`, `librarian.db`, the Markdown vault,
+run artifacts, Third Eye exports, and the default Codex profile mount path.
+Override this with `--home <path>` or `LIBRARIAN_HOME` when you intentionally
+want a different root.
+
 ```powershell
 .\scripts\bootstrap-windows.ps1
 cargo +stable-x86_64-pc-windows-gnu run -- auth codex
@@ -62,6 +68,20 @@ cargo +stable-x86_64-pc-windows-gnu run -- runtime build-agent-image
 cargo +stable-x86_64-pc-windows-gnu run -- doctor
 cargo +stable-x86_64-pc-windows-gnu run -- project add c:\path\to\project
 cargo +stable-x86_64-pc-windows-gnu run -- admin
+```
+
+`doctor` prints an actionable readiness report with `ok`, `warn`, and `error`
+checks for the config layout, SQLite, container runtime, agent image, Codex CLI,
+and Codex profile mount. Treat `blocked` as the environment setup todo list
+before attempting a real worker run.
+
+For portable Codex auth, sign in with `CODEX_HOME` pointing at
+`.\.librarian\codex-home`, then enable the explicit mount:
+
+```powershell
+$env:CODEX_HOME = ".\.librarian\codex-home"
+codex
+cargo +stable-x86_64-pc-windows-gnu run -- auth codex --enable-container-mount --codex-home .\.librarian\codex-home
 ```
 
 If the Windows Podman CLI loses its machine connection while the WSL
@@ -129,7 +149,15 @@ cargo +stable-x86_64-pc-windows-gnu run -- providers status
 cargo +stable-x86_64-pc-windows-gnu run -- providers pause codex --model codex-cli-default --seconds 1800 --reason "rate limit"
 cargo +stable-x86_64-pc-windows-gnu run -- providers resume codex --model codex-cli-default
 cargo +stable-x86_64-pc-windows-gnu run -- usage list --limit 20
+cargo +stable-x86_64-pc-windows-gnu run -- config set-fallbacks true
+cargo +stable-x86_64-pc-windows-gnu run -- config set-fallback-order codex openrouter claude-code
+cargo +stable-x86_64-pc-windows-gnu run -- config set-budget true --daily-total-usd 5 --daily-provider-usd 3 --daily-project-usd 2
 ```
+
+Budget guardrails are enforced before dispatch and use known `cost_usd`
+observations for the current UTC day. CLI runs that only produce local token
+estimates are recorded for visibility, but they do not count against USD limits
+until a provider adapter or imported telemetry reports actual cost.
 
 Probe an optional Third Eye instance for external Codex/Claude cost telemetry:
 

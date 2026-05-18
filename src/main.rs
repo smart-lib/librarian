@@ -252,6 +252,21 @@ enum ConfigCommand {
     SetConcurrency {
         max_concurrent_jobs: usize,
     },
+    SetFallbacks {
+        enabled: String,
+    },
+    SetFallbackOrder {
+        providers: Vec<String>,
+    },
+    SetBudget {
+        enabled: String,
+        #[arg(long)]
+        daily_total_usd: Option<f64>,
+        #[arg(long)]
+        daily_provider_usd: Option<f64>,
+        #[arg(long)]
+        daily_project_usd: Option<f64>,
+    },
     SetCodexHome {
         path: PathBuf,
     },
@@ -451,26 +466,7 @@ async fn main() -> Result<()> {
             println!("Admin UI: http://{}", config.admin.bind);
         }
         Command::Doctor => {
-            config.ensure_layout()?;
-            println!("Librarian home: {}", config.home.display());
-            println!("Runtime command: {}", runtime_display(&config));
-            println!("Agent image: {}", config.docker.agent_image);
-            println!("Mount path style: {}", config.docker.mount_path_style);
-            println!(
-                "Codex host home: {}",
-                optional_path(&config.codex.host_home)
-            );
-            println!("Codex mount enabled: {}", config.codex.mount_host_home);
-            println!("Codex mount read-only: {}", config.codex.mount_read_only);
-            println!("Codex container home: {}", config.codex.container_home);
-            print_runtime_check("container runtime", &config, &["--version"]).await;
-            print_runtime_check(
-                "agent image",
-                &config,
-                &["image", "inspect", &config.docker.agent_image],
-            )
-            .await;
-            print_command_check("host codex", "codex", &["--version"]).await;
+            run_doctor(&config).await?;
         }
         Command::Admin { bind } => {
             config.ensure_layout()?;
@@ -546,6 +542,10 @@ async fn main() -> Result<()> {
                 read_only,
             } => {
                 println!("Starting Codex auth bootstrap.");
+                if let Some(path) = &config.codex.host_home {
+                    println!("Portable Codex profile path: {}", path.display());
+                    println!("For a local portable profile, run Codex with CODEX_HOME set to that path before sign-in.");
+                }
                 println!("Run `codex` in this terminal and complete the OpenAI sign-in flow.");
                 println!("Librarian will avoid copying Codex credentials into project files.");
                 if enable_container_mount || codex_home.is_some() {
@@ -956,6 +956,59 @@ async fn main() -> Result<()> {
                     config.config_path.display()
                 );
             }
+            ConfigCommand::SetFallbacks { enabled } => {
+                let mut config = config;
+                config.routing.fallback_enabled = parse_bool_arg(&enabled)?;
+                config.save()?;
+                println!(
+                    "Routing fallbacks enabled={} in {}",
+                    config.routing.fallback_enabled,
+                    config.config_path.display()
+                );
+            }
+            ConfigCommand::SetFallbackOrder { providers } => {
+                if providers.is_empty() {
+                    anyhow::bail!("Pass at least one provider name");
+                }
+                for provider in &providers {
+                    router::parse_provider_kind(provider)?;
+                }
+                let mut config = config;
+                config.routing.fallback_order = providers;
+                config.save()?;
+                println!(
+                    "Routing fallback order set to {} in {}",
+                    config.routing.fallback_order.join(", "),
+                    config.config_path.display()
+                );
+            }
+            ConfigCommand::SetBudget {
+                enabled,
+                daily_total_usd,
+                daily_provider_usd,
+                daily_project_usd,
+            } => {
+                let mut config = config;
+                config.budget.enabled = parse_bool_arg(&enabled)?;
+                if daily_total_usd.is_some() {
+                    config.budget.daily_total_usd = daily_total_usd;
+                }
+                if daily_provider_usd.is_some() {
+                    config.budget.daily_provider_usd = daily_provider_usd;
+                }
+                if daily_project_usd.is_some() {
+                    config.budget.daily_project_usd = daily_project_usd;
+                }
+                config.save()?;
+                println!(
+                    "Budget guardrails enabled={} total={:?} provider={:?} project={:?} in {}",
+                    config.budget.enabled,
+                    config.budget.daily_total_usd,
+                    config.budget.daily_provider_usd,
+                    config.budget.daily_project_usd,
+                    config.config_path.display()
+                );
+            }
             ConfigCommand::SetCodexHome { path } => {
                 let mut config = config;
                 config.codex.host_home = Some(path.canonicalize()?);
@@ -1350,6 +1403,14 @@ fn optional_path(path: &Option<PathBuf>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn parse_bool_arg(value: &str) -> Result<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" | "enabled" => Ok(true),
+        "false" | "no" | "off" | "0" | "disabled" => Ok(false),
+        _ => anyhow::bail!("Expected true/false, yes/no, on/off, or 1/0"),
+    }
+}
+
 fn runtime_display(config: &Config) -> String {
     std::iter::once(config.docker.runtime_command.as_str())
         .chain(config.docker.runtime_args.iter().map(String::as_str))
@@ -1365,36 +1426,270 @@ fn default_runtime_command_arg() -> String {
     }
 }
 
-async fn print_runtime_check(label: &str, config: &Config, args: &[&str]) {
-    let mut all_args = config.docker.runtime_args.clone();
-    all_args.extend(args.iter().map(|arg| arg.to_string()));
-    print_command_check_owned(label, &config.docker.runtime_command, &all_args).await;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DoctorSeverity {
+    Ok,
+    Warn,
+    Error,
 }
 
-async fn print_command_check(label: &str, program: &str, args: &[&str]) {
-    print_command_check_owned(
+impl DoctorSeverity {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DoctorCheck {
+    severity: DoctorSeverity,
+    label: String,
+    detail: String,
+    next_step: Option<String>,
+}
+
+impl DoctorCheck {
+    fn ok(label: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            severity: DoctorSeverity::Ok,
+            label: label.into(),
+            detail: detail.into(),
+            next_step: None,
+        }
+    }
+
+    fn warn(
+        label: impl Into<String>,
+        detail: impl Into<String>,
+        next_step: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity: DoctorSeverity::Warn,
+            label: label.into(),
+            detail: detail.into(),
+            next_step: Some(next_step.into()),
+        }
+    }
+
+    fn error(
+        label: impl Into<String>,
+        detail: impl Into<String>,
+        next_step: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity: DoctorSeverity::Error,
+            label: label.into(),
+            detail: detail.into(),
+            next_step: Some(next_step.into()),
+        }
+    }
+}
+
+async fn run_doctor(config: &Config) -> Result<()> {
+    config.ensure_layout()?;
+
+    let mut checks = vec![
+        DoctorCheck::ok("librarian home", config.home.display().to_string()),
+        path_check("config file", &config.config_path, "Run `librarian init`."),
+        path_check("vault", &config.vault_path, "Run `librarian init`."),
+        DoctorCheck::ok("runtime command", runtime_display(config)),
+        DoctorCheck::ok("agent image setting", config.docker.agent_image.clone()),
+        DoctorCheck::ok("mount path style", config.docker.mount_path_style.clone()),
+        DoctorCheck::ok(
+            "routing fallback",
+            format!(
+                "enabled={} order={}",
+                config.routing.fallback_enabled,
+                config.routing.fallback_order.join(", ")
+            ),
+        ),
+        DoctorCheck::ok(
+            "budget guardrails",
+            format!(
+                "enabled={} total={:?} provider={:?} project={:?}",
+                config.budget.enabled,
+                config.budget.daily_total_usd,
+                config.budget.daily_provider_usd,
+                config.budget.daily_project_usd
+            ),
+        ),
+    ];
+
+    checks.push(match Database::connect(config).await {
+        Ok(db) => match db.migrate().await {
+            Ok(()) => DoctorCheck::ok(
+                "sqlite",
+                format!("opened and migrated {}", config.database_path.display()),
+            ),
+            Err(error) => DoctorCheck::error(
+                "sqlite",
+                format!("opened but migration failed: {error}"),
+                "Check database file permissions, then rerun `librarian init`.",
+            ),
+        },
+        Err(error) => DoctorCheck::error(
+            "sqlite",
+            format!("could not open {}: {error}", config.database_path.display()),
+            "Check LIBRARIAN_HOME and file permissions, then rerun `librarian init`.",
+        ),
+    });
+
+    checks.push(runtime_check("container runtime", config, &["--version"]).await);
+    checks.push(runtime_check("runtime engine", config, &["info"]).await);
+    checks.push(
+        runtime_check(
+            "agent image",
+            config,
+            &["image", "inspect", &config.docker.agent_image],
+        )
+        .await,
+    );
+    checks.push(command_check("host codex", "codex", &["--version"]).await);
+    checks.push(codex_profile_check(config));
+
+    let overall = if checks
+        .iter()
+        .any(|check| check.severity == DoctorSeverity::Error)
+    {
+        "blocked"
+    } else if checks
+        .iter()
+        .any(|check| check.severity == DoctorSeverity::Warn)
+    {
+        "degraded"
+    } else {
+        "ready"
+    };
+
+    println!("Librarian doctor: {overall}");
+    println!();
+    for check in &checks {
+        println!(
+            "[{}] {}: {}",
+            check.severity.label(),
+            check.label,
+            check.detail
+        );
+        if let Some(next_step) = &check.next_step {
+            println!("      next: {next_step}");
+        }
+    }
+    println!();
+    println!("MVP setup sequence:");
+    println!("  librarian init");
+    println!("  librarian auth codex");
+    println!("  librarian auth codex --enable-container-mount");
+    println!("  librarian runtime build-agent-image");
+    println!("  librarian doctor");
+    println!("  librarian project add <path>");
+    println!("  librarian admin");
+    println!("  librarian worker --once");
+
+    Ok(())
+}
+
+fn path_check(label: &str, path: &std::path::Path, next_step: &str) -> DoctorCheck {
+    if path.exists() {
+        DoctorCheck::ok(label, path.display().to_string())
+    } else {
+        DoctorCheck::warn(label, format!("missing {}", path.display()), next_step)
+    }
+}
+
+fn codex_profile_check(config: &Config) -> DoctorCheck {
+    let Some(path) = &config.codex.host_home else {
+        return DoctorCheck::warn(
+            "codex profile",
+            "not configured",
+            "Run Codex with CODEX_HOME set to Librarian's codex-home, then `librarian auth codex --enable-container-mount`.",
+        );
+    };
+    if !path.exists() {
+        return DoctorCheck::error(
+            "codex profile",
+            format!("missing {}", path.display()),
+            "Create/sign in with this CODEX_HOME path, then run `librarian auth codex --enable-container-mount`.",
+        );
+    }
+    if !config.codex.mount_host_home {
+        return DoctorCheck::warn(
+            "codex profile",
+            format!("present at {}, container mount disabled", path.display()),
+            "Run `librarian auth codex --enable-container-mount` before containerized Codex runs.",
+        );
+    }
+    if ["auth.json", "config.toml", "credentials.json"]
+        .iter()
+        .any(|name| path.join(name).exists())
+    {
+        return DoctorCheck::ok(
+            "codex profile",
+            format!("present at {}, mount enabled", path.display()),
+        );
+    }
+    DoctorCheck::warn(
+        "codex profile",
+        format!(
+            "present at {}, but no common auth/config file found at top level",
+            path.display()
+        ),
+        "Run `codex` with CODEX_HOME set to this path, complete sign-in, then rerun `librarian doctor`.",
+    )
+}
+
+async fn runtime_check(label: &str, config: &Config, args: &[&str]) -> DoctorCheck {
+    let mut all_args = config.docker.runtime_args.clone();
+    all_args.extend(args.iter().map(|arg| arg.to_string()));
+    command_check_owned(label, &config.docker.runtime_command, &all_args).await
+}
+
+async fn command_check(label: &str, program: &str, args: &[&str]) -> DoctorCheck {
+    command_check_owned(
         label,
         program,
         &args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
     )
-    .await;
+    .await
 }
 
-async fn print_command_check_owned(label: &str, program: &str, args: &[String]) {
+async fn command_check_owned(label: &str, program: &str, args: &[String]) -> DoctorCheck {
     let output = TokioCommand::new(program).args(args).output().await;
     match output {
         Ok(output) if output.status.success() => {
             let text = String::from_utf8_lossy(&output.stdout);
             let first_line = text.lines().next().unwrap_or("ok");
-            println!("{label}: ok ({first_line})");
+            DoctorCheck::ok(label, first_line.to_string())
         }
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let first_line = stderr.lines().next().unwrap_or("command failed");
-            println!("{label}: failed ({first_line})");
+            let detail = format!("command failed: {first_line}");
+            DoctorCheck::error(label, &detail, command_next_step(label, &detail))
         }
         Err(error) => {
-            println!("{label}: unavailable ({error})");
+            let detail = format!("unavailable: {error}");
+            DoctorCheck::error(label, &detail, command_next_step(label, &detail))
         }
+    }
+}
+
+fn command_next_step(label: &str, detail: &str) -> &'static str {
+    let detail = detail.to_ascii_lowercase();
+    if detail.contains("cannot connect to podman") || detail.contains("podman machine") {
+        return "Start/fix Podman, or run `librarian runtime use-wsl-podman` if the WSL Podman machine is usable.";
+    }
+    match label {
+        "container runtime" => {
+            "Install/start Docker or Podman, or run `librarian runtime use-wsl-podman` on Windows."
+        }
+        "runtime engine" => {
+            "Start the Docker/Podman engine and verify `docker info` or `podman info` works."
+        }
+        "agent image" => "Run `librarian runtime build-agent-image`.",
+        "host codex" => "Install Codex CLI on the host; use Librarian's local CODEX_HOME when signing in for portability.",
+        _ => "Check that the command is installed and available in PATH.",
     }
 }

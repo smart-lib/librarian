@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Deserialize, Serialize, sqlx::Type)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
 pub enum ProviderKind {
     Codex,
