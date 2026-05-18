@@ -18,7 +18,7 @@ use crate::{
     domain::{JobStatus, MemoryKind, MountMode, NetworkMode, ScheduleKind, ScheduleStatus},
     gates, memory, router, scheduler,
     secrets::SecretVault,
-    third_eye,
+    third_eye, worker,
 };
 
 #[derive(Clone)]
@@ -120,6 +120,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/usage", get(usage_observations))
         .route("/api/third-eye", get(third_eye_status))
         .route("/api/jobs/:id/events", get(job_events))
+        .route("/api/jobs/:id/preflight", post(preflight_job))
         .route("/api/jobs/:id/cancel", post(cancel_job))
         .route("/api/jobs/:id/retry", post(retry_job))
         .route("/api/schedules/:id/enable", post(enable_schedule))
@@ -442,6 +443,16 @@ async fn job_events(
     AxumPath(id): AxumPath<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.db.list_job_events(id).await?))
+}
+
+async fn preflight_job(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    Ok(Json(
+        worker::preflight_job(config, state.db.clone(), id).await?,
+    ))
 }
 
 async fn cancel_job(
@@ -858,7 +869,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
     }}
     .actions {{
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 6px;
       margin-top: 8px;
     }}
@@ -1111,9 +1122,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       document.querySelector('#projects').innerHTML = projects.length
         ? projects.map(p => `<div class="item"><b>${{escapeHtml(p.name)}}</b><br><span class="muted">${{escapeHtml(p.path)}}</span></div>`).join('')
         : 'No projects registered.';
-      document.querySelector('#jobs').innerHTML = jobs.length
-        ? jobs.map(j => `<div class="item"><b>${{escapeHtml(j.status)}}</b> <span class="muted">${{escapeHtml(j.provider)}}</span><br>${{escapeHtml(j.goal)}}<br><span class="muted">Created: ${{escapeHtml(j.created_at)}}<br>Started: ${{escapeHtml(j.started_at || '-')}}<br>Heartbeat: ${{escapeHtml(j.last_heartbeat_at || '-')}}<br>Finished: ${{escapeHtml(j.finished_at || '-')}}</span><div class="actions"><button type="button" class="secondary" onclick="eventsFor('${{j.id}}')">Events</button><button type="button" class="danger" onclick="cancelJob('${{j.id}}')">Cancel</button><button type="button" onclick="retryJob('${{j.id}}')">Retry</button></div></div>`).join('')
-        : 'No jobs yet.';
+      document.querySelector('#jobs').innerHTML = renderJobs(jobs);
       document.querySelector('#schedules').innerHTML = schedules.length
         ? schedules.map(s => `<div class="item"><b>${{s.name}}</b><br><span class="muted">${{s.kind}} · ${{s.status}} · every ${{s.interval_seconds}}s<br>Next: ${{s.next_run_at}}</span><div class="actions"><button type="button" onclick="runSchedule('${{s.id}}')">Run</button><button type="button" class="secondary" onclick='editSchedule(${{JSON.stringify(s)}})'>Edit</button><button type="button" class="danger" onclick="deleteSchedule('${{s.id}}')">Delete</button><button type="button" class="secondary" onclick="enableSchedule('${{s.id}}')">Enable</button><button type="button" class="danger" onclick="disableSchedule('${{s.id}}')">Disable</button></div></div>`).join('')
         : 'No schedules.';
@@ -1124,6 +1133,39 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
     async function eventsFor(id) {{
       const data = await fetch(`/api/jobs/${{id}}/events`).then(r => r.json());
       output.innerHTML = renderJobEvents(data);
+    }}
+    function renderJobs(jobs) {{
+      if (!jobs.length) {{
+        return 'No jobs yet.';
+      }}
+      const groups = [
+        ['Active', job => ['Preparing', 'Running', 'HeartbeatMissed', 'Recovering'].includes(job.status)],
+        ['Queued', job => job.status === 'Queued'],
+        ['Failed / Cancelled', job => ['Failed', 'Cancelled'].includes(job.status)],
+        ['Completed', job => job.status === 'Completed']
+      ];
+      return groups.map(([label, predicate]) => {{
+        const groupJobs = jobs.filter(predicate);
+        if (!groupJobs.length) {{
+          return '';
+        }}
+        return `<details open><summary>${{label}} (${{groupJobs.length}})</summary>` +
+          groupJobs.map(renderJobCard).join('') +
+          `</details>`;
+      }}).join('') || 'No jobs yet.';
+    }}
+    function renderJobCard(j) {{
+      return `<div class="item">
+        <b>${{escapeHtml(j.status)}}</b> <span class="muted">${{escapeHtml(j.provider)}} &middot; ${{escapeHtml(shortId(j.id))}}</span><br>
+        ${{escapeHtml(j.goal)}}<br>
+        <span class="muted">Created: ${{escapeHtml(j.created_at)}}<br>Started: ${{escapeHtml(j.started_at || '-')}}<br>Heartbeat: ${{escapeHtml(j.last_heartbeat_at || '-')}}<br>Finished: ${{escapeHtml(j.finished_at || '-')}}</span>
+        <div class="actions">
+          <button type="button" class="secondary" onclick="eventsFor('${{j.id}}')">Events</button>
+          <button type="button" onclick="preflightJob('${{j.id}}')">Preflight</button>
+          <button type="button" class="danger" onclick="cancelJob('${{j.id}}')">Cancel</button>
+          <button type="button" onclick="retryJob('${{j.id}}')">Retry</button>
+        </div>
+      </div>`;
     }}
     function renderJobEvents(events) {{
       if (!events.length) {{
@@ -1176,6 +1218,11 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
     }}
     async function cancelJob(id) {{
       const data = await fetch(`/api/jobs/${{id}}/cancel`, {{ method: 'POST' }}).then(r => r.json());
+      output.textContent = JSON.stringify(data, null, 2);
+      await load();
+    }}
+    async function preflightJob(id) {{
+      const data = await fetch(`/api/jobs/${{id}}/preflight`, {{ method: 'POST' }}).then(r => r.json());
       output.textContent = JSON.stringify(data, null, 2);
       await load();
     }}

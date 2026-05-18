@@ -254,6 +254,9 @@ Acceptance notes:
 
 ## Priority 4: Admin Job Detail and Operations View
 
+Status: In progress. Job grouping, UI preflight action, and compact preflight
+event rendering are implemented; a richer dedicated job detail panel remains.
+
 Goal: the UI should be useful during the smoke flow instead of requiring CLI and
 database inspection.
 
