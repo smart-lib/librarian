@@ -400,6 +400,41 @@ readiness or a later planned milestone.
 - Keep gates cheap and automatic by default; expensive gates should be opt-in
   per provider, project, or session.
 
+## Agent Instruction Authoring Backlog
+
+Goal: let the user visually compose provider-specific agent instruction files
+and launch-time prompt layers from reusable blocks instead of hand-editing
+separate Markdown files.
+
+Tasks:
+
+- Add a visual admin editor for instruction blocks with drag-and-drop ordering,
+  enable/disable toggles, add/delete actions, and per-block controls.
+- Support block presets for identity, operating principles, git policy,
+  Obsidian/vault behavior, task planning style, project goals, and provider
+  caveats.
+- Render a large Markdown preview for each block and a full compiled preview
+  for each target output.
+- Add top-row block options for Markdown structure, such as heading level,
+  wrapping, separators, and whether the block is included in file output,
+  launch prompt output, or both.
+- Compile active blocks into provider-specific files such as `AGENTS.md`,
+  `CLAUDE.md`, and future provider/user identity files, based on configured or
+  connected providers.
+- Support channel/profile variants later, so host-level, project-level, and
+  agent-launch instructions can differ without duplicating every block.
+- Decide whether launch-time instruction bundles are injected only into prompts,
+  mounted into the container as additional read-only files, or both, so agents
+  can reread their operating instructions during a run.
+
+Dependencies:
+
+- Provider registry and routing metadata, so Librarian knows which target files
+  are relevant.
+- Admin UI improvements from MVP Priority 4.
+- Context economy work, because stable instruction blocks should become part of
+  the prompt prefix/cache strategy.
+
 ## Planned
 
 These milestones stay behind MVP readiness. Items can move forward only when
@@ -412,6 +447,8 @@ Status: Planned.
 - Prompt prefix stabilization.
 - Provider-aware prompt caching.
 - Project context packs.
+- Block-based instruction bundles for stable identity and operating policy
+  prefixes.
 - Memory summarization.
 - Optional terse-output modes for non-human intermediate steps.
 - Cache policy that puts stable instructions and project rules first, volatile
