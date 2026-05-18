@@ -946,6 +946,39 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       <div id="usage" class="muted">Loading...</div>
       <h2>Third Eye</h2>
       <div id="third-eye" class="item">Loading...</div>
+      <h2>Secrets</h2>
+      <div id="secrets" class="muted">Loading...</div>
+      <div id="secret-grants" class="muted">Loading...</div>
+      <form id="secret-form" class="item">
+        <label for="secret_name">Secret name</label>
+        <input id="secret_name" autocomplete="off" placeholder="openrouter.default">
+        <label for="secret_provider">Provider</label>
+        <input id="secret_provider" autocomplete="off" placeholder="openrouter">
+        <label for="secret_kind">Kind</label>
+        <input id="secret_kind" autocomplete="off" value="api-key">
+        <label for="secret_value">Value</label>
+        <input id="secret_value" type="password" autocomplete="off">
+        <button type="submit">Store Secret</button>
+      </form>
+      <form id="grant-form" class="item">
+        <label for="grant_secret">Secret name or id</label>
+        <input id="grant_secret" autocomplete="off" placeholder="openrouter.default">
+        <label for="grant_provider">Provider</label>
+        <input id="grant_provider" autocomplete="off" placeholder="openrouter">
+        <div class="grid-2">
+          <div>
+            <label for="grant_capability">Capability</label>
+            <input id="grant_capability" autocomplete="off" value="provider-proxy">
+          </div>
+          <div>
+            <label for="grant_ttl">TTL seconds</label>
+            <input id="grant_ttl" type="number" min="1" value="900">
+          </div>
+        </div>
+        <label for="grant_max_uses">Max uses</label>
+        <input id="grant_max_uses" type="number" min="1" value="1">
+        <button type="submit">Create Grant</button>
+      </form>
       <form id="worker-form" class="item">
         <label for="worker_concurrency">Max concurrent jobs</label>
         <div class="grid-2">
@@ -1072,7 +1105,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       return String(value || '').slice(0, 8);
     }}
     async function load() {{
-      const [health, projects, jobs, schedules, systemEvents, providers, usage, thirdEye] = await Promise.all([
+      const [health, projects, jobs, schedules, systemEvents, providers, usage, thirdEye, secrets, grants] = await Promise.all([
         fetch('/api/health').then(r => r.json()),
         fetch('/api/projects').then(r => r.json()),
         fetch('/api/jobs').then(r => r.json()),
@@ -1080,7 +1113,9 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
         fetch('/api/system-events').then(r => r.json()),
         fetch('/api/providers').then(r => r.json()),
         fetch('/api/usage').then(r => r.json()),
-        fetch('/api/third-eye').then(r => r.json())
+        fetch('/api/third-eye').then(r => r.json()),
+        fetch('/api/secrets').then(r => r.json()),
+        fetch('/api/secrets/grants').then(r => r.json())
       ]);
       document.querySelector('#worker').innerHTML = `
         <b>${{health.worker.running_jobs}} / ${{health.worker.max_concurrent_jobs}}</b> slots used<br>
@@ -1120,6 +1155,18 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
         API: ${{thirdEye.health.reachable ? 'reachable' : 'offline'}} / ${{thirdEye.health.api_ok ? 'ok' : 'not ok'}}<br>
         DB: ${{thirdEye.db_summary ? `${{thirdEye.db_summary.api_calls}} calls, $${{Number(thirdEye.db_summary.total_cost_usd || 0).toFixed(4)}}` : 'not configured'}}</span>
       `;
+      document.querySelector('#secrets').innerHTML = secrets.length
+        ? secrets.slice(0, 8).map(secret => `<div class="item">
+            <b>${{escapeHtml(secret.name)}}</b><br>
+            <span class="muted">${{escapeHtml(secret.provider)}} &middot; ${{escapeHtml(secret.kind)}} &middot; ${{escapeHtml(secret.encryption)}}<br>${{escapeHtml(secret.updated_at)}}</span>
+          </div>`).join('')
+        : 'No secrets stored.';
+      document.querySelector('#secret-grants').innerHTML = grants.length
+        ? grants.slice(0, 6).map(grant => `<div class="item">
+            <b>${{escapeHtml(shortId(grant.id))}}</b> <span class="muted">${{escapeHtml(grant.provider || '-')}}</span><br>
+            <span class="muted">capability=${{escapeHtml(grant.capability)}} uses=${{grant.uses}}/${{grant.max_uses}} expires=${{escapeHtml(grant.expires_at)}}</span>
+          </div>`).join('')
+        : 'No active grants listed.';
       worker_concurrency.value = health.worker.max_concurrent_jobs;
       fallback_enabled.checked = Boolean(health.routing.fallback_enabled);
       fallback_order.value = (health.routing.fallback_order || []).join(', ');
@@ -1381,6 +1428,40 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
           daily_total_usd: optionalNumber(budget_total.value),
           daily_provider_usd: optionalNumber(budget_provider.value),
           daily_project_usd: optionalNumber(budget_project.value)
+        }})
+      }});
+      const data = await response.json();
+      output.textContent = JSON.stringify(data, null, 2);
+      await load();
+    }});
+    document.querySelector('#secret-form').addEventListener('submit', async event => {{
+      event.preventDefault();
+      const response = await fetch('/api/secrets', {{
+        method: 'POST',
+        headers: {{ 'content-type': 'application/json' }},
+        body: JSON.stringify({{
+          name: secret_name.value,
+          provider: secret_provider.value,
+          kind: secret_kind.value || 'api-key',
+          value: secret_value.value
+        }})
+      }});
+      const data = await response.json();
+      secret_value.value = '';
+      output.textContent = JSON.stringify(data, null, 2);
+      await load();
+    }});
+    document.querySelector('#grant-form').addEventListener('submit', async event => {{
+      event.preventDefault();
+      const response = await fetch('/api/secrets/grants', {{
+        method: 'POST',
+        headers: {{ 'content-type': 'application/json' }},
+        body: JSON.stringify({{
+          secret: grant_secret.value,
+          provider: grant_provider.value || null,
+          capability: grant_capability.value || 'provider-proxy',
+          ttl_seconds: Number(grant_ttl.value || 900),
+          max_uses: Number(grant_max_uses.value || 1)
         }})
       }});
       const data = await response.json();

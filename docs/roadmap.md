@@ -331,12 +331,16 @@ Dependencies:
 
 ## Priority 7: Secret and API Provider MVP Path
 
+Status: In progress. Minimal admin UI exists for storing redacted secrets,
+listing recent grants, and creating capability grants. Per-job grant selection
+and provider proxy policy hardening remain.
+
 Goal: support OpenRouter-style provider testing without putting raw API keys
 inside agent containers.
 
 Tasks:
 
-- Add admin UI forms for storing secrets and creating grants.
+- Add admin UI forms for storing secrets and creating grants. First pass done.
 - Add per-job secret grant selection when queueing a job.
 - Verify OpenRouter through the host broker/proxy path.
 - Add provider-specific proxy policies for allowed paths and HTTP methods.
