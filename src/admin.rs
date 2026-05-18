@@ -119,6 +119,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/providers/resume", post(resume_provider))
         .route("/api/usage", get(usage_observations))
         .route("/api/third-eye", get(third_eye_status))
+        .route("/api/jobs/:id", get(job))
         .route("/api/jobs/:id/events", get(job_events))
         .route("/api/jobs/:id/preflight", post(preflight_job))
         .route("/api/jobs/:id/cancel", post(cancel_job))
@@ -212,6 +213,13 @@ async fn projects(State(state): State<AppState>) -> Result<impl IntoResponse, Ap
 
 async fn jobs(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.db.list_jobs().await?))
+}
+
+async fn job(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(state.db.get_job(id).await?))
 }
 
 async fn schedules(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
@@ -1130,9 +1138,29 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
         ? systemEvents.map(e => `<div class="item action"><b>${{escapeHtml(e.kind)}}</b><br><span class="muted">${{escapeHtml(e.created_at)}}</span><br><pre>${{asJson(e.payload)}}</pre></div>`).join('')
         : 'No actions recorded yet.';
     }}
-    async function eventsFor(id) {{
-      const data = await fetch(`/api/jobs/${{id}}/events`).then(r => r.json());
-      output.innerHTML = renderJobEvents(data);
+    async function detailsFor(id) {{
+      const [job, events] = await Promise.all([
+        fetch(`/api/jobs/${{id}}`).then(r => r.json()),
+        fetch(`/api/jobs/${{id}}/events`).then(r => r.json())
+      ]);
+      output.innerHTML = renderJobDetail(job, events);
+    }}
+    function renderJobDetail(job, events) {{
+      return `<div class="item">
+        <b>${{escapeHtml(job.status)}}</b> <span class="muted">${{escapeHtml(job.provider)}} &middot; ${{escapeHtml(job.id)}}</span><br>
+        <div>${{escapeHtml(job.goal)}}</div>
+        <div class="mini">
+          <div><span class="muted">Created</span><br>${{escapeHtml(job.created_at)}}</div>
+          <div><span class="muted">Started</span><br>${{escapeHtml(job.started_at || '-')}}</div>
+          <div><span class="muted">Heartbeat</span><br>${{escapeHtml(job.last_heartbeat_at || '-')}}</div>
+          <div><span class="muted">Finished</span><br>${{escapeHtml(job.finished_at || '-')}}</div>
+        </div>
+        <div class="actions">
+          <button type="button" onclick="preflightJob('${{job.id}}')">Preflight</button>
+          <button type="button" class="danger" onclick="cancelJob('${{job.id}}')">Cancel</button>
+          <button type="button" onclick="retryJob('${{job.id}}')">Retry</button>
+        </div>
+      </div>${{renderJobEvents(events)}}`;
     }}
     function renderJobs(jobs) {{
       if (!jobs.length) {{
@@ -1160,7 +1188,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
         ${{escapeHtml(j.goal)}}<br>
         <span class="muted">Created: ${{escapeHtml(j.created_at)}}<br>Started: ${{escapeHtml(j.started_at || '-')}}<br>Heartbeat: ${{escapeHtml(j.last_heartbeat_at || '-')}}<br>Finished: ${{escapeHtml(j.finished_at || '-')}}</span>
         <div class="actions">
-          <button type="button" class="secondary" onclick="eventsFor('${{j.id}}')">Events</button>
+          <button type="button" class="secondary" onclick="detailsFor('${{j.id}}')">Details</button>
           <button type="button" onclick="preflightJob('${{j.id}}')">Preflight</button>
           <button type="button" class="danger" onclick="cancelJob('${{j.id}}')">Cancel</button>
           <button type="button" onclick="retryJob('${{j.id}}')">Retry</button>
@@ -1178,8 +1206,22 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
           const hits = payload.hits || [];
           body = `<div class="muted">Query: ${{escapeHtml(payload.query || '-')}}<br>Hits: ${{hits.length}}</div>` +
             hits.slice(0, 5).map(hit => `<details><summary>${{escapeHtml(hit.reason || 'memory hit')}} score=${{Number(hit.score || 0).toFixed(3)}}</summary><pre>${{asJson(hit.item || hit)}}</pre></details>`).join('');
+        }} else if (event.kind === 'prepared') {{
+          body = `<div class="muted">Context hits=${{payload.context_hits ?? 0}} &middot; prompt chars=${{payload.prompt_chars ?? 0}}</div>
+            <details><summary>Prepared command</summary><pre>${{asJson(payload.command || [])}}</pre></details>
+            <details><summary>Project note</summary><pre>${{escapeHtml(payload.project_note || '-')}}</pre></details>`;
         }} else if (event.kind === 'gate_events') {{
           body = (payload.events || []).map(gate => `<div><span class="pill">${{escapeHtml(gate.kind || gate.action || 'gate')}}</span><pre>${{asJson(gate)}}</pre></div>`).join('') || '<span class="muted">No gate changes.</span>';
+        }} else if (event.kind === 'provider_fallback_selected') {{
+          body = `<div><span class="pill">fallback</span> ${{escapeHtml(payload.from || '-')}} -> ${{escapeHtml(payload.to || '-')}}</div>
+            <div class="muted">${{escapeHtml(payload.reason || '')}}</div>`;
+        }} else if (event.kind === 'budget_checked') {{
+          body = `<div><span class="pill">budget</span> checked</div><pre>${{asJson(payload.checks || [])}}</pre>`;
+        }} else if (event.kind === 'budget_blocked' || event.kind === 'provider_paused') {{
+          const category = payload.category || {{}};
+          body = `<div><span class="pill">${{escapeHtml(category.severity || 'warn')}}</span> ${{escapeHtml(category.code || event.kind)}}</div>
+            <div>${{escapeHtml(category.message || payload.error || '')}}</div>
+            <div class="muted">${{escapeHtml(category.next_step || '')}}</div>`;
         }} else if (event.kind === 'provider_diagnostic') {{
           const diagnostic = payload.diagnostic || {{}};
           body = `<div><span class="pill">${{escapeHtml(diagnostic.severity || 'info')}}</span> ${{escapeHtml(diagnostic.code || 'provider_diagnostic')}}</div>
@@ -1199,6 +1241,10 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
             <div class="muted">${{escapeHtml(category.next_step || '')}}</div>
             ${{payload.exit_code !== undefined ? `<div class="muted">Exit code: ${{payload.exit_code}}</div>` : ''}}
             ${{payload.line ? `<details><summary>Matched line</summary><pre>${{escapeHtml(payload.line)}}</pre></details>` : ''}}`;
+        }} else if (event.kind === 'vault') {{
+          body = `<div><span class="pill">vault</span> run summary</div><pre>${{escapeHtml(payload.run_summary || '-')}}</pre>`;
+        }} else if (event.kind === 'stdout' || event.kind === 'stderr') {{
+          body = `<pre>${{escapeHtml(payload.line || '')}}</pre>`;
         }} else {{
           body = `<pre>${{asJson(payload)}}</pre>`;
         }}
