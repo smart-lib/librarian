@@ -1,6 +1,7 @@
 use std::process::Stdio;
 
 use anyhow::Result;
+use serde::Serialize;
 use serde_json::json;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
@@ -44,6 +45,47 @@ pub async fn run_batch(config: Config, db: Database, concurrency: usize) -> Resu
         }
     }
     Ok(ran)
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct JobPreflightReport {
+    pub job_id: uuid::Uuid,
+    pub selected_provider: String,
+    pub fallback_from: Option<String>,
+    pub fallback_reason: Option<String>,
+    pub project_name: String,
+    pub project_path: String,
+    pub context_hits: usize,
+    pub prompt_chars: usize,
+    pub command: Vec<String>,
+    pub budget_checks: Vec<router::BudgetCheck>,
+}
+
+pub async fn preflight_job(
+    config: Config,
+    db: Database,
+    job_id: uuid::Uuid,
+) -> Result<JobPreflightReport> {
+    let job = db.get_job(job_id).await?;
+    let report = prepare_job(&config, &db, job.clone(), true).await?;
+    db.add_job_event(
+        job.id,
+        "preflight",
+        json!({
+            "selected_provider": &report.selected_provider,
+            "fallback_from": &report.fallback_from,
+            "fallback_reason": &report.fallback_reason,
+            "project_name": &report.project_name,
+            "project_path": &report.project_path,
+            "context_hits": report.context_hits,
+            "prompt_chars": report.prompt_chars,
+            "command": &report.command,
+            "budget_checks": &report.budget_checks,
+            "launched": false,
+        }),
+    )
+    .await?;
+    Ok(report)
 }
 
 async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
@@ -266,6 +308,103 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn prepare_job(
+    config: &Config,
+    db: &Database,
+    mut job: Job,
+    dry_run: bool,
+) -> Result<JobPreflightReport> {
+    let selection = router::select_provider_for_job(config, db, &job).await?;
+    let mut fallback_from = None;
+    let mut fallback_reason = None;
+    if selection.provider != job.provider {
+        fallback_from = selection
+            .fallback_from
+            .clone()
+            .map(|provider| router::provider_name(&provider).to_string());
+        fallback_reason = selection.reason.clone();
+        if !dry_run {
+            db.update_job_provider(job.id, selection.provider.clone())
+                .await?;
+            db.add_job_event(
+                job.id,
+                "provider_fallback_selected",
+                json!({
+                    "from": &fallback_from,
+                    "to": router::provider_name(&selection.provider),
+                    "reason": &fallback_reason,
+                }),
+            )
+            .await?;
+        }
+        job.provider = selection.provider;
+    }
+
+    let budget_checks = router::ensure_budget_available(config, db, &job).await?;
+    if !dry_run && !budget_checks.is_empty() {
+        db.add_job_event(
+            job.id,
+            "budget_checked",
+            json!({ "checks": &budget_checks }),
+        )
+        .await?;
+    }
+
+    let project = db.get_project_by_id(job.project_id).await?;
+    let context_pack = memory::retrieve_context_with_config(
+        db,
+        Some(config),
+        RetrievalRequest {
+            query: job.goal.clone(),
+            project_id: Some(project.id),
+            activity_id: None,
+            limit: memory::default_hit_limit(),
+        },
+    )
+    .await?;
+    let enriched_prompt = prompt::build_agent_prompt(&project, &job.goal, &context_pack);
+    let prompt_len = enriched_prompt.chars().count();
+    let spec = AgentRunSpec {
+        job_id: job.id,
+        project_path: project.path.clone(),
+        provider: job.provider.clone(),
+        goal: job.goal.clone(),
+        prompt: enriched_prompt,
+        mount_mode: job.mount_mode,
+        network_mode: job.network_mode,
+        secret_grant_token: None,
+    };
+    let command = DockerRunner::new(config.clone())
+        .docker_command_parts(&spec)
+        .await?;
+
+    if !dry_run {
+        db.add_job_event(
+            job.id,
+            "context_pack",
+            json!({
+                "query": context_pack.query,
+                "generated_at": context_pack.generated_at,
+                "hits": context_pack.hits,
+            }),
+        )
+        .await?;
+    }
+
+    Ok(JobPreflightReport {
+        job_id: job.id,
+        selected_provider: router::provider_name(&job.provider).to_string(),
+        fallback_from,
+        fallback_reason,
+        project_name: project.name,
+        project_path: project.path.display().to_string(),
+        context_hits: context_pack.hits.len(),
+        prompt_chars: prompt_len,
+        command,
+        budget_checks,
+    })
 }
 
 async fn execute(

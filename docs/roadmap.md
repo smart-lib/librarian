@@ -204,6 +204,9 @@ Owner split:
 
 ## Priority 2: Job Dispatch Dry Run and Preflight
 
+Status: Done for CLI no-container preflight. Admin presentation can be improved
+under Priority 4.
+
 Goal: test the expensive/risky part of the worker path without launching a real
 agent container.
 
@@ -212,8 +215,7 @@ Tasks:
 - Add a job dispatch dry-run path that resolves provider selection, budget
   checks, project lookup, context pack, prompt build, prompt mount, and prepared
   runtime command.
-- Expose dry run through CLI, likely `worker --once --dry-run` or a dedicated
-  `jobs preflight <job-id>` command.
+- Expose dry run through CLI with `jobs preflight <job-id>`.
 - Store dry-run/preflight results as job events so the admin UI can show what
   would happen.
 - Keep dry run side-effect-light: it may add diagnostic events, but it must not

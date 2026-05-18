@@ -178,6 +178,7 @@ enum ProjectCommand {
 enum JobsCommand {
     List,
     Events { job_id: uuid::Uuid },
+    Preflight { job_id: uuid::Uuid },
     Cancel { job_id: uuid::Uuid },
     Retry { job_id: uuid::Uuid },
 }
@@ -711,6 +712,10 @@ async fn main() -> Result<()> {
                             serde_json::to_string(&event.payload)?
                         );
                     }
+                }
+                JobsCommand::Preflight { job_id } => {
+                    let report = worker::preflight_job(config.clone(), db.clone(), job_id).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
                 }
                 JobsCommand::Cancel { job_id } => {
                     db.request_cancel_job(job_id).await?;

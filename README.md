@@ -120,9 +120,15 @@ Manage jobs:
 ```powershell
 cargo +stable-x86_64-pc-windows-gnu run -- jobs list
 cargo +stable-x86_64-pc-windows-gnu run -- jobs events <job-id>
+cargo +stable-x86_64-pc-windows-gnu run -- jobs preflight <job-id>
 cargo +stable-x86_64-pc-windows-gnu run -- jobs cancel <job-id>
 cargo +stable-x86_64-pc-windows-gnu run -- jobs retry <job-id>
 ```
+
+`jobs preflight <job-id>` resolves routing, budget checks, project context,
+prompt construction, run artifacts, and the prepared container command without
+launching the container or completing the job. It records a `preflight` event
+for later inspection.
 
 Manage secrets:
 

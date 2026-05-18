@@ -1144,6 +1144,12 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
             <div>${{escapeHtml(diagnostic.message || '')}}</div>
             <div class="muted">${{escapeHtml(diagnostic.next_step || '')}}</div>
             <details><summary>Raw line</summary><pre>${{escapeHtml(payload.line || '')}}</pre></details>`;
+        }} else if (event.kind === 'preflight') {{
+          body = `<div><span class="pill">${{escapeHtml(payload.selected_provider || 'provider')}}</span> launched=${{Boolean(payload.launched)}}</div>
+            <div class="muted">${{escapeHtml(payload.project_name || '-')}} &middot; context hits=${{payload.context_hits ?? 0}} &middot; prompt chars=${{payload.prompt_chars ?? 0}}</div>
+            ${{payload.fallback_from ? `<div class="muted">Fallback: ${{escapeHtml(payload.fallback_from)}} -> ${{escapeHtml(payload.selected_provider)}}<br>${{escapeHtml(payload.fallback_reason || '')}}</div>` : ''}}
+            <details><summary>Prepared command</summary><pre>${{asJson(payload.command || [])}}</pre></details>
+            <details><summary>Budget checks</summary><pre>${{asJson(payload.budget_checks || [])}}</pre></details>`;
         }} else {{
           body = `<pre>${{asJson(payload)}}</pre>`;
         }}
