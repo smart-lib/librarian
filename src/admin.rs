@@ -1192,6 +1192,13 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
             ${{payload.fallback_from ? `<div class="muted">Fallback: ${{escapeHtml(payload.fallback_from)}} -> ${{escapeHtml(payload.selected_provider)}}<br>${{escapeHtml(payload.fallback_reason || '')}}</div>` : ''}}
             <details><summary>Prepared command</summary><pre>${{asJson(payload.command || [])}}</pre></details>
             <details><summary>Budget checks</summary><pre>${{asJson(payload.budget_checks || [])}}</pre></details>`;
+        }} else if (event.kind === 'failure_category') {{
+          const category = payload.category || {{}};
+          body = `<div><span class="pill">${{escapeHtml(category.severity || 'error')}}</span> ${{escapeHtml(category.code || 'unknown_failure')}}</div>
+            <div>${{escapeHtml(category.message || '')}}</div>
+            <div class="muted">${{escapeHtml(category.next_step || '')}}</div>
+            ${{payload.exit_code !== undefined ? `<div class="muted">Exit code: ${{payload.exit_code}}</div>` : ''}}
+            ${{payload.line ? `<details><summary>Matched line</summary><pre>${{escapeHtml(payload.line)}}</pre></details>` : ''}}`;
         }} else {{
           body = `<pre>${{asJson(payload)}}</pre>`;
         }}

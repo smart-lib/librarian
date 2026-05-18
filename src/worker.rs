@@ -61,6 +61,14 @@ pub struct JobPreflightReport {
     pub budget_checks: Vec<router::BudgetCheck>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct FailureCategory {
+    code: &'static str,
+    severity: &'static str,
+    message: &'static str,
+    next_step: &'static str,
+}
+
 pub async fn preflight_job(
     config: Config,
     db: Database,
@@ -129,7 +137,10 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
             db.add_job_event(
                 job.id,
                 "provider_paused",
-                json!({ "error": error.to_string() }),
+                json!({
+                    "error": error.to_string(),
+                    "category": failure_category("provider_paused"),
+                }),
             )
             .await?;
             return Ok(());
@@ -147,7 +158,10 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
             db.add_job_event(
                 job.id,
                 "budget_blocked",
-                json!({ "error": error.to_string() }),
+                json!({
+                    "error": error.to_string(),
+                    "category": failure_category("budget_blocked"),
+                }),
             )
             .await?;
             return Ok(());
@@ -252,6 +266,15 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 json!({ "status": format!("{:?}", final_status), "exit_code": code }),
             )
             .await?;
+            db.add_job_event(
+                job.id,
+                "failure_category",
+                json!({
+                    "category": exit_failure_category(code, matches!(final_status, JobStatus::Cancelled)),
+                    "exit_code": code,
+                }),
+            )
+            .await?;
             router::record_job_usage_estimate(&db, &job, prompt_len, Some(code)).await?;
             let path = vault.write_run_summary(
                 &project,
@@ -281,8 +304,17 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 JobStatus::Failed
             };
             db.mark_job_finished(job.id, final_status.clone()).await?;
-            db.add_job_event(job.id, "error", json!({ "error": error.to_string() }))
+            let error_text = error.to_string();
+            db.add_job_event(job.id, "error", json!({ "error": error_text }))
                 .await?;
+            db.add_job_event(
+                job.id,
+                "failure_category",
+                json!({
+                    "category": execution_error_category(&error.to_string()),
+                }),
+            )
+            .await?;
             let path = vault.write_run_summary(
                 &project,
                 &job,
@@ -495,8 +527,142 @@ where
             )
             .await?;
         }
+        if let Some(category) = output_failure_category(&safe_line) {
+            db.add_job_event(
+                job.id,
+                "failure_category",
+                json!({ "category": category, "line": safe_line }),
+            )
+            .await?;
+        }
         db.add_job_event(job.id, kind, json!({ "line": safe_line }))
             .await?;
     }
     Ok(())
+}
+
+fn failure_category(code: &'static str) -> FailureCategory {
+    match code {
+        "provider_paused" => FailureCategory {
+            code,
+            severity: "warn",
+            message: "The selected provider is currently paused.",
+            next_step: "Resume the provider, wait for the pause window to expire, or enable routing fallbacks.",
+        },
+        "budget_blocked" => FailureCategory {
+            code,
+            severity: "warn",
+            message: "The job was blocked by configured budget guardrails.",
+            next_step: "Raise or disable the relevant budget limit, or wait for the next UTC day.",
+        },
+        "runtime_unavailable" => FailureCategory {
+            code,
+            severity: "error",
+            message: "The configured container runtime is not reachable.",
+            next_step: "Start Docker/Podman, fix the runtime connection, or use the WSL Podman fallback.",
+        },
+        "agent_image_missing" => FailureCategory {
+            code,
+            severity: "error",
+            message: "The configured Librarian agent image is missing or cannot be pulled.",
+            next_step: "Run `librarian runtime build-agent-image`, then rerun `librarian doctor`.",
+        },
+        "cancelled" => FailureCategory {
+            code,
+            severity: "info",
+            message: "The job was cancelled by request.",
+            next_step: "Retry the job if the cancellation was accidental.",
+        },
+        "process_spawn_failed" => FailureCategory {
+            code,
+            severity: "error",
+            message: "Librarian could not start the configured runtime command.",
+            next_step: "Check that the runtime command exists in PATH and is allowed to execute.",
+        },
+        "nonzero_exit" => FailureCategory {
+            code,
+            severity: "error",
+            message: "The agent container exited with a non-zero status.",
+            next_step: "Inspect stderr/stdout and provider diagnostics for the specific cause.",
+        },
+        _ => FailureCategory {
+            code: "unknown_failure",
+            severity: "error",
+            message: "The job failed without a known category.",
+            next_step: "Inspect the job error and runtime logs.",
+        },
+    }
+}
+
+fn exit_failure_category(exit_code: i32, cancelled: bool) -> FailureCategory {
+    if cancelled {
+        return failure_category("cancelled");
+    }
+    if exit_code == 125 {
+        return failure_category("runtime_unavailable");
+    }
+    failure_category("nonzero_exit")
+}
+
+fn execution_error_category(error: &str) -> FailureCategory {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("program not found")
+        || lower.contains("cannot find")
+        || lower.contains("no such file")
+        || lower.contains("access is denied")
+    {
+        return failure_category("process_spawn_failed");
+    }
+    if lower.contains("cannot connect to podman")
+        || lower.contains("docker daemon")
+        || lower.contains("connection refused")
+    {
+        return failure_category("runtime_unavailable");
+    }
+    failure_category("unknown_failure")
+}
+
+fn output_failure_category(text: &str) -> Option<FailureCategory> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("cannot connect to podman")
+        || lower.contains("docker daemon")
+        || lower.contains("podman machine")
+    {
+        return Some(failure_category("runtime_unavailable"));
+    }
+    if lower.contains("no such image")
+        || lower.contains("image not known")
+        || lower.contains("manifest unknown")
+        || (lower.contains("unable to find image") && lower.contains("locally"))
+    {
+        return Some(failure_category("agent_image_missing"));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn categorizes_runtime_output_failure() {
+        let category =
+            output_failure_category("Cannot connect to Podman. Please verify your connection")
+                .expect("category");
+        assert_eq!(category.code, "runtime_unavailable");
+    }
+
+    #[test]
+    fn categorizes_missing_image_output_failure() {
+        let category = output_failure_category(
+            "Error: initializing source docker://librarian-agent:latest: reading manifest latest: manifest unknown",
+        )
+        .expect("category");
+        assert_eq!(category.code, "agent_image_missing");
+    }
+
+    #[test]
+    fn categorizes_cancelled_exit() {
+        assert_eq!(exit_failure_category(1, true).code, "cancelled");
+    }
 }

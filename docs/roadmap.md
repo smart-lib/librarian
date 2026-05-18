@@ -281,6 +281,11 @@ Dependencies:
 
 ## Priority 5: Runtime Cleanup and Failure Categories
 
+Status: In progress. Structured failure category events exist for provider
+pause, budget block, runtime unavailable, missing agent image, cancellation,
+spawn failure, and non-zero exits. Real cleanup validation still depends on the
+manual runtime smoke flow.
+
 Goal: failed or cancelled agent runs should leave the host in a predictable
 state.
 
@@ -290,7 +295,8 @@ Tasks:
   real runs.
 - Ensure cancellation kills the child process and leaves a clear event trail.
 - Add structured failure categories where the worker currently records generic
-  errors.
+  errors. First pass is implemented; expand as real provider/runtime failures
+  are observed.
 - Keep recovery conservative: never delete or reset project files, only
   Librarian-managed runtime artifacts/containers.
 
