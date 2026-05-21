@@ -703,6 +703,7 @@ async fn main() -> Result<()> {
                 if enable_container_mount || codex_home.is_some() {
                     let mut config = config;
                     if let Some(codex_home) = codex_home {
+                        std::fs::create_dir_all(&codex_home)?;
                         config.codex.host_home = Some(codex_home.canonicalize()?);
                     }
                     config.codex.mount_host_home = enable_container_mount;
@@ -1168,6 +1169,7 @@ async fn main() -> Result<()> {
             }
             ConfigCommand::SetCodexHome { path } => {
                 let mut config = config;
+                std::fs::create_dir_all(&path)?;
                 config.codex.host_home = Some(path.canonicalize()?);
                 config.save()?;
                 println!(
@@ -1935,7 +1937,7 @@ fn command_next_step(label: &str, detail: &str) -> &'static str {
         return "Start/fix Podman, or run `librarian runtime use-wsl-podman` if the WSL Podman machine is usable.";
     }
     if detail.contains("permission denied") && detail.contains("docker") {
-        return "Your user cannot access Docker yet. Open a new Ubuntu shell after setup, or run `newgrp docker`, then rerun `librarian runtime build-agent-image`.";
+        return "Your user cannot access Docker yet. Open a new Ubuntu shell, or run the command through `sg docker -c 'librarian runtime build-agent-image'`.";
     }
     match label {
         "container runtime" => {

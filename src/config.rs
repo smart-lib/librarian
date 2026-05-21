@@ -203,6 +203,9 @@ impl Config {
         ensure_dir(&self.vault_path.join("runs"))?;
         ensure_dir(&self.vault_path.join("decisions"))?;
         ensure_dir(&self.third_eye.project_export_dir)?;
+        if let Some(path) = &self.codex.host_home {
+            ensure_dir(path)?;
+        }
         Ok(())
     }
 

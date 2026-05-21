@@ -113,8 +113,9 @@ The short command above is equivalent to:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl git build-essential pkg-config libssl-dev python3 docker.io
+sudo apt-get install -y ca-certificates curl git build-essential pkg-config libssl-dev python3 util-linux-extra docker.io
 curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
 curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 sudo npm install -g @openai/codex
@@ -122,7 +123,7 @@ sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 cargo build --release
 ./target/release/librarian --home "$HOME/Librarian" setup --yes --runtime host
-./target/release/librarian --home "$HOME/Librarian" runtime build-agent-image
+sg docker -c './target/release/librarian --home "$HOME/Librarian" runtime build-agent-image'
 ./target/release/librarian --home "$HOME/Librarian" doctor
 ```
 
@@ -131,7 +132,7 @@ the next login. The bootstrap tries to use a fresh `docker` group session for
 the image build; if the system refuses, log out/in or rerun:
 
 ```bash
-./target/release/librarian --home "$HOME/Librarian" runtime build-agent-image
+sg docker -c './target/release/librarian --home "$HOME/Librarian" runtime build-agent-image'
 ```
 
 ### Windows Developer Path

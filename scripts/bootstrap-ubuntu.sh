@@ -103,7 +103,8 @@ run_root_bash() {
   build-essential \
   pkg-config \
   libssl-dev \
-  python3
+  python3 \
+  util-linux-extra
 
 if ! command -v cargo >/dev/null 2>&1; then
   curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y
@@ -112,6 +113,15 @@ fi
 if [[ -f "$HOME/.cargo/env" ]]; then
   # shellcheck disable=SC1091
   source "$HOME/.cargo/env"
+fi
+
+cargo_bin="$(command -v cargo || true)"
+if [[ -z "$cargo_bin" && -x "$HOME/.cargo/bin/cargo" ]]; then
+  cargo_bin="$HOME/.cargo/bin/cargo"
+fi
+if [[ -z "$cargo_bin" ]]; then
+  echo "cargo was installed but is not available in this shell. Run: source ~/.cargo/env" >&2
+  exit 1
 fi
 
 if [[ "$install_codex" -eq 1 ]]; then
@@ -139,7 +149,7 @@ if [[ "$install_docker" -eq 1 ]]; then
 fi
 
 cd "$repo_root"
-cargo build --release
+"$cargo_bin" build --release
 
 bin="$repo_root/target/release/librarian"
 "$bin" --home "$librarian_home" setup --yes --runtime host --skip-doctor
@@ -201,8 +211,8 @@ fi
 
 if [[ "$docker_ready" -eq 0 ]]; then
   next_title="Activate Docker access"
-  next_body="Open a new Ubuntu shell, or run: newgrp docker"
-  next_command="cd \"$repo_root\" && \"$bin\" --home \"$librarian_home\" runtime build-agent-image"
+  next_body="Open a new Ubuntu shell, or run the image build through a fresh docker group session."
+  next_command="cd \"$repo_root\" && sg docker -c '\"$bin\" --home \"$librarian_home\" runtime build-agent-image'"
 elif [[ "$agent_image_ready" -eq 0 ]]; then
   next_title="Build the agent image"
   next_body="Docker is reachable, but the Librarian agent image is not ready yet."
