@@ -6,6 +6,7 @@ install_codex=1
 install_docker=1
 build_agent_image=1
 run_doctor=1
+agent_image_ready=0
 librarian_home="${LIBRARIAN_HOME:-$HOME/Librarian}"
 bind="${LIBRARIAN_ADMIN_BIND:-0.0.0.0:17377}"
 
@@ -168,12 +169,29 @@ fi
 if [[ "$build_agent_image" -eq 1 ]]; then
   if docker info >/dev/null 2>&1; then
     "$bin" --home "$librarian_home" runtime build-agent-image
+    agent_image_ready=1
   elif command -v sg >/dev/null 2>&1 && getent group docker >/dev/null 2>&1; then
-    sg docker -c "\"$bin\" --home \"$librarian_home\" runtime build-agent-image" || {
-      echo "Could not build the agent image in the current session. Log out/in or run: $bin --home $librarian_home runtime build-agent-image" >&2
-    }
+    if sg docker -c "\"$bin\" --home \"$librarian_home\" runtime build-agent-image"; then
+      agent_image_ready=1
+    fi
   else
-    echo "Docker is installed but not reachable in this session. Run: $bin --home $librarian_home runtime build-agent-image" >&2
+    agent_image_ready=0
+  fi
+fi
+
+docker_ready=0
+if docker info >/dev/null 2>&1; then
+  docker_ready=1
+fi
+
+codex_profile_ready=0
+if [[ -d "$librarian_home/codex-home" ]]; then
+  codex_profile_ready=1
+fi
+
+if [[ "$agent_image_ready" -eq 0 && "$docker_ready" -eq 1 ]]; then
+  if docker image inspect librarian-agent:latest >/dev/null 2>&1; then
+    agent_image_ready=1
   fi
 fi
 
@@ -181,21 +199,56 @@ if [[ "$run_doctor" -eq 1 ]]; then
   "$bin" --home "$librarian_home" doctor || true
 fi
 
+if [[ "$docker_ready" -eq 0 ]]; then
+  next_title="Activate Docker access"
+  next_body="Open a new Ubuntu shell, or run: newgrp docker"
+  next_command="cd \"$repo_root\" && \"$bin\" --home \"$librarian_home\" runtime build-agent-image"
+elif [[ "$agent_image_ready" -eq 0 ]]; then
+  next_title="Build the agent image"
+  next_body="Docker is reachable, but the Librarian agent image is not ready yet."
+  next_command="\"$bin\" --home \"$librarian_home\" runtime build-agent-image"
+elif [[ "$codex_profile_ready" -eq 0 ]]; then
+  next_title="Sign in Codex for Librarian"
+  next_body="Create the portable Codex profile that will later be mounted into agent containers."
+  next_command="export CODEX_HOME=\"$librarian_home/codex-home\" && codex"
+else
+  next_title="Start the admin UI"
+  next_body="The basic setup is ready enough to open the web interface."
+  next_command="\"$bin\" --home \"$librarian_home\" admin --bind \"$bind\""
+fi
+
 cat <<EOF
 
-Librarian bootstrap complete.
++------------------------------------------------------------+
+| Librarian bootstrap complete                               |
++------------------------------------------------------------+
 
-Root:
+State root:
   $librarian_home
 
-Start the admin UI:
-  $bin --home "$librarian_home" admin --bind "$bind"
+Launch context:
+  $repo_root
 
-Open from Windows/host:
-  http://127.0.0.1:17377
+NEXT STEP: $next_title
+  $next_body
+  $next_command
 
-Codex auth, if doctor reports a missing profile:
-  export CODEX_HOME="$librarian_home/codex-home"
-  codex
-  $bin --home "$librarian_home" auth codex --enable-container-mount --codex-home "$librarian_home/codex-home"
+Useful commands:
+  Doctor:
+    $bin --home "$librarian_home" doctor
+
+  Admin UI:
+    $bin --home "$librarian_home" admin --bind "$bind"
+
+  Browser URL from Windows/host:
+    http://127.0.0.1:17377
+
+  Codex auth:
+    export CODEX_HOME="$librarian_home/codex-home"
+    codex
+    $bin --home "$librarian_home" auth codex --enable-container-mount --codex-home "$librarian_home/codex-home"
+
+Notes:
+  State root is where Librarian stores config, SQLite, vault, runs, and auth profiles.
+  Launch context is the repo/current directory used as a project hint; it is not the state folder.
 EOF

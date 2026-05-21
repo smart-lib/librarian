@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{Duration, Utc};
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
 use std::io::Write;
 use uuid::Uuid;
 

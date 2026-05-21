@@ -151,6 +151,10 @@ exports, and the default Codex profile mount path. Override this with
 `--home <path>` or `LIBRARIAN_HOME` when you intentionally want a portable or
 project-local root.
 
+`doctor` calls this the `librarian root (state)`. It is intentionally separate
+from the `launch context (cwd)`, which is simply the directory where the command
+was started and can later be used as a current-project hint.
+
 For first setup, use `setup`. It creates the root, migrates SQLite, records the
 launch directory as the current context, optionally selects the WSL Podman
 runtime on Windows, and runs `doctor`.

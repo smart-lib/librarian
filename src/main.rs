@@ -1593,9 +1593,17 @@ enum DoctorSeverity {
 impl DoctorSeverity {
     fn label(self) -> &'static str {
         match self {
-            Self::Ok => "ok",
-            Self::Warn => "warn",
-            Self::Error => "error",
+            Self::Ok => "OK",
+            Self::Warn => "WARN",
+            Self::Error => "ERROR",
+        }
+    }
+
+    fn color(self) -> &'static str {
+        match self {
+            Self::Ok => "32",
+            Self::Warn => "33",
+            Self::Error => "31",
         }
     }
 }
@@ -1649,12 +1657,15 @@ async fn run_doctor(config: &Config) -> Result<()> {
     config.ensure_layout()?;
 
     let mut checks = vec![
-        DoctorCheck::ok("librarian home", config.home.display().to_string()),
+        DoctorCheck::ok("librarian root (state)", config.home.display().to_string()),
         DoctorCheck::ok(
-            "launch context",
-            std::env::current_dir()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|error| format!("unavailable: {error}")),
+            "launch context (cwd)",
+            format!(
+                "{}; used as the current project hint, not as storage",
+                std::env::current_dir()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|error| format!("unavailable: {error}"))
+            ),
         ),
         path_check("config file", &config.config_path, "Run `librarian init`."),
         path_check("vault", &config.vault_path, "Run `librarian init`."),
@@ -1727,31 +1738,110 @@ async fn run_doctor(config: &Config) -> Result<()> {
         "ready"
     };
 
-    println!("Librarian doctor: {overall}");
+    let color_enabled = std::env::var_os("NO_COLOR").is_none();
+    let title = format!("Librarian doctor: {}", overall.to_ascii_uppercase());
+    println!("{}", border_line(title.len()));
+    println!(
+        "| {} |",
+        color_text(color_enabled, overall_color(overall), &title)
+    );
+    println!("{}", border_line(title.len()));
     println!();
     for check in &checks {
+        let tag = color_text(
+            color_enabled,
+            check.severity.color(),
+            &format!("[{}]", check.severity.label()),
+        );
         println!(
-            "[{}] {}: {}",
-            check.severity.label(),
-            check.label,
+            "{} {}: {}",
+            tag,
+            bold_text(color_enabled, &check.label),
             check.detail
         );
         if let Some(next_step) = &check.next_step {
-            println!("      next: {next_step}");
+            println!("       next: {next_step}");
         }
     }
     println!();
-    println!("MVP setup sequence:");
-    println!("  librarian setup");
-    println!("  set CODEX_HOME to Librarian's portable codex-home path and run `codex`");
-    println!("  librarian auth codex --enable-container-mount --codex-home <profile-path>");
-    println!("  librarian runtime build-agent-image");
-    println!("  librarian doctor");
-    println!("  librarian project add <path>");
-    println!("  librarian admin");
-    println!("  librarian worker --once");
+    print_doctor_next_steps(color_enabled, &checks);
 
     Ok(())
+}
+
+fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck]) {
+    let blockers = checks
+        .iter()
+        .filter(|check| check.severity == DoctorSeverity::Error)
+        .collect::<Vec<_>>();
+    if blockers.is_empty() {
+        println!(
+            "{}",
+            color_text(
+                color_enabled,
+                "32",
+                "Next step: start the admin UI, add a project, then queue a smoke job."
+            )
+        );
+        println!("  librarian admin");
+        println!("  librarian project add <path>");
+        println!("  librarian worker --once");
+        return;
+    }
+
+    println!(
+        "{}",
+        color_text(color_enabled, "31", "Next important step:")
+    );
+    if let Some(first) = blockers.first() {
+        println!(
+            "  Fix `{}` first: {}",
+            first.label,
+            first
+                .next_step
+                .as_deref()
+                .unwrap_or("See the failed check above.")
+        );
+    }
+    if blockers.len() > 1 {
+        println!();
+        println!("Remaining blockers:");
+        for blocker in blockers.iter().skip(1) {
+            println!("  - {}: {}", blocker.label, blocker.detail);
+        }
+    }
+    println!();
+    println!("After blockers are fixed:");
+    println!("  librarian doctor");
+    println!("  librarian admin");
+}
+
+fn border_line(title_len: usize) -> String {
+    format!("+{}+", "-".repeat(title_len + 2))
+}
+
+fn color_text(enabled: bool, color: &str, text: &str) -> String {
+    if enabled {
+        format!("\x1b[{color}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+fn bold_text(enabled: bool, text: &str) -> String {
+    if enabled {
+        format!("\x1b[1m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+fn overall_color(overall: &str) -> &'static str {
+    match overall {
+        "ready" => "32",
+        "degraded" => "33",
+        _ => "31",
+    }
 }
 
 fn path_check(label: &str, path: &std::path::Path, next_step: &str) -> DoctorCheck {
@@ -1843,6 +1933,9 @@ fn command_next_step(label: &str, detail: &str) -> &'static str {
     let detail = detail.to_ascii_lowercase();
     if detail.contains("cannot connect to podman") || detail.contains("podman machine") {
         return "Start/fix Podman, or run `librarian runtime use-wsl-podman` if the WSL Podman machine is usable.";
+    }
+    if detail.contains("permission denied") && detail.contains("docker") {
+        return "Your user cannot access Docker yet. Open a new Ubuntu shell after setup, or run `newgrp docker`, then rerun `librarian runtime build-agent-image`.";
     }
     match label {
         "container runtime" => {

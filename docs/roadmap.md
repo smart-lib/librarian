@@ -180,6 +180,9 @@ next.
 - Ubuntu starter/bootstrap scripts install missing dependencies, build
   Librarian, run silent setup, and prepare the Docker-based agent image when
   permissions allow it.
+- Doctor output now highlights the overall status, distinguishes state root
+  from launch context, and prints a single next important step plus remaining
+  blockers.
 
 ## MVP Readiness
 
