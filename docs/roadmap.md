@@ -183,6 +183,9 @@ next.
 - Doctor output now highlights the overall status, distinguishes state root
   from launch context, and prints a single next important step plus remaining
   blockers.
+- Admin UI shell now treats chat as the primary screen, keeps browser-level
+  scrolling locked to the viewport, moves operational settings into a
+  full-screen tabbed overlay, and adds the first visual project-map surface.
 
 ## MVP Readiness
 
@@ -249,6 +252,35 @@ Tasks:
 - Start admin UI on `0.0.0.0:17377` and verify Windows/host access through
   `http://127.0.0.1:17377`.
 - After Codex auth, build `librarian-agent` and run the MVP smoke flow.
+
+## Priority 1B: Project Library and Friendly Admin UX
+
+Status: In progress. First admin layout pass is implemented; backend project
+library workflows remain.
+
+Goal: make Librarian feel like a project library first, and hide low-level
+agent dispatch mechanics until they are needed.
+
+Tasks:
+
+- Keep the browser viewport fixed and use application-owned scroll regions for
+  chat, settings tabs, and project map panels.
+- Make chat the primary surface; move providers, schedules, secrets, budgets,
+  and events behind a settings button and full-screen tabbed overlay.
+- Add a project-map view that renders registered projects as a branching node
+  tree. First pass uses the project registry; the next pass should use vault
+  project folders and links.
+- Define the project library model: Markdown project memory folders live under
+  `Librarian/Projects/{ProjectName}` by default, and each can attach to an
+  external working directory mounted into agent containers.
+- Add project creation/linking from the admin UI: create the memory folder,
+  optionally create the working directory under the default projects root, or
+  attach an existing directory.
+- When Librarian is launched from a directory that is not already known as a
+  root or project, ask whether to register that directory as a working project
+  and create/link the corresponding library folder.
+- Capture the launched-from-unknown-folder behavior as a default reusable
+  agent-instruction block once the visual instruction builder exists.
 
 ## Priority 2: Job Dispatch Dry Run and Preflight
 
