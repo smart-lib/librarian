@@ -227,6 +227,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .message.assistant, .message.system { align-self: flex-start; }
     .message.system { color: var(--muted); }
+    .message.live { border-color: #42605a; }
     .message small {
       display: block;
       margin-top: 8px;
@@ -426,7 +427,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         jobs: [],
         providers: { catalog: [], states: [] },
         health: null,
-        activeProject: ''
+        activeProject: '',
+        trackedJobs: new Map()
       };
       const el = id => document.getElementById(id);
       const qsa = selector => Array.from(document.querySelectorAll(selector));
@@ -448,13 +450,18 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function appendMessage(role, text, detail) {
         const article = document.createElement('article');
         article.className = `message ${role}`;
+        setMessage(article, text, detail);
+        el('thread').appendChild(article);
+        el('chat-log').scrollTop = el('chat-log').scrollHeight;
+        return article;
+      }
+      function setMessage(article, text, detail) {
         article.textContent = text;
-        if (detail) {
+        if (detail !== undefined && detail !== null && detail !== '') {
           const small = document.createElement('small');
           small.textContent = detail;
           article.appendChild(small);
         }
-        el('thread').appendChild(article);
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
       }
       function activeProjectName() {
@@ -548,6 +555,90 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function card(title, body) {
         return `<div class="card"><h3>${htmlEscape(title)}</h3><div>${body}</div></div>`;
       }
+      function isFinalStatus(status) {
+        return status === 'Completed' || status === 'Failed' || status === 'Cancelled';
+      }
+      function eventPayload(event) {
+        return event && typeof event.payload === 'object' && event.payload ? event.payload : {};
+      }
+      function lastEvent(events, kinds) {
+        for (let index = events.length - 1; index >= 0; index -= 1) {
+          if (kinds.includes(events[index].kind)) return events[index];
+        }
+        return null;
+      }
+      function lineFromEvent(event) {
+        const payload = eventPayload(event);
+        if (payload.line) return payload.line;
+        if (payload.error) return payload.error;
+        if (payload.category && payload.category.message) return payload.category.message;
+        return '';
+      }
+      function jobSummary(job, events, health) {
+        const status = job.status || 'Queued';
+        const worker = (health && health.worker) || {};
+        if (status === 'Queued') {
+          const detail = worker.running_jobs
+            ? 'The worker is busy with another run.'
+            : 'Start the worker from the terminal when you are ready to process queued work.';
+          return ['Waiting for the worker.', detail];
+        }
+        if (status === 'Preparing') {
+          const prepared = lastEvent(events, ['prepared', 'context_pack']);
+          const payload = eventPayload(prepared);
+          const detail = payload.context_hits !== undefined
+            ? `Context hits: ${payload.context_hits}`
+            : 'Resolving provider, project memory, and runtime command.';
+          return ['Preparing the agent run.', detail];
+        }
+        if (status === 'Running') {
+          const output = lastEvent(events, ['stderr', 'stdout', 'provider_diagnostic', 'provider_limit_detected']);
+          const line = lineFromEvent(output);
+          return ['Worker is running.', line || 'Waiting for agent output...'];
+        }
+        if (status === 'Completed') {
+          const vault = lastEvent(events, ['vault']);
+          const runSummary = eventPayload(vault).run_summary;
+          return ['Done.', runSummary ? `Run summary: ${runSummary}` : 'The worker completed successfully.'];
+        }
+        if (status === 'Cancelled') {
+          return ['Cancelled.', 'The queued run was cancelled.'];
+        }
+        const failure = lastEvent(events, ['failure_category', 'error', 'stderr']);
+        const payload = eventPayload(failure);
+        const category = payload.category || {};
+        const detail = category.next_step || category.message || payload.error || lineFromEvent(failure) || 'Open Settings -> Jobs for details.';
+        return ['The worker could not complete this run.', detail];
+      }
+      async function refreshJobMessage(jobId) {
+        const tracker = state.trackedJobs.get(jobId);
+        if (!tracker) return;
+        try {
+          const [job, events, health] = await Promise.all([
+            fetch(`/api/jobs/${jobId}`).then(response => response.json()),
+            fetch(`/api/jobs/${jobId}/events`).then(response => response.json()),
+            loadJson('/api/health', state.health)
+          ]);
+          state.health = health || state.health;
+          const [text, detail] = jobSummary(job, Array.isArray(events) ? events : [], state.health);
+          setMessage(tracker.element, text, detail ? `job ${shortId(jobId)} · ${detail}` : `job ${shortId(jobId)}`);
+          await refresh();
+          if (isFinalStatus(job.status)) {
+            tracker.element.classList.remove('live');
+            clearInterval(tracker.timer);
+            state.trackedJobs.delete(jobId);
+          }
+        } catch (error) {
+          setMessage(tracker.element, 'Could not refresh this run.', `job ${shortId(jobId)} · ${error.message || error}`);
+        }
+      }
+      function trackJob(jobId, element) {
+        if (!jobId || state.trackedJobs.has(jobId)) return;
+        element.classList.add('live');
+        const timer = setInterval(() => refreshJobMessage(jobId), 2200);
+        state.trackedJobs.set(jobId, { element, timer });
+        refreshJobMessage(jobId);
+      }
       async function submitChat(event) {
         event.preventDefault();
         const input = el('goal-input');
@@ -568,7 +659,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-          appendMessage('assistant', 'Queued for the worker.', `job ${data.id || ''}`);
+          const live = appendMessage('assistant', 'Queued for the worker.', `job ${shortId(data.id || '')}`);
+          trackJob(data.id, live);
           await refresh();
         } catch (error) {
           appendMessage('system', `Could not queue the message: ${error.message || error}`);

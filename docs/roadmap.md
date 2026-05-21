@@ -260,8 +260,8 @@ Tasks:
 
 ## Priority 1B: Project Library and Friendly Admin UX
 
-Status: In progress. Chat-first shell is active; backend project library
-workflows and live worker responses remain.
+Status: In progress. Chat-first shell and job-status chat follow-up are active;
+backend project library workflows remain.
 
 Goal: make Librarian feel like a project library first, and hide low-level
 agent dispatch mechanics until they are needed.
@@ -281,7 +281,8 @@ Tasks:
   Codex as the default MVP provider and the selected/first project as context.
 - Convert queued-job chat into a friendlier live conversation: show worker
   progress and final result in the thread, and make it clear when the worker is
-  not running.
+  not running. First polling-based pass done; later work should stream richer
+  agent output and artifacts into expandable chat blocks.
 - Define the project library model: Markdown project memory folders live under
   `Librarian/Library/projects/{ProjectName}` by default, and each can attach to an
   external working directory mounted into agent containers.
