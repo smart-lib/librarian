@@ -1,5 +1,17 @@
 # Librarian
 
+## One-Line Ubuntu Install
+
+```bash
+sh -c 'u=https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/install-ubuntu.sh; if command -v curl >/dev/null 2>&1; then curl -fsSL "$u"; else wget -qO- "$u"; fi' | bash
+```
+
+Nightly/develop build:
+
+```bash
+sh -c 'u=https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/install-ubuntu.sh; if command -v curl >/dev/null 2>&1; then curl -fsSL "$u"; else wget -qO- "$u"; fi' | bash -s -- --nightly
+```
+
 Librarian is a local-first automation harness for ideas, projects, and coding agents.
 It runs a small root orchestrator on the host, keeps durable memory in SQLite and
 an Obsidian-compatible Markdown vault, and launches worker agents inside Docker
@@ -23,7 +35,7 @@ adapter interface.
   decisions, and background run summaries.
 - Local, open-source secret handling with a future broker mode where agents can
   use capabilities without reading raw credentials.
-- MIT licensed, documented, and configurable from the beginning.
+- MIT licensed for now, documented, and configurable from the beginning.
 
 ## Current Status
 
@@ -45,7 +57,84 @@ This repository contains the initial scaffold:
 - Alpine-based agent image Dockerfile.
 - Architecture and security notes.
 
+## License
+
+Librarian is currently MIT licensed. That keeps adoption, embedding, and
+commercial/internal use simple while the architecture is still moving quickly.
+
+GPLv3 would be a good fit if the project should force redistributed modified
+versions to stay open. AGPLv3 is the stronger choice if the long-term concern is
+hosted/network service forks, because it closes the common "run it as a service"
+gap. The trade-off is adoption friction: GPL/AGPL can make companies and plugin
+authors more cautious. The practical recommendation for the MVP is to keep MIT
+until the extension/provider/plugin boundaries are clearer, then decide whether
+the core should move to GPLv3/AGPLv3 before there are many outside contributors.
+
 ## Quick Start
+
+### Ubuntu Golden Path
+
+For a normal Ubuntu or WSL Ubuntu setup, start with Git and let the project
+bootstrap install the missing pieces:
+
+```bash
+git clone https://github.com/smart-lib/librarian.git
+cd librarian
+bash scripts/bootstrap-ubuntu.sh --yes
+```
+
+The bootstrap installs system packages, Rust, Node.js/npm, Codex CLI, Docker,
+builds Librarian, creates the default root at `~/Librarian`, and tries to build
+the agent image. Start the admin UI with the command printed at the end:
+
+```bash
+./target/release/librarian --home "$HOME/Librarian" admin --bind 0.0.0.0:17377
+```
+
+From Windows with WSL2, open:
+
+```text
+http://127.0.0.1:17377
+```
+
+If `doctor` reports a missing Codex profile, sign in once with Librarian's
+portable profile:
+
+```bash
+export CODEX_HOME="$HOME/Librarian/codex-home"
+codex
+./target/release/librarian --home "$HOME/Librarian" auth codex --enable-container-mount --codex-home "$HOME/Librarian/codex-home"
+./target/release/librarian --home "$HOME/Librarian" doctor
+```
+
+### What The Ubuntu Bootstrap Does
+
+The short command above is equivalent to:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git build-essential pkg-config libssl-dev python3 docker.io
+curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+sudo npm install -g @openai/codex
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
+cargo build --release
+./target/release/librarian --home "$HOME/Librarian" setup --yes --runtime host
+./target/release/librarian --home "$HOME/Librarian" runtime build-agent-image
+./target/release/librarian --home "$HOME/Librarian" doctor
+```
+
+On some Ubuntu/WSL installations, Docker group membership is not active until
+the next login. The bootstrap tries to use a fresh `docker` group session for
+the image build; if the system refuses, log out/in or rerun:
+
+```bash
+./target/release/librarian --home "$HOME/Librarian" runtime build-agent-image
+```
+
+### Windows Developer Path
 
 Prerequisites:
 

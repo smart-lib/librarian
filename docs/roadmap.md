@@ -24,6 +24,8 @@ the product direction.
   `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
   `~/Library/Application Support/Librarian` on macOS; `--home` and
   `LIBRARIAN_HOME` support portable roots.
+- Ubuntu is the current golden-path install target: clone the repository and
+  run one bootstrap script, or use the README one-line starter for clean hosts.
 - The Obsidian-compatible vault is global at the Librarian root, so chats,
   project notes, decisions, and background runs across many projects share one
   knowledge base.
@@ -175,6 +177,9 @@ next.
   launcher folder for manual UI checks.
 - Initial GitHub Actions release workflow packages Windows and Linux builds
   with checksums.
+- Ubuntu starter/bootstrap scripts install missing dependencies, build
+  Librarian, run silent setup, and prepare the Docker-based agent image when
+  permissions allow it.
 
 ## MVP Readiness
 
@@ -209,6 +214,9 @@ Tasks:
   auto-detection.
 - Add a release-folder launcher that pins `LIBRARIAN_HOME` beside the binary
   for portable/self-contained installs.
+- Add an Ubuntu golden-path bootstrap: one command after clone, plus a README
+  one-line starter that installs Git, clones the default branch, and runs silent
+  setup.
 
 Dependencies:
 
@@ -220,6 +228,24 @@ Owner split:
 
 - Code: Librarian.
 - Environment validation: user, after the readiness code is in place.
+
+## Priority 1A: Ubuntu Golden Path Validation
+
+Status: Ready for user validation.
+
+Goal: make a clean Ubuntu/WSL host the easiest path to MVP testing and the
+closest rehearsal for the later dedicated Ubuntu machine.
+
+Tasks:
+
+- Run the README one-line starter on clean Ubuntu/WSL.
+- Confirm Rust, Node/npm, Codex CLI, Docker, release build, setup, and doctor.
+- Confirm Docker group behavior after first install; if a relogin is still
+  required, make the script's next step clearer or add a safer rootless Docker
+  path.
+- Start admin UI on `0.0.0.0:17377` and verify Windows/host access through
+  `http://127.0.0.1:17377`.
+- After Codex auth, build `librarian-agent` and run the MVP smoke flow.
 
 ## Priority 2: Job Dispatch Dry Run and Preflight
 
