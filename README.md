@@ -88,6 +88,8 @@ The bootstrap installs system packages, Rust, Node.js/npm, Codex CLI, Docker,
 builds Librarian, creates the default single root at `~/Librarian`, installs
 the binary to `~/Librarian/.app/bin/librarian`, and tries to build the agent
 image. It also links `librarian` into `~/.local/bin` for normal shell use.
+If `~/.local/bin` is not already on `PATH`, the bootstrap adds it to
+`~/.profile` and `~/.bashrc`.
 Start the admin UI with the command printed at the end:
 
 ```bash
@@ -144,6 +146,7 @@ cargo build --release
 install -Dm755 ./target/release/librarian "$HOME/Librarian/.app/bin/librarian"
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$HOME/Librarian/.app/bin/librarian" "$HOME/.local/bin/librarian"
+export PATH="$HOME/.local/bin:$PATH"
 "$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" setup --yes --runtime host
 sg docker -c '"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" runtime build-agent-image'
 "$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" doctor

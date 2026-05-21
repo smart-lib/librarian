@@ -170,6 +170,24 @@ ln -sfn "$bin" "$link_bin"
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
+if [[ -f "$HOME/.profile" ]] && ! grep -q 'HOME/.local/bin' "$HOME/.profile"; then
+  cat >> "$HOME/.profile" <<'PROFILE'
+
+# Added by Librarian installer: user-local command shims.
+if [ -d "$HOME/.local/bin" ] ; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+PROFILE
+fi
+if [[ -f "$HOME/.bashrc" ]] && ! grep -q 'HOME/.local/bin' "$HOME/.bashrc"; then
+  cat >> "$HOME/.bashrc" <<'BASHRC'
+
+# Added by Librarian installer: user-local command shims.
+if [ -d "$HOME/.local/bin" ] ; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+BASHRC
+fi
 "$bin" --home "$librarian_home" setup --yes --runtime host --skip-doctor
 "$bin" --home "$librarian_home" config show >/dev/null
 

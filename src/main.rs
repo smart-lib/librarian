@@ -1846,11 +1846,33 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
 }
 
 fn doctor_command_prefix(config: &Config) -> String {
+    if installed_app_binary(config) {
+        return format!("librarian --home {}", shell_path(&config.home));
+    }
     let executable = std::env::current_exe()
         .ok()
         .map(|path| shell_path(&path))
         .unwrap_or_else(|| "librarian".to_string());
     format!("{executable} --home {}", shell_path(&config.home))
+}
+
+fn installed_app_binary(config: &Config) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let expected = config.home.join(".app").join("bin").join(if cfg!(windows) {
+        "librarian.exe"
+    } else {
+        "librarian"
+    });
+    paths_equivalent(&exe, &expected)
+}
+
+fn paths_equivalent(left: &std::path::Path, right: &std::path::Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
 
 fn shell_path(path: &std::path::Path) -> String {
