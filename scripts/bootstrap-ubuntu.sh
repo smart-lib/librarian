@@ -165,8 +165,16 @@ chmod +x "$install_bin"
 
 bin="$install_bin"
 link_bin="${LIBRARIAN_LINK_BIN:-$HOME/.local/bin/librarian}"
+system_link_bin="${LIBRARIAN_SYSTEM_LINK_BIN:-/usr/local/bin/librarian}"
 mkdir -p "$(dirname "$link_bin")"
 ln -sfn "$bin" "$link_bin"
+if [[ -n "$system_link_bin" ]]; then
+  if [[ "${EUID}" -eq 0 ]]; then
+    ln -sfn "$bin" "$system_link_bin" || true
+  else
+    "${sudo_cmd[@]}" ln -sfn "$bin" "$system_link_bin" || true
+  fi
+fi
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
@@ -283,6 +291,7 @@ Installed binary:
   $bin
 
 Shell command:
+  $system_link_bin
   $link_bin
 
 NEXT STEP: $next_title

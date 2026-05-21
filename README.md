@@ -87,7 +87,8 @@ bash scripts/bootstrap-ubuntu.sh --yes
 The bootstrap installs system packages, Rust, Node.js/npm, Codex CLI, Docker,
 builds Librarian, creates the default single root at `~/Librarian`, installs
 the binary to `~/Librarian/.app/bin/librarian`, and tries to build the agent
-image. It also links `librarian` into `~/.local/bin` for normal shell use.
+image. It also links `librarian` into `/usr/local/bin` for immediate shell use
+and `~/.local/bin` for a user-local fallback.
 If `~/.local/bin` is not already on `PATH`, the bootstrap adds it to
 `~/.profile` and `~/.bashrc`.
 Start the admin UI with the command printed at the end:
@@ -144,6 +145,7 @@ sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 cargo build --release
 install -Dm755 ./target/release/librarian "$HOME/Librarian/.app/bin/librarian"
+sudo ln -sfn "$HOME/Librarian/.app/bin/librarian" /usr/local/bin/librarian
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$HOME/Librarian/.app/bin/librarian" "$HOME/.local/bin/librarian"
 export PATH="$HOME/.local/bin:$PATH"
