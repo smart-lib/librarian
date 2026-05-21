@@ -1,0 +1,54 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/librarian-windows-x64 | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/librarian.exe dist/librarian-windows-x64/
+          Copy-Item scripts/librarian-launcher.ps1 dist/librarian-windows-x64/librarian.ps1
+          Copy-Item README.md dist/librarian-windows-x64/
+          Compress-Archive -Path dist/librarian-windows-x64/* -DestinationPath dist/librarian-windows-x64.zip -Force
+          Get-FileHash dist/librarian-windows-x64.zip -Algorithm SHA256 | Format-List | Out-File dist/librarian-windows-x64.zip.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: librarian-windows-x64
+          path: |
+            dist/librarian-windows-x64.zip
+            dist/librarian-windows-x64.zip.sha256
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        run: |
+          mkdir -p dist/librarian-linux-x64
+          cp target/release/librarian dist/librarian-linux-x64/
+          cp README.md dist/librarian-linux-x64/
+          tar -C dist -czf dist/librarian-linux-x64.tar.gz librarian-linux-x64
+          sha256sum dist/librarian-linux-x64.tar.gz > dist/librarian-linux-x64.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: librarian-linux-x64
+          path: |
+            dist/librarian-linux-x64.tar.gz
+            dist/librarian-linux-x64.tar.gz.sha256

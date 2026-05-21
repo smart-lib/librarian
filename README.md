@@ -54,16 +54,22 @@ Prerequisites:
 - Podman on Windows, or Docker/Podman on Linux and macOS.
 - Codex CLI installed on the host for authentication bootstrap.
 
-By default, Librarian stores its portable state in `./.librarian` under the
-current working directory: `config.toml`, `librarian.db`, the Markdown vault,
-run artifacts, Third Eye exports, and the default Codex profile mount path.
-Override this with `--home <path>` or `LIBRARIAN_HOME` when you intentionally
-want a different root.
+By default, Librarian stores its root in the current user's application area:
+`%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
+`~/Library/Application Support/Librarian` on macOS. The root contains
+`config.toml`, `librarian.db`, the Markdown vault, run artifacts, Third Eye
+exports, and the default Codex profile mount path. Override this with
+`--home <path>` or `LIBRARIAN_HOME` when you intentionally want a portable or
+project-local root.
+
+For first setup, use `setup`. It creates the root, migrates SQLite, records the
+launch directory as the current context, optionally selects the WSL Podman
+runtime on Windows, and runs `doctor`.
 
 ```powershell
 .\scripts\bootstrap-windows.ps1
-cargo +stable-x86_64-pc-windows-gnu run -- auth codex
-cargo +stable-x86_64-pc-windows-gnu run -- auth codex --enable-container-mount
+cargo +stable-x86_64-pc-windows-gnu run -- setup
+cargo +stable-x86_64-pc-windows-gnu run -- auth codex --enable-container-mount --codex-home "$env:APPDATA\Librarian\codex-home"
 cargo +stable-x86_64-pc-windows-gnu run -- runtime build-agent-image
 cargo +stable-x86_64-pc-windows-gnu run -- doctor
 cargo +stable-x86_64-pc-windows-gnu run -- project add c:\path\to\project
@@ -75,14 +81,19 @@ checks for the config layout, SQLite, container runtime, agent image, Codex CLI,
 and Codex profile mount. Treat `blocked` as the environment setup todo list
 before attempting a real worker run.
 
-For portable Codex auth, sign in with `CODEX_HOME` pointing at
-`.\.librarian\codex-home`, then enable the explicit mount:
+For portable Codex auth, sign in with `CODEX_HOME` pointing at Librarian's
+`codex-home`, then enable the explicit mount:
 
 ```powershell
-$env:CODEX_HOME = ".\.librarian\codex-home"
+$env:CODEX_HOME = "$env:APPDATA\Librarian\codex-home"
 codex
-cargo +stable-x86_64-pc-windows-gnu run -- auth codex --enable-container-mount --codex-home .\.librarian\codex-home
+cargo +stable-x86_64-pc-windows-gnu run -- auth codex --enable-container-mount --codex-home "$env:APPDATA\Librarian\codex-home"
 ```
+
+For a self-contained folder build, copy `librarian.exe` and
+`scripts/librarian-launcher.ps1` into one directory as `librarian.ps1`. The
+launcher sets `LIBRARIAN_HOME` to `.librarian` next to the executable, so the
+whole folder can be moved between machines.
 
 If the Windows Podman CLI loses its machine connection while the WSL
 `podman-machine-default` distro is still usable, switch Librarian to the WSL

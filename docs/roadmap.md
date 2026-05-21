@@ -9,8 +9,9 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: MVP readiness after Milestone 7 feature buildout.
-- Next implementation focus: make the core flow testable end to end, then hand
-  off to environment setup for real manual and automated testing.
+- Next implementation focus: make the core flow testable end to end from a
+  real user launch path, then hand off to environment setup for manual and
+  automated testing.
 
 ## Product Defaults
 
@@ -19,6 +20,10 @@ the product direction.
 - Project mounts are read-write by default, configurable per run/project.
 - No required paid or proprietary external secret service.
 - Localhost admin UI is the default interaction path.
+- First-run setup chooses a stable Librarian root. Silent/default setup uses
+  `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
+  `~/Library/Application Support/Librarian` on macOS; `--home` and
+  `LIBRARIAN_HOME` support portable roots.
 - The Obsidian-compatible vault is global at the Librarian root, so chats,
   project notes, decisions, and background runs across many projects share one
   knowledge base.
@@ -157,12 +162,19 @@ next.
   the selected provider/model is paused.
 - Daily budget guardrails before dispatch for total, provider, and project
   cost, based on observed `cost_usd` telemetry for the current UTC day.
-- Portable local Librarian root: default state now lives under `./.librarian`
-  instead of OS profile directories such as AppData, and in-root config paths
-  are stored relative to support moving the folder between systems.
+- Stable local Librarian root: default state now lives in a platform user app
+  directory, first setup can choose a custom root, and portable launchers can
+  pin `LIBRARIAN_HOME` to an in-folder `.librarian`.
 - Actionable `doctor` readiness report with `ready / degraded / blocked`
   summary, severity-tagged checks, runtime engine validation, Codex profile
   mount diagnostics, and the MVP setup command sequence.
+- First-run `setup` command creates the root, migrates SQLite, reports the
+  launch context, can select host/WSL Podman runtime, and can optionally build
+  the agent image before running `doctor`.
+- Windows bootstrap now builds the binary, runs `setup`, and creates a local
+  launcher folder for manual UI checks.
+- Initial GitHub Actions release workflow packages Windows and Linux builds
+  with checksums.
 
 ## MVP Readiness
 
@@ -172,8 +184,9 @@ and the core flows can be tested manually and automatically.
 
 ## Priority 1: Actionable Bootstrap and Doctor
 
-Status: Done for code readiness. Environment validation remains with the user
-once Podman/Docker and portable Codex auth are configured.
+Status: Done for code readiness. First-run setup and basic packaging are now
+part of this priority. Environment validation remains with the user once
+Podman/Docker and portable Codex auth are configured.
 
 Goal: a new local setup should reach a clear `ready / blocked / degraded`
 answer without reading source code.
@@ -188,8 +201,14 @@ Tasks:
 - Add an explicit preflight result for the selected runtime path: host Docker or
   Podman, and WSL Podman fallback on Windows.
 - Document the expected handoff command sequence for environment setup:
-  `init`, `auth codex`, `auth codex --enable-container-mount`,
+  `setup`, portable Codex sign-in, `auth codex --enable-container-mount`,
   `runtime build-agent-image`, `doctor`, `project add`, `admin`, `worker`.
+- Choose a stable platform default root instead of using the process current
+  directory as storage.
+- Treat the process current directory as launch context for future project
+  auto-detection.
+- Add a release-folder launcher that pins `LIBRARIAN_HOME` beside the binary
+  for portable/self-contained installs.
 
 Dependencies:
 
@@ -233,6 +252,7 @@ Goal: prove the main path once the user's environment is ready.
 Manual flow to validate:
 
 - Initialize Librarian home, DB, and vault.
+- Launch the built binary through the release-folder launcher.
 - Configure Codex host authentication and explicit container mount.
 - Build `librarian-agent`.
 - Register a local test project.
@@ -323,6 +343,8 @@ Tasks:
   First pass done.
 - Add tests around provider diagnostic parsing. First pass done.
 - Add a no-container integration path for job preflight once Priority 2 exists.
+- Add tests for platform-root resolution and setup persistence without touching
+  the real user home.
 
 Dependencies:
 
@@ -487,9 +509,11 @@ Status: Planned.
 
 ## Milestone 10: Distribution and Bootstrap
 
-Status: Planned.
+Status: Partly pulled forward for MVP readiness. Keep broader installer polish
+planned.
 
-- Minimal self-deploying config for Windows, Linux, and macOS.
+- Minimal self-deploying config for Windows, Linux, and macOS. First pass:
+  `setup`, release-folder launcher, and CI artifacts.
 - Windows runtime support for Podman by default, with Rancher Desktop/dockerd
   compatibility documented.
 - Linux/macOS support for Docker or Podman.

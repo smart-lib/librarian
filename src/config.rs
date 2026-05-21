@@ -275,9 +275,31 @@ struct StoredConfig {
 }
 
 fn default_home() -> Result<PathBuf> {
-    Ok(std::env::current_dir()
-        .context("Could not determine the current directory for Librarian")?
-        .join(".librarian"))
+    platform_default_home()
+}
+
+pub fn platform_default_home() -> Result<PathBuf> {
+    if cfg!(windows) {
+        let appdata = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .context("APPDATA is not set; pass --home or set LIBRARIAN_HOME")?;
+        return Ok(appdata.join("Librarian"));
+    }
+
+    if cfg!(target_os = "macos") {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .context("HOME is not set; pass --home or set LIBRARIAN_HOME")?;
+        return Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join("Librarian"));
+    }
+
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set; pass --home or set LIBRARIAN_HOME")?;
+    Ok(home.join("Librarian"))
 }
 
 fn default_codex_home(home: &Path) -> PathBuf {

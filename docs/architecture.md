@@ -117,11 +117,19 @@ knowledge across chats, projects, and background runs:
 The vault is Obsidian-compatible: Markdown files, YAML frontmatter, and ordinary
 folder structure under version control.
 
-By default, the Librarian root is the portable `./.librarian` directory under
-the current working directory. `--home` and `LIBRARIAN_HOME` can point it
-elsewhere, but the default avoids OS profile locations such as AppData. Paths
-inside `config.toml` are stored relative to the Librarian root when possible so
-the folder can be moved between systems.
+By default, the Librarian root is a stable per-user application directory:
+`%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
+`~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired
+root on first interactive setup; silent setup accepts the platform default.
+`--home` and `LIBRARIAN_HOME` can point it elsewhere for portable installs,
+test roots, and self-contained release folders. Paths inside `config.toml` are
+stored relative to the Librarian root when possible so the folder can be moved
+between systems.
+
+The process current directory is treated as launch context rather than storage
+location. Future project auto-detection can use that context to suggest the
+current directory as an active project without changing where Librarian keeps
+its durable state.
 
 ## Provider Adapters
 

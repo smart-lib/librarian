@@ -15,7 +15,10 @@ mod third_eye;
 mod vault;
 mod worker;
 
-use std::path::PathBuf;
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -43,6 +46,20 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    Setup {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long, value_enum, default_value_t = SetupRuntimeArg::Auto)]
+        runtime: SetupRuntimeArg,
+        #[arg(long, default_value = "podman-machine-default")]
+        wsl_distro: String,
+        #[arg(long)]
+        build_agent_image: bool,
+        #[arg(long)]
+        skip_doctor: bool,
+    },
     Init,
     Doctor,
     Admin {
@@ -389,6 +406,14 @@ enum ProviderArg {
 }
 
 #[derive(Clone, Debug, ValueEnum)]
+enum SetupRuntimeArg {
+    Auto,
+    Host,
+    WslPodman,
+    None,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
 enum MemoryKindArg {
     UserMessage,
     AssistantMessage,
@@ -442,6 +467,156 @@ impl From<ScheduleKindArg> for ScheduleKind {
     }
 }
 
+fn resolve_cli_home(cli: &Cli) -> Result<Option<PathBuf>> {
+    if let Some(home) = &cli.home {
+        return Ok(Some(home.clone()));
+    }
+
+    let Command::Setup { root, yes, .. } = &cli.command else {
+        return Ok(None);
+    };
+
+    if let Some(root) = root {
+        return Ok(Some(root.clone()));
+    }
+
+    let default = config::platform_default_home()?;
+    if *yes {
+        return Ok(Some(default));
+    }
+
+    println!("Librarian needs a root directory for config, SQLite, vault, run artifacts, and portable agent profiles.");
+    println!("Default root: {}", default.display());
+    print!("Use this path? Press Enter to accept, or type another path: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+    if input.is_empty() {
+        Ok(Some(default))
+    } else {
+        Ok(Some(PathBuf::from(input)))
+    }
+}
+
+async fn run_setup(
+    mut config: Config,
+    runtime: SetupRuntimeArg,
+    wsl_distro: &str,
+    build_agent_image: bool,
+    skip_doctor: bool,
+) -> Result<()> {
+    config.ensure_layout()?;
+    config.save()?;
+    let db = Database::connect(&config).await?;
+    db.migrate().await?;
+
+    let launch_dir = std::env::current_dir()?;
+    println!("Librarian root: {}", config.home.display());
+    println!("Launch context: {}", launch_dir.display());
+    println!("Admin UI: http://{}", config.admin.bind);
+
+    match runtime {
+        SetupRuntimeArg::None => {
+            println!("Runtime configuration skipped.");
+        }
+        SetupRuntimeArg::Host => {
+            config.docker.runtime_command = default_runtime_command_arg();
+            config.docker.runtime_args.clear();
+            config.docker.mount_path_style = "host".to_string();
+            config.save()?;
+            println!("Runtime set to {}", runtime_display(&config));
+        }
+        SetupRuntimeArg::WslPodman => {
+            set_wsl_podman_runtime(&mut config, wsl_distro)?;
+            println!("Runtime set to {}", runtime_display(&config));
+        }
+        SetupRuntimeArg::Auto => {
+            if cfg!(windows) && wsl_podman_available(wsl_distro).await {
+                set_wsl_podman_runtime(&mut config, wsl_distro)?;
+                println!("Runtime auto-detected: {}", runtime_display(&config));
+            } else {
+                println!("Runtime left as {}", runtime_display(&config));
+            }
+        }
+    }
+
+    if build_agent_image {
+        build_agent_image_with_config(&config, false).await?;
+    } else {
+        println!("Agent image build skipped. Run `librarian runtime build-agent-image` when the runtime is ready.");
+    }
+
+    println!(
+        "Portable Codex profile: {}",
+        optional_path(&config.codex.host_home)
+    );
+    println!("Next auth step:");
+    println!("  Set CODEX_HOME to the profile path, run `codex`, then run:");
+    println!("  librarian auth codex --enable-container-mount --codex-home <profile-path>");
+
+    if !skip_doctor {
+        println!();
+        run_doctor(&config).await?;
+    }
+
+    Ok(())
+}
+
+fn set_wsl_podman_runtime(config: &mut Config, distro: &str) -> Result<()> {
+    config.docker.runtime_command = "wsl.exe".to_string();
+    config.docker.runtime_args = vec![
+        "-d".to_string(),
+        distro.to_string(),
+        "--".to_string(),
+        "podman".to_string(),
+    ];
+    config.docker.mount_path_style = "wsl".to_string();
+    config.save()
+}
+
+async fn wsl_podman_available(distro: &str) -> bool {
+    TokioCommand::new("wsl.exe")
+        .args(["-d", distro, "--", "podman", "info"])
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+async fn build_agent_image_with_config(config: &Config, no_codex: bool) -> Result<()> {
+    let install_codex = if no_codex { "false" } else { "true" };
+    println!(
+        "Building {} from Dockerfile.agent (INSTALL_CODEX={install_codex})",
+        config.docker.agent_image
+    );
+    let build_arg = format!("INSTALL_CODEX={install_codex}");
+    let mut args = config.docker.runtime_args.clone();
+    args.extend(
+        [
+            "build",
+            "-t",
+            &config.docker.agent_image,
+            "--build-arg",
+            &build_arg,
+            "-f",
+            "Dockerfile.agent",
+            ".",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    let status = TokioCommand::new(&config.docker.runtime_command)
+        .args(args)
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("Agent image build failed with status {status}");
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -453,9 +628,20 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = Config::load_or_default(cli.home)?;
+    let home = resolve_cli_home(&cli)?;
+    let config = Config::load_or_default(home)?;
 
     match cli.command {
+        Command::Setup {
+            root: _,
+            yes: _,
+            runtime,
+            wsl_distro,
+            build_agent_image,
+            skip_doctor,
+        } => {
+            run_setup(config, runtime, &wsl_distro, build_agent_image, skip_doctor).await?;
+        }
         Command::Init => {
             config.ensure_layout()?;
             if !config.config_path.exists() {
@@ -486,15 +672,7 @@ async fn main() -> Result<()> {
         Command::Runtime { command } => match command {
             RuntimeCommand::UseWslPodman { distro } => {
                 let mut config = config;
-                config.docker.runtime_command = "wsl.exe".to_string();
-                config.docker.runtime_args = vec![
-                    "-d".to_string(),
-                    distro,
-                    "--".to_string(),
-                    "podman".to_string(),
-                ];
-                config.docker.mount_path_style = "wsl".to_string();
-                config.save()?;
+                set_wsl_podman_runtime(&mut config, &distro)?;
                 println!("Runtime set to {}", runtime_display(&config));
             }
             RuntimeCommand::UseHostRuntime { command } => {
@@ -506,34 +684,7 @@ async fn main() -> Result<()> {
                 println!("Runtime set to {}", runtime_display(&config));
             }
             RuntimeCommand::BuildAgentImage { no_codex } => {
-                let install_codex = if no_codex { "false" } else { "true" };
-                println!(
-                    "Building {} from Dockerfile.agent (INSTALL_CODEX={install_codex})",
-                    config.docker.agent_image
-                );
-                let build_arg = format!("INSTALL_CODEX={install_codex}");
-                let mut args = config.docker.runtime_args.clone();
-                args.extend(
-                    [
-                        "build",
-                        "-t",
-                        &config.docker.agent_image,
-                        "--build-arg",
-                        &build_arg,
-                        "-f",
-                        "Dockerfile.agent",
-                        ".",
-                    ]
-                    .into_iter()
-                    .map(str::to_string),
-                );
-                let status = TokioCommand::new(&config.docker.runtime_command)
-                    .args(args)
-                    .status()
-                    .await?;
-                if !status.success() {
-                    anyhow::bail!("Agent image build failed with status {status}");
-                }
+                build_agent_image_with_config(&config, no_codex).await?;
             }
         },
         Command::Auth { command } => match command {
@@ -1499,6 +1650,12 @@ async fn run_doctor(config: &Config) -> Result<()> {
 
     let mut checks = vec![
         DoctorCheck::ok("librarian home", config.home.display().to_string()),
+        DoctorCheck::ok(
+            "launch context",
+            std::env::current_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| format!("unavailable: {error}")),
+        ),
         path_check("config file", &config.config_path, "Run `librarian init`."),
         path_check("vault", &config.vault_path, "Run `librarian init`."),
         DoctorCheck::ok("runtime command", runtime_display(config)),
@@ -1585,9 +1742,9 @@ async fn run_doctor(config: &Config) -> Result<()> {
     }
     println!();
     println!("MVP setup sequence:");
-    println!("  librarian init");
-    println!("  librarian auth codex");
-    println!("  librarian auth codex --enable-container-mount");
+    println!("  librarian setup");
+    println!("  set CODEX_HOME to Librarian's portable codex-home path and run `codex`");
+    println!("  librarian auth codex --enable-container-mount --codex-home <profile-path>");
     println!("  librarian runtime build-agent-image");
     println!("  librarian doctor");
     println!("  librarian project add <path>");

@@ -1,4 +1,5 @@
 /target/
+/dist/
 /third-eye-export/
 /.librarian/
 /.librarian-*/

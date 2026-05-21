@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "A local-first agent harness for project work, memory, scheduling, and containerized coding agents."
-repository = "https://github.com/your-org/librarian"
+repository = "https://github.com/smart-lib/librarian"
 
 [dependencies]
 anyhow = "1"

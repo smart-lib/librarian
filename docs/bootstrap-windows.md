@@ -25,10 +25,32 @@ The script installs:
 - UCRT64 GCC and pkgconf;
 - Podman;
 - a rootless Podman machine;
-- the `librarian-agent:latest` image.
+- a debug `librarian.exe`;
+- `dist\windows-x64\librarian.ps1`, a portable launcher that stores state in
+  `dist\windows-x64\.librarian`;
+- the `librarian-agent:latest` image when `-BuildAgentImage` is passed.
 
 Podman forwards a Docker-compatible API to `npipe:////./pipe/docker_engine`, so
 Docker API clients can usually connect without `DOCKER_HOST`.
+
+If the Windows Podman API forwarding is broken but the WSL-backed Podman
+machine works, use the WSL fallback:
+
+```powershell
+.\scripts\bootstrap-windows.ps1 -Runtime wsl-podman
+```
+
+For a silent default setup rooted in `%APPDATA%\Librarian`:
+
+```powershell
+cargo +stable-x86_64-pc-windows-gnu run -- setup --yes
+```
+
+For a portable test root:
+
+```powershell
+cargo +stable-x86_64-pc-windows-gnu run -- setup --root .\.librarian-test
+```
 
 ## Alternative: Rancher Desktop
 
