@@ -260,8 +260,8 @@ Tasks:
 
 ## Priority 1B: Project Library and Friendly Admin UX
 
-Status: In progress. First admin layout pass is implemented; backend project
-library workflows remain.
+Status: In progress. Chat-first shell is active; backend project library
+workflows and live worker responses remain.
 
 Goal: make Librarian feel like a project library first, and hide low-level
 agent dispatch mechanics until they are needed.
@@ -269,12 +269,19 @@ agent dispatch mechanics until they are needed.
 Tasks:
 
 - Keep the browser viewport fixed and use application-owned scroll regions for
-  chat, settings tabs, and project map panels.
+  chat, settings tabs, and project map panels. First pass done.
 - Make chat the primary surface; move providers, schedules, secrets, budgets,
-  and events behind a settings button and full-screen tabbed overlay.
+  and events behind a settings button and full-screen tabbed overlay. First
+  pass done; richer settings controls can be restored inside tabs only.
 - Add a project-map view that renders registered projects as a branching node
-  tree. First pass uses the project registry; the next pass should use vault
-  project folders and links.
+  tree. First pass done against the project registry; the next pass should use
+  vault project folders and links.
+- Keep low-level dispatch fields such as provider, project id, secret grant
+  token, and network mode out of the main chat composer. First pass done with
+  Codex as the default MVP provider and the selected/first project as context.
+- Convert queued-job chat into a friendlier live conversation: show worker
+  progress and final result in the thread, and make it clear when the worker is
+  not running.
 - Define the project library model: Markdown project memory folders live under
   `Librarian/Library/projects/{ProjectName}` by default, and each can attach to an
   external working directory mounted into agent containers.

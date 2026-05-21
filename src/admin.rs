@@ -27,6 +27,574 @@ struct AppState {
     config: Arc<RwLock<Config>>,
 }
 
+fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
+    let html = r##"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Librarian</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101214;
+      --panel: #181d21;
+      --panel-2: #20272d;
+      --text: #edf1f5;
+      --muted: #99a6b2;
+      --line: #303941;
+      --accent: #62c7a8;
+      --accent-2: #8fb7ff;
+      --danger: #c76f6f;
+      --shadow: 0 18px 60px rgba(0, 0, 0, .38);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      min-width: 860px;
+      min-height: 560px;
+      overflow: hidden;
+    }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    button, textarea, input, select { font: inherit; }
+    button {
+      border: 1px solid transparent;
+      border-radius: 6px;
+      min-height: 38px;
+      padding: 0 13px;
+      cursor: pointer;
+      background: var(--accent);
+      color: #06100d;
+      font-weight: 700;
+    }
+    button.secondary {
+      background: var(--panel-2);
+      border-color: var(--line);
+      color: var(--text);
+    }
+    button.danger { background: var(--danger); color: #fff; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #11161a;
+      color: var(--text);
+    }
+    input, select { height: 38px; padding: 0 10px; }
+    textarea { padding: 12px; resize: none; line-height: 1.45; }
+    label {
+      display: block;
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+    .app {
+      height: 100dvh;
+      min-height: 560px;
+      display: grid;
+      grid-template-rows: 58px minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr) 64px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: rgba(18, 22, 25, .96);
+    }
+    .brand {
+      justify-self: center;
+      text-align: center;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+    .brand span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .icon-button {
+      width: 44px;
+      height: 44px;
+      min-height: 44px;
+      margin: 0 auto;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      background: transparent;
+      border-color: transparent;
+      color: var(--muted);
+    }
+    .icon-button:hover, .icon-button:focus-visible {
+      color: var(--text);
+      background: var(--panel-2);
+      border-color: var(--line);
+      outline: none;
+    }
+    .settings-icon, .map-icon {
+      position: relative;
+      display: block;
+      width: 24px;
+      height: 24px;
+    }
+    .settings-icon::before,
+    .settings-icon::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      right: 3px;
+      height: 2px;
+      background: currentColor;
+      border-radius: 2px;
+      box-shadow: 0 8px 0 currentColor, 0 16px 0 currentColor;
+    }
+    .settings-icon::after {
+      top: 1px;
+      left: 7px;
+      right: auto;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      box-shadow: -2px 8px 0 currentColor, 7px 16px 0 currentColor;
+      background: currentColor;
+    }
+    .map-icon::before {
+      content: "";
+      position: absolute;
+      left: 11px;
+      top: 4px;
+      width: 2px;
+      height: 16px;
+      background: currentColor;
+      box-shadow: -7px 7px 0 -1px currentColor, 7px 7px 0 -1px currentColor;
+    }
+    .map-icon::after {
+      content: "";
+      position: absolute;
+      left: 8px;
+      top: 1px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: -8px 15px 0 -1px currentColor, 8px 15px 0 -1px currentColor;
+    }
+    .chat-log {
+      min-height: 0;
+      overflow: auto;
+      padding: 28px clamp(24px, 6vw, 90px);
+      scroll-behavior: smooth;
+    }
+    .thread {
+      width: min(920px, 100%);
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .message {
+      max-width: min(760px, 92%);
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+    .message.user {
+      align-self: flex-end;
+      background: #1d2b29;
+      border-color: #2f5a50;
+    }
+    .message.assistant, .message.system { align-self: flex-start; }
+    .message.system { color: var(--muted); }
+    .message small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+    }
+    .composer {
+      border-top: 1px solid var(--line);
+      background: rgba(18, 22, 25, .98);
+      padding: 14px clamp(18px, 5vw, 72px) 16px;
+    }
+    .composer-inner {
+      width: min(920px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 92px;
+      gap: 10px;
+      align-items: end;
+    }
+    #goal-input {
+      height: 76px;
+      max-height: 160px;
+    }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: none;
+      grid-template-rows: 58px minmax(0, 1fr);
+      background: var(--bg);
+    }
+    .overlay.open { display: grid; }
+    .overlay-head {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr) 64px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: rgba(18, 22, 25, .96);
+    }
+    .overlay-title {
+      justify-self: center;
+      font-weight: 800;
+    }
+    .overlay-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .tabs {
+      border-right: 1px solid var(--line);
+      padding: 18px 12px;
+      background: #12161a;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .tab-button {
+      justify-content: flex-start;
+      background: transparent;
+      border-color: transparent;
+      color: var(--muted);
+      text-align: left;
+    }
+    .tab-button.active {
+      background: var(--panel-2);
+      border-color: var(--line);
+      color: var(--text);
+    }
+    .tab-content {
+      min-height: 0;
+      overflow: auto;
+      padding: 24px clamp(22px, 4vw, 54px);
+    }
+    .tab-pane { display: none; max-width: 980px; }
+    .tab-pane.active { display: block; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+      line-height: 1.45;
+    }
+    .muted { color: var(--muted); }
+    .tiny { font-size: 12px; }
+    .stack { display: grid; gap: 12px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .project-stage {
+      min-height: 0;
+      overflow: auto;
+      padding: 28px clamp(20px, 5vw, 70px);
+    }
+    .tree {
+      min-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 34px;
+    }
+    .node-column {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      align-items: center;
+    }
+    .node {
+      min-width: 210px;
+      max-width: 260px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      padding: 14px;
+      text-align: left;
+    }
+    .node.active { border-color: var(--accent); }
+    .node.root {
+      background: #1d2529;
+      text-align: center;
+    }
+    .node button { width: 100%; margin-top: 10px; }
+    .empty {
+      width: min(560px, 100%);
+      margin: 12vh auto 0;
+      text-align: center;
+    }
+    .empty .card { text-align: left; }
+    @media (max-width: 900px), (max-height: 600px) {
+      html, body { min-width: 720px; min-height: 500px; }
+      .app { min-height: 500px; }
+      .chat-log { padding: 18px; }
+      .composer { padding: 10px 12px; }
+      .overlay-body { grid-template-columns: 180px minmax(0, 1fr); }
+      #goal-input { height: 64px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <button id="settings-open" class="icon-button" type="button" aria-label="Settings" title="Settings"><span class="settings-icon"></span></button>
+      <div class="brand">Librarian<span id="context-line">localhost __BIND__</span></div>
+      <button id="projects-open" class="icon-button" type="button" aria-label="Projects" title="Projects"><span class="map-icon"></span></button>
+    </header>
+    <main id="chat-log" class="chat-log">
+      <div id="thread" class="thread">
+        <article class="message assistant">Ready. Write what you want Librarian to do.</article>
+      </div>
+    </main>
+    <form id="chat-form" class="composer" autocomplete="off">
+      <div class="composer-inner">
+        <textarea id="goal-input" name="goal" placeholder="Message Librarian" autocomplete="off" required></textarea>
+        <button id="send-button" type="submit">Send</button>
+      </div>
+    </form>
+  </div>
+
+  <section id="settings-overlay" class="overlay" aria-hidden="true">
+    <header class="overlay-head">
+      <button class="icon-button" type="button" data-close="settings-overlay" aria-label="Close settings">X</button>
+      <div class="overlay-title">Settings</div>
+      <span></span>
+    </header>
+    <div class="overlay-body">
+      <nav class="tabs">
+        <button class="tab-button active" type="button" data-tab="overview">Overview</button>
+        <button class="tab-button" type="button" data-tab="providers">Providers</button>
+        <button class="tab-button" type="button" data-tab="jobs">Jobs</button>
+        <button class="tab-button" type="button" data-tab="system">System</button>
+      </nav>
+      <div class="tab-content">
+        <section class="tab-pane active" data-pane="overview"><h2>Overview</h2><div id="overview" class="grid"></div></section>
+        <section class="tab-pane" data-pane="providers"><h2>Providers</h2><div id="providers" class="grid"></div></section>
+        <section class="tab-pane" data-pane="jobs"><h2>Jobs</h2><div id="jobs" class="stack"></div></section>
+        <section class="tab-pane" data-pane="system"><h2>System</h2><div id="system-events" class="stack"></div></section>
+      </div>
+    </div>
+  </section>
+
+  <section id="projects-overlay" class="overlay" aria-hidden="true">
+    <header class="overlay-head">
+      <button class="icon-button" type="button" data-close="projects-overlay" aria-label="Close projects">X</button>
+      <div class="overlay-title">Projects</div>
+      <span></span>
+    </header>
+    <div id="project-stage" class="project-stage"></div>
+  </section>
+
+  <script>
+    (() => {
+      const state = {
+        projects: [],
+        jobs: [],
+        providers: { catalog: [], states: [] },
+        health: null,
+        activeProject: ''
+      };
+      const el = id => document.getElementById(id);
+      const qsa = selector => Array.from(document.querySelectorAll(selector));
+      const htmlEscape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+      const shortId = value => value ? String(value).slice(0, 8) : '';
+
+      function openOverlay(id) {
+        el(id).classList.add('open');
+        el(id).setAttribute('aria-hidden', 'false');
+      }
+      function closeOverlay(id) {
+        el(id).classList.remove('open');
+        el(id).setAttribute('aria-hidden', 'true');
+      }
+      function setTab(name) {
+        qsa('.tab-button').forEach(button => button.classList.toggle('active', button.dataset.tab === name));
+        qsa('.tab-pane').forEach(pane => pane.classList.toggle('active', pane.dataset.pane === name));
+      }
+      function appendMessage(role, text, detail) {
+        const article = document.createElement('article');
+        article.className = `message ${role}`;
+        article.textContent = text;
+        if (detail) {
+          const small = document.createElement('small');
+          small.textContent = detail;
+          article.appendChild(small);
+        }
+        el('thread').appendChild(article);
+        el('chat-log').scrollTop = el('chat-log').scrollHeight;
+      }
+      function activeProjectName() {
+        if (state.activeProject) return state.activeProject;
+        const first = state.projects[0];
+        state.activeProject = first ? first.name : '';
+        return state.activeProject;
+      }
+      async function loadJson(path, fallback) {
+        try {
+          const response = await fetch(path);
+          if (!response.ok) return fallback;
+          return await response.json();
+        } catch (_) {
+          return fallback;
+        }
+      }
+      async function refresh() {
+        const [health, projects, jobs, providers, events] = await Promise.all([
+          loadJson('/api/health', null),
+          loadJson('/api/projects', []),
+          loadJson('/api/jobs', []),
+          loadJson('/api/providers', { catalog: [], states: [] }),
+          loadJson('/api/system-events', [])
+        ]);
+        state.health = health;
+        state.projects = Array.isArray(projects) ? projects : [];
+        state.jobs = Array.isArray(jobs) ? jobs : [];
+        state.providers = providers || { catalog: [], states: [] };
+        if (!state.projects.some(project => project.name === state.activeProject)) {
+          state.activeProject = state.projects[0]?.name || '';
+        }
+        renderOverview();
+        renderProviders();
+        renderJobs();
+        renderSystemEvents(events);
+        renderProjects();
+        renderContext();
+      }
+      function renderContext() {
+        const project = activeProjectName();
+        el('context-line').textContent = project ? `project: ${project}` : 'no project selected';
+      }
+      function renderOverview() {
+        const health = state.health || {};
+        const worker = health.worker || {};
+        const memory = health.memory || {};
+        const secrets = health.secrets || {};
+        el('overview').innerHTML = [
+          card('Worker', `queued=${worker.queued_jobs ?? 0}<br>running=${worker.running_jobs ?? 0}<br>slots=${worker.available_slots ?? '__WORKER_CONCURRENCY__'}`),
+          card('Memory', `items=${memory.items ?? 0}<br>embedded=${memory.embedded_items ?? 0}<br>missing=${memory.missing_embeddings ?? 0}`),
+          card('Storage', `${htmlEscape(health.vault_path || 'Library')}<br><span class="muted">${htmlEscape(health.database_path || '.mdb/librarian.db')}</span>`),
+          card('Secrets', `${htmlEscape(secrets.status || 'unknown')}<br><span class="muted">${htmlEscape(secrets.location || '')}</span>`)
+        ].join('');
+      }
+      function renderProviders() {
+        const states = new Map((state.providers.states || []).map(item => [`${item.provider}:${item.model || ''}`, item]));
+        const models = state.providers.catalog || [];
+        el('providers').innerHTML = models.length ? models.map(model => {
+          const current = states.get(`${model.provider}:${model.model}`) || states.get(`${model.provider}:`) || {};
+          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="muted">${htmlEscape(current.status || 'Ready')}</span>`);
+        }).join('') : '<div class="card muted">No providers reported.</div>';
+      }
+      function renderJobs() {
+        el('jobs').innerHTML = state.jobs.length ? state.jobs.slice(0, 12).map(job => {
+          return `<div class="card"><b>${htmlEscape(job.status)}</b> <span class="muted">${htmlEscape(job.provider)} ${shortId(job.id)}</span><br>${htmlEscape(job.goal)}<br><span class="muted tiny">${htmlEscape(job.created_at || '')}</span></div>`;
+        }).join('') : '<div class="card muted">No jobs yet.</div>';
+      }
+      function renderSystemEvents(events) {
+        el('system-events').innerHTML = Array.isArray(events) && events.length ? events.slice(0, 20).map(event => {
+          return `<div class="card"><b>${htmlEscape(event.kind)}</b><br><span class="muted tiny">${htmlEscape(event.created_at || '')}</span></div>`;
+        }).join('') : '<div class="card muted">No system events.</div>';
+      }
+      function renderProjects() {
+        if (!state.projects.length) {
+          el('project-stage').innerHTML = `<div class="empty"><h2>No projects yet</h2><div class="card muted">Add a project from the terminal for this build:<br><br><code>librarian --home ~/Librarian project add &lt;path&gt;</code></div></div>`;
+          return;
+        }
+        const nodes = state.projects.map(project => {
+          const active = project.name === state.activeProject ? ' active' : '';
+          return `<div class="node${active}"><h3>${htmlEscape(project.name)}</h3><div class="muted tiny">${htmlEscape(project.path)}</div><button type="button" data-project="${htmlEscape(project.name)}">Use</button></div>`;
+        }).join('');
+        el('project-stage').innerHTML = `<div class="tree"><div class="node root"><h3>Librarian</h3><div class="muted tiny">Library and working projects</div></div><div class="node-column">${nodes}</div></div>`;
+        qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
+          state.activeProject = button.dataset.project || '';
+          renderProjects();
+          renderContext();
+          closeOverlay('projects-overlay');
+        }));
+      }
+      function card(title, body) {
+        return `<div class="card"><h3>${htmlEscape(title)}</h3><div>${body}</div></div>`;
+      }
+      async function submitChat(event) {
+        event.preventDefault();
+        const input = el('goal-input');
+        const goal = input.value.trim();
+        if (!goal) return;
+        appendMessage('user', goal);
+        input.value = '';
+        const project = activeProjectName();
+        if (!project) {
+          appendMessage('assistant', 'I need a project before I can queue agent work.', 'Open the project map in the top-right corner after registering a project.');
+          return;
+        }
+        try {
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ project, provider: 'codex', goal, secret_grant_token: null, allow_network: false })
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+          appendMessage('assistant', 'Queued for the worker.', `job ${data.id || ''}`);
+          await refresh();
+        } catch (error) {
+          appendMessage('system', `Could not queue the message: ${error.message || error}`);
+        }
+      }
+
+      el('settings-open').addEventListener('click', () => openOverlay('settings-overlay'));
+      el('projects-open').addEventListener('click', () => openOverlay('projects-overlay'));
+      qsa('[data-close]').forEach(button => button.addEventListener('click', () => closeOverlay(button.dataset.close)));
+      qsa('.tab-button').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab)));
+      el('chat-form').addEventListener('submit', submitChat);
+      el('goal-input').addEventListener('keydown', event => {
+        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+          el('chat-form').requestSubmit();
+        }
+      });
+      refresh().catch(error => appendMessage('system', `Admin data failed to load: ${error.message || error}`));
+    })();
+  </script>
+</body>
+</html>"##;
+    html.replace("__BIND__", bind)
+        .replace("__WORKER_CONCURRENCY__", &worker_concurrency.to_string())
+}
+
+#[allow(dead_code)]
 fn app_html(bind: &str, worker_concurrency: usize) -> String {
     let html = r##"<!doctype html>
 <html lang="en">
@@ -778,7 +1346,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
 
 async fn index(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.config.read().await;
-    Html(app_html(
+    Html(chat_first_app_html(
         &config.admin.bind,
         config.worker.max_concurrent_jobs,
     ))
