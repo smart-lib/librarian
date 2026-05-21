@@ -107,8 +107,7 @@ If `doctor` reports a missing Codex profile, sign in once with Librarian's
 portable profile:
 
 ```bash
-export CODEX_HOME="$HOME/Librarian/.cfg/codex-home"
-codex
+CODEX_HOME="$HOME/Librarian/.cfg/codex-home" codex
 "$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" auth codex --enable-container-mount --codex-home "$HOME/Librarian/.cfg/codex-home"
 "$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" doctor
 ```

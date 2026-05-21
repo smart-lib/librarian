@@ -310,8 +310,7 @@ Useful commands:
     http://127.0.0.1:17377
 
   Codex auth:
-    export CODEX_HOME="$librarian_home/.cfg/codex-home"
-    codex
+    CODEX_HOME="$librarian_home/.cfg/codex-home" codex
     $bin --home "$librarian_home" auth codex --enable-container-mount --codex-home "$librarian_home/.cfg/codex-home"
 
 Notes:

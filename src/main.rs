@@ -553,8 +553,17 @@ async fn run_setup(
         optional_path(&config.codex.host_home)
     );
     println!("Next auth step:");
-    println!("  Set CODEX_HOME to the profile path, run `codex`, then run:");
-    println!("  librarian auth codex --enable-container-mount --codex-home <profile-path>");
+    if let Some(path) = &config.codex.host_home {
+        println!("  CODEX_HOME={} codex", shell_path(path));
+        println!(
+            "  {} auth codex --enable-container-mount --codex-home {}",
+            doctor_command_prefix(&config),
+            shell_path(path)
+        );
+    } else {
+        println!("  Set CODEX_HOME to the profile path, run `codex`, then run:");
+        println!("  librarian auth codex --enable-container-mount --codex-home <profile-path>");
+    }
 
     if !skip_doctor {
         println!();
@@ -1723,7 +1732,7 @@ async fn run_doctor(config: &Config) -> Result<()> {
         )
         .await,
     );
-    checks.push(command_check("host codex", "codex", &["--version"]).await);
+    checks.push(host_codex_check().await);
     checks.push(codex_profile_check(config));
 
     let overall = if checks
@@ -1928,27 +1937,24 @@ fn codex_profile_check(config: &Config) -> DoctorCheck {
         return DoctorCheck::warn(
             "codex profile",
             "not configured",
-            "Run Codex with CODEX_HOME set to Librarian's codex-home, then `librarian auth codex --enable-container-mount`.",
+            "Run Codex with CODEX_HOME set to Librarian's codex-home, then enable the container mount.",
         );
     };
     if !path.exists() {
         return DoctorCheck::error(
             "codex profile",
             format!("missing {}", path.display()),
-            "Create/sign in with this CODEX_HOME path, then run `librarian auth codex --enable-container-mount`.",
+            "Run `CODEX_HOME=<this path> codex`, complete sign-in, then enable the container mount.",
         );
     }
     if !config.codex.mount_host_home {
         return DoctorCheck::warn(
             "codex profile",
             format!("present at {}, container mount disabled", path.display()),
-            "Run `librarian auth codex --enable-container-mount` before containerized Codex runs.",
+            "Run `librarian auth codex --enable-container-mount --codex-home <this path>` before containerized Codex runs.",
         );
     }
-    if ["auth.json", "config.toml", "credentials.json"]
-        .iter()
-        .any(|name| path.join(name).exists())
-    {
+    if codex_profile_has_auth_artifacts(path) {
         return DoctorCheck::ok(
             "codex profile",
             format!("present at {}, mount enabled", path.display()),
@@ -1962,6 +1968,46 @@ fn codex_profile_check(config: &Config) -> DoctorCheck {
         ),
         "Run `codex` with CODEX_HOME set to this path, complete sign-in, then rerun `librarian doctor`.",
     )
+}
+
+fn codex_profile_has_auth_artifacts(path: &std::path::Path) -> bool {
+    let names = ["auth.json", "config.toml", "credentials.json"];
+    if names.iter().any(|name| path.join(name).exists()) {
+        return true;
+    }
+    has_named_file_within(path, &names, 3)
+}
+
+fn has_named_file_within(path: &std::path::Path, names: &[&str], depth: usize) -> bool {
+    if depth == 0 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if entry_path.is_file()
+            && entry_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| names.iter().any(|candidate| candidate == &name))
+        {
+            return true;
+        }
+        if entry_path.is_dir() && has_named_file_within(&entry_path, names, depth - 1) {
+            return true;
+        }
+    }
+    false
+}
+
+async fn host_codex_check() -> DoctorCheck {
+    if cfg!(windows) {
+        command_check("host codex", "where.exe", &["codex"]).await
+    } else {
+        command_check("host codex", "sh", &["-lc", "command -v codex"]).await
+    }
 }
 
 async fn runtime_check(label: &str, config: &Config, args: &[&str]) -> DoctorCheck {
