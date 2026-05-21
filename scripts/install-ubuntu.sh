@@ -3,7 +3,9 @@ set -euo pipefail
 
 repo_url="${LIBRARIAN_REPO_URL:-https://github.com/smart-lib/librarian.git}"
 ref="${LIBRARIAN_REF:-main}"
-install_dir="${LIBRARIAN_DIR:-$HOME/librarian}"
+install_root="${LIBRARIAN_ROOT:-$HOME/Librarian}"
+source_dir=""
+keep_source=0
 bootstrap_args=()
 
 while [[ $# -gt 0 ]]; do
@@ -17,8 +19,12 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --dir)
-      install_dir="${2:?--dir requires a value}"
+      install_root="${2:?--dir requires a value}"
       shift 2
+      ;;
+    --keep-source)
+      keep_source=1
+      shift
       ;;
     --repo)
       repo_url="${2:?--repo requires a value}"
@@ -55,14 +61,22 @@ export DEBIAN_FRONTEND=noninteractive
 "${sudo_cmd[@]}" apt-get update
 "${sudo_cmd[@]}" apt-get install -y ca-certificates curl git
 
-if [[ -d "$install_dir/.git" ]]; then
-  git -C "$install_dir" fetch --tags origin
+source_dir="${LIBRARIAN_BUILD_DIR:-$install_root/.app/source}"
+mkdir -p "$install_root/.app"
+
+if [[ -d "$source_dir/.git" ]]; then
+  git -C "$source_dir" fetch --tags origin
 else
-  mkdir -p "$(dirname "$install_dir")"
-  git clone "$repo_url" "$install_dir"
+  rm -rf "$source_dir"
+  mkdir -p "$(dirname "$source_dir")"
+  git clone "$repo_url" "$source_dir"
 fi
 
-git -C "$install_dir" checkout "$ref"
-git -C "$install_dir" pull --ff-only origin "$ref" || true
+git -C "$source_dir" checkout "$ref"
+git -C "$source_dir" pull --ff-only origin "$ref" || true
 
-exec "$install_dir/scripts/bootstrap-ubuntu.sh" --yes "${bootstrap_args[@]}"
+"$source_dir/scripts/bootstrap-ubuntu.sh" --yes --home "$install_root" "${bootstrap_args[@]}"
+
+if [[ "$keep_source" -ne 1 ]]; then
+  rm -rf "$source_dir"
+fi

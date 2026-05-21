@@ -103,7 +103,7 @@ impl Default for ThirdEyeConfig {
             enabled: false,
             base_url: "http://127.0.0.1:4317".to_string(),
             db_path: None,
-            project_export_dir: PathBuf::from("third-eye-export"),
+            project_export_dir: PathBuf::from(".mdb/third-eye-export"),
         }
     }
 }
@@ -146,12 +146,22 @@ impl Config {
             Some(home) => home,
             None => default_home()?,
         };
-        let config_path = home.join("config.toml");
+        let config_path = default_config_path(&home);
+        let stored_config_path = if config_path.exists() {
+            config_path.clone()
+        } else {
+            let legacy_config_path = home.join("config.toml");
+            if legacy_config_path.exists() {
+                legacy_config_path
+            } else {
+                config_path.clone()
+            }
+        };
 
         let mut config = Self {
             config_path,
-            database_path: home.join("librarian.db"),
-            vault_path: home.join("vault"),
+            database_path: default_database_path(&home),
+            vault_path: default_vault_path(&home),
             admin: AdminConfig {
                 bind: "127.0.0.1:17377".to_string(),
             },
@@ -181,8 +191,8 @@ impl Config {
         config.third_eye.project_export_dir =
             stored_path(&config.home, config.third_eye.project_export_dir.clone());
 
-        if config.config_path.exists() {
-            let stored: StoredConfig = toml::from_str(&fs::read_to_string(&config.config_path)?)?;
+        if stored_config_path.exists() {
+            let stored: StoredConfig = toml::from_str(&fs::read_to_string(&stored_config_path)?)?;
             config.apply_stored(stored);
         }
 
@@ -198,6 +208,12 @@ impl Config {
 
     pub fn ensure_layout(&self) -> Result<()> {
         ensure_dir(&self.home)?;
+        ensure_dir(&app_dir(&self.home))?;
+        ensure_dir(&app_dir(&self.home).join("bin"))?;
+        ensure_dir(&app_dir(&self.home).join("runs"))?;
+        ensure_dir(&cfg_dir(&self.home))?;
+        ensure_dir(&mdb_dir(&self.home))?;
+        ensure_dir(&projects_dir(&self.home))?;
         ensure_dir(&self.vault_path)?;
         ensure_dir(&self.vault_path.join("projects"))?;
         ensure_dir(&self.vault_path.join("runs"))?;
@@ -281,6 +297,34 @@ fn default_home() -> Result<PathBuf> {
     platform_default_home()
 }
 
+fn app_dir(home: &Path) -> PathBuf {
+    home.join(".app")
+}
+
+fn cfg_dir(home: &Path) -> PathBuf {
+    home.join(".cfg")
+}
+
+fn mdb_dir(home: &Path) -> PathBuf {
+    home.join(".mdb")
+}
+
+fn projects_dir(home: &Path) -> PathBuf {
+    home.join("Projects")
+}
+
+fn default_config_path(home: &Path) -> PathBuf {
+    cfg_dir(home).join("config.toml")
+}
+
+fn default_database_path(home: &Path) -> PathBuf {
+    mdb_dir(home).join("librarian.db")
+}
+
+fn default_vault_path(home: &Path) -> PathBuf {
+    home.join("Library")
+}
+
 pub fn platform_default_home() -> Result<PathBuf> {
     if cfg!(windows) {
         let appdata = std::env::var_os("APPDATA")
@@ -308,7 +352,7 @@ pub fn platform_default_home() -> Result<PathBuf> {
 fn default_codex_home(home: &Path) -> PathBuf {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| home.join("codex-home"))
+        .unwrap_or_else(|| cfg_dir(home).join("codex-home"))
 }
 
 fn default_mount_path_style() -> String {
@@ -381,9 +425,15 @@ mod tests {
         config.budget.daily_project_usd = Some(2.0);
         config.save().expect("save");
 
-        let stored = std::fs::read_to_string(home.join("config.toml")).expect("stored config");
-        assert!(stored.contains("database_path = \"librarian.db\""));
-        assert!(stored.contains("host_home = \"codex-home\""));
+        let stored =
+            std::fs::read_to_string(home.join(".cfg").join("config.toml")).expect("stored config");
+        assert!(stored.contains("database_path = "));
+        assert!(stored.contains(".mdb"));
+        assert!(stored.contains("librarian.db"));
+        assert!(stored.contains("vault_path = \"Library\""));
+        assert!(stored.contains("host_home = "));
+        assert!(stored.contains(".cfg"));
+        assert!(stored.contains("codex-home"));
 
         let reloaded = Config::load_or_default(Some(home.clone())).expect("reload");
         assert!(reloaded.routing.fallback_enabled);

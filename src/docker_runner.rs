@@ -91,7 +91,12 @@ impl DockerRunner {
     }
 
     fn prepare_run_dir(&self, spec: &AgentRunSpec) -> Result<std::path::PathBuf> {
-        let run_dir = self.config.home.join("runs").join(spec.job_id.to_string());
+        let run_dir = self
+            .config
+            .home
+            .join(".app")
+            .join("runs")
+            .join(spec.job_id.to_string());
         fs::create_dir_all(&run_dir)
             .with_context(|| format!("Failed to create {}", run_dir.display()))?;
         fs::write(run_dir.join("prompt.txt"), &spec.prompt)

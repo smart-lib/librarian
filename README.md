@@ -75,7 +75,8 @@ the core should move to GPLv3/AGPLv3 before there are many outside contributors.
 ### Ubuntu Golden Path
 
 For a normal Ubuntu or WSL Ubuntu setup, start with Git and let the project
-bootstrap install the missing pieces:
+bootstrap install the missing pieces. This developer path keeps the checkout
+where you cloned it, but installs the runnable binary into `~/Librarian/.app`.
 
 ```bash
 git clone https://github.com/smart-lib/librarian.git
@@ -84,11 +85,12 @@ bash scripts/bootstrap-ubuntu.sh --yes
 ```
 
 The bootstrap installs system packages, Rust, Node.js/npm, Codex CLI, Docker,
-builds Librarian, creates the default root at `~/Librarian`, and tries to build
-the agent image. Start the admin UI with the command printed at the end:
+builds Librarian, creates the default single root at `~/Librarian`, installs
+the binary to `~/Librarian/.app/bin/librarian`, and tries to build the agent
+image. Start the admin UI with the command printed at the end:
 
 ```bash
-./target/release/librarian --home "$HOME/Librarian" admin --bind 0.0.0.0:17377
+"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" admin --bind 0.0.0.0:17377
 ```
 
 From Windows with WSL2, open:
@@ -101,10 +103,26 @@ If `doctor` reports a missing Codex profile, sign in once with Librarian's
 portable profile:
 
 ```bash
-export CODEX_HOME="$HOME/Librarian/codex-home"
+export CODEX_HOME="$HOME/Librarian/.cfg/codex-home"
 codex
-./target/release/librarian --home "$HOME/Librarian" auth codex --enable-container-mount --codex-home "$HOME/Librarian/codex-home"
-./target/release/librarian --home "$HOME/Librarian" doctor
+"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" auth codex --enable-container-mount --codex-home "$HOME/Librarian/.cfg/codex-home"
+"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" doctor
+```
+
+The one-line installer uses a temporary source checkout under
+`~/Librarian/.app/source`, builds the binary, installs it into
+`~/Librarian/.app/bin`, then removes the checkout. Normal use does not require a
+Git working tree.
+
+Default installed layout:
+
+```text
+~/Librarian/
+  .app/       installed binary, temporary source checkout, run artifacts
+  .cfg/       config.toml, Codex profile, other portable settings
+  .mdb/       SQLite database and machine-readable data
+  Library/    Markdown project memory and Obsidian-style notes
+  Projects/   default working directories for user projects
 ```
 
 ### What The Ubuntu Bootstrap Does
@@ -122,9 +140,10 @@ sudo npm install -g @openai/codex
 sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 cargo build --release
-./target/release/librarian --home "$HOME/Librarian" setup --yes --runtime host
-sg docker -c './target/release/librarian --home "$HOME/Librarian" runtime build-agent-image'
-./target/release/librarian --home "$HOME/Librarian" doctor
+install -Dm755 ./target/release/librarian "$HOME/Librarian/.app/bin/librarian"
+"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" setup --yes --runtime host
+sg docker -c '"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" runtime build-agent-image'
+"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" doctor
 ```
 
 On some Ubuntu/WSL installations, Docker group membership is not active until
@@ -132,7 +151,7 @@ the next login. The bootstrap tries to use a fresh `docker` group session for
 the image build; if the system refuses, log out/in or rerun:
 
 ```bash
-sg docker -c './target/release/librarian --home "$HOME/Librarian" runtime build-agent-image'
+sg docker -c '"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" runtime build-agent-image'
 ```
 
 ### Windows Developer Path
@@ -144,11 +163,11 @@ Prerequisites:
 - Podman on Windows, or Docker/Podman on Linux and macOS.
 - Codex CLI installed on the host for authentication bootstrap.
 
-By default, Librarian stores its root in the current user's application area:
+By default, Librarian stores one root in the current user's application area:
 `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
-`~/Library/Application Support/Librarian` on macOS. The root contains
-`config.toml`, `librarian.db`, the Markdown vault, run artifacts, Third Eye
-exports, and the default Codex profile mount path. Override this with
+`~/Library/Application Support/Librarian` on macOS. The root contains hidden
+application/config/database folders plus public `Library` and `Projects`
+folders. Override this with
 `--home <path>` or `LIBRARIAN_HOME` when you intentionally want a portable or
 project-local root.
 

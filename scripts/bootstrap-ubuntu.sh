@@ -8,6 +8,7 @@ build_agent_image=1
 run_doctor=1
 agent_image_ready=0
 librarian_home="${LIBRARIAN_HOME:-$HOME/Librarian}"
+install_bin=""
 bind="${LIBRARIAN_ADMIN_BIND:-0.0.0.0:17377}"
 
 while [[ $# -gt 0 ]]; do
@@ -22,6 +23,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --bind)
       bind="${2:?--bind requires a value}"
+      shift 2
+      ;;
+    --install-bin)
+      install_bin="${2:?--install-bin requires a value}"
       shift 2
       ;;
     --skip-codex)
@@ -151,13 +156,20 @@ fi
 cd "$repo_root"
 "$cargo_bin" build --release
 
-bin="$repo_root/target/release/librarian"
+if [[ -z "$install_bin" ]]; then
+  install_bin="$librarian_home/.app/bin/librarian"
+fi
+mkdir -p "$(dirname "$install_bin")"
+cp "$repo_root/target/release/librarian" "$install_bin"
+chmod +x "$install_bin"
+
+bin="$install_bin"
 "$bin" --home "$librarian_home" setup --yes --runtime host --skip-doctor
 "$bin" --home "$librarian_home" config show >/dev/null
 
 if [[ "$bind" != "127.0.0.1:17377" ]]; then
   "$bin" --home "$librarian_home" config show >/dev/null
-  python3 - "$librarian_home/config.toml" "$bind" <<'PY'
+  python3 - "$librarian_home/.cfg/config.toml" "$bind" <<'PY'
 from pathlib import Path
 import sys
 
@@ -198,6 +210,9 @@ codex_profile_ready=0
 if [[ -d "$librarian_home/codex-home" ]]; then
   codex_profile_ready=1
 fi
+if [[ -d "$librarian_home/.cfg/codex-home" ]]; then
+  codex_profile_ready=1
+fi
 
 if [[ "$agent_image_ready" -eq 0 && "$docker_ready" -eq 1 ]]; then
   if docker image inspect librarian-agent:latest >/dev/null 2>&1; then
@@ -220,7 +235,7 @@ elif [[ "$agent_image_ready" -eq 0 ]]; then
 elif [[ "$codex_profile_ready" -eq 0 ]]; then
   next_title="Sign in Codex for Librarian"
   next_body="Create the portable Codex profile that will later be mounted into agent containers."
-  next_command="export CODEX_HOME=\"$librarian_home/codex-home\" && codex"
+  next_command="export CODEX_HOME=\"$librarian_home/.cfg/codex-home\" && codex"
 else
   next_title="Start the admin UI"
   next_body="The basic setup is ready enough to open the web interface."
@@ -236,8 +251,8 @@ cat <<EOF
 State root:
   $librarian_home
 
-Launch context:
-  $repo_root
+Installed binary:
+  $bin
 
 NEXT STEP: $next_title
   $next_body
@@ -254,11 +269,14 @@ Useful commands:
     http://127.0.0.1:17377
 
   Codex auth:
-    export CODEX_HOME="$librarian_home/codex-home"
+    export CODEX_HOME="$librarian_home/.cfg/codex-home"
     codex
-    $bin --home "$librarian_home" auth codex --enable-container-mount --codex-home "$librarian_home/codex-home"
+    $bin --home "$librarian_home" auth codex --enable-container-mount --codex-home "$librarian_home/.cfg/codex-home"
 
 Notes:
-  State root is where Librarian stores config, SQLite, vault, runs, and auth profiles.
-  Launch context is the repo/current directory used as a project hint; it is not the state folder.
+  $librarian_home is the only install folder.
+  .app stores the installed binary, temporary source checkout, and runtime artifacts.
+  .cfg stores config and auth profiles.
+  .mdb stores SQLite databases and machine data.
+  Library and Projects are user-visible project memory/work folders.
 EOF

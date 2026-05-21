@@ -20,10 +20,11 @@ the product direction.
 - Project mounts are read-write by default, configurable per run/project.
 - No required paid or proprietary external secret service.
 - Localhost admin UI is the default interaction path.
-- First-run setup chooses a stable Librarian root. Silent/default setup uses
+- First-run setup chooses one stable Librarian root. Silent/default setup uses
   `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
   `~/Library/Application Support/Librarian` on macOS; `--home` and
-  `LIBRARIAN_HOME` support portable roots.
+  `LIBRARIAN_HOME` support portable roots. The root layout separates hidden
+  `.app`, `.cfg`, and `.mdb` folders from public `Library` and `Projects`.
 - Ubuntu is the current golden-path install target: clone the repository and
   run one bootstrap script, or use the README one-line starter for clean hosts.
 - The Obsidian-compatible vault is global at the Librarian root, so chats,
@@ -180,6 +181,10 @@ next.
 - Ubuntu starter/bootstrap scripts install missing dependencies, build
   Librarian, run silent setup, and prepare the Docker-based agent image when
   permissions allow it.
+- Ubuntu one-line install now treats Git/source as an installer detail: it
+  builds in `Librarian/.app/source`, installs the binary to
+  `Librarian/.app/bin/librarian`, and removes the checkout unless explicitly
+  preserved.
 - Doctor output now highlights the overall status, distinguishes state root
   from launch context, and prints a single next important step plus remaining
   blockers.
@@ -271,7 +276,7 @@ Tasks:
   tree. First pass uses the project registry; the next pass should use vault
   project folders and links.
 - Define the project library model: Markdown project memory folders live under
-  `Librarian/Projects/{ProjectName}` by default, and each can attach to an
+  `Librarian/Library/projects/{ProjectName}` by default, and each can attach to an
   external working directory mounted into agent containers.
 - Add project creation/linking from the admin UI: create the memory folder,
   optionally create the working directory under the default projects root, or
