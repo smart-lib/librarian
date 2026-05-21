@@ -147,6 +147,13 @@ the host:
 POST http://host.containers.internal:17379/v1/proxy/openai/v1/chat/completions
 ```
 
+Jobs can carry a grant token so the worker injects `LIBRARIAN_SECRET_GRANT_TOKEN`
+and `LIBRARIAN_BROKER_URL` into the container without exposing the raw secret:
+
+```powershell
+cargo +stable-x86_64-pc-windows-gnu run -- run --project my-project --provider open-router --goal "Use the brokered provider" --secret-grant-token <token>
+```
+
 Inspect provider routing and limits:
 
 ```powershell

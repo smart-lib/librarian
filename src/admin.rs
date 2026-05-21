@@ -32,6 +32,7 @@ struct CreateJobRequest {
     project: String,
     goal: String,
     provider: Option<String>,
+    secret_grant_token: Option<String>,
     allow_network: Option<bool>,
     read_only: Option<bool>,
 }
@@ -44,6 +45,7 @@ struct CreateScheduleRequest {
     project: Option<String>,
     goal: Option<String>,
     provider: Option<String>,
+    secret_grant_token: Option<String>,
     message: Option<String>,
     allow_network: Option<bool>,
     read_only: Option<bool>,
@@ -439,7 +441,27 @@ async fn create_secret_grant(
 }
 
 async fn secret_grants(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(state.db.list_secret_grants(50).await?))
+    let grants = state
+        .db
+        .list_secret_grants(50)
+        .await?
+        .into_iter()
+        .map(|grant| {
+            serde_json::json!({
+                "id": grant.id,
+                "token": crate::secrets::encode_grant_token(grant.id),
+                "secret_id": grant.secret_id,
+                "job_id": grant.job_id,
+                "provider": grant.provider,
+                "capability": grant.capability,
+                "expires_at": grant.expires_at,
+                "max_uses": grant.max_uses,
+                "uses": grant.uses,
+                "created_at": grant.created_at,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(grants))
 }
 
 async fn secret_audit(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
@@ -663,6 +685,8 @@ async fn create_job(
     };
     let network_mode = if input.allow_network.unwrap_or(false) {
         NetworkMode::Open
+    } else if input.secret_grant_token.is_some() {
+        NetworkMode::Open
     } else {
         NetworkMode::None
     };
@@ -700,6 +724,7 @@ async fn create_job(
             &gated.content,
             mount_mode,
             network_mode,
+            input.secret_grant_token.as_deref(),
         )
         .await?;
     state
@@ -748,6 +773,7 @@ fn schedule_payload(kind: &ScheduleKind, input: &CreateScheduleRequest) -> serde
             "project": input.project.clone().unwrap_or_default(),
             "goal": input.goal.clone().unwrap_or_default(),
             "provider": input.provider.clone().unwrap_or_else(|| "codex".to_string()),
+            "secret_grant_token": input.secret_grant_token.clone(),
             "allow_network": input.allow_network.unwrap_or(false),
             "read_only": input.read_only.unwrap_or(false),
         }),
@@ -1046,6 +1072,8 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
           <option value="openrouter">OpenRouter</option>
           <option value="claude-code">Claude Code</option>
         </select>
+        <label for="schedule_secret_grant_token">Secret grant token</label>
+        <input id="schedule_secret_grant_token" autocomplete="off">
         <label for="schedule_goal">Agent goal</label>
         <textarea id="schedule_goal"></textarea>
         <div class="row">
@@ -1078,6 +1106,8 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
           <option value="openrouter">OpenRouter</option>
           <option value="claude-code">Claude Code</option>
         </select>
+        <label for="secret_grant_token">Secret grant token</label>
+        <input id="secret_grant_token" name="secret_grant_token" autocomplete="off">
         <label for="goal">Goal</label>
         <textarea id="goal" name="goal"></textarea>
         <div class="row">
@@ -1174,6 +1204,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       budget_total.value = health.budget.daily_total_usd ?? '';
       budget_provider.value = health.budget.daily_provider_usd ?? '';
       budget_project.value = health.budget.daily_project_usd ?? '';
+      wireGrantTokenHints(grants);
       document.querySelector('#projects').innerHTML = projects.length
         ? projects.map(p => `<div class="item"><b>${{escapeHtml(p.name)}}</b><br><span class="muted">${{escapeHtml(p.path)}}</span></div>`).join('')
         : 'No projects registered.';
@@ -1196,6 +1227,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       return `<div class="item">
         <b>${{escapeHtml(job.status)}}</b> <span class="muted">${{escapeHtml(job.provider)}} &middot; ${{escapeHtml(job.id)}}</span><br>
         <div>${{escapeHtml(job.goal)}}</div>
+        <div class="muted">Secret grant: ${{job.secret_grant_token ? escapeHtml(shortToken(job.secret_grant_token)) : '-'}}</div>
         <div class="mini">
           <div><span class="muted">Created</span><br>${{escapeHtml(job.created_at)}}</div>
           <div><span class="muted">Started</span><br>${{escapeHtml(job.started_at || '-')}}</div>
@@ -1228,6 +1260,18 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
           groupJobs.map(renderJobCard).join('') +
           `</details>`;
       }}).join('') || 'No jobs yet.';
+    }}
+    function shortToken(value) {{
+      const token = String(value || '');
+      return token.length > 18 ? `${{token.slice(0, 10)}}...${{token.slice(-6)}}` : token;
+    }}
+    function wireGrantTokenHints(grants) {{
+      const tokens = grants
+        .filter(grant => grant.token)
+        .map(grant => grant.token);
+      const value = tokens[0] || '';
+      secret_grant_token.placeholder = value;
+      schedule_secret_grant_token.placeholder = value;
     }}
     function renderJobCard(j) {{
       return `<div class="item">
@@ -1358,6 +1402,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       schedule_message.value = schedule.payload.message || schedule.payload.task || '';
       schedule_project.value = schedule.payload.project || '';
       schedule_provider.value = schedule.payload.provider || 'codex';
+      schedule_secret_grant_token.value = schedule.payload.secret_grant_token || '';
       schedule_goal.value = schedule.payload.goal || '';
       schedule_network.checked = Boolean(schedule.payload.allow_network);
       schedule_form.dataset.scheduleId = schedule.id;
@@ -1376,6 +1421,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
         message: schedule_message.value,
         project: schedule_project.value,
         provider: schedule_provider.value,
+        secret_grant_token: schedule_secret_grant_token.value || null,
         goal: schedule_goal.value,
         allow_network: schedule_network.checked
       }};
@@ -1473,6 +1519,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
       const body = {{
         project: project.value,
         provider: provider.value,
+        secret_grant_token: secret_grant_token.value || null,
         goal: goal.value,
         allow_network: allow_network.checked
       }};

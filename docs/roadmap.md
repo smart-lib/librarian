@@ -332,8 +332,9 @@ Dependencies:
 ## Priority 7: Secret and API Provider MVP Path
 
 Status: In progress. Minimal admin UI exists for storing redacted secrets,
-listing recent grants, and creating capability grants. Per-job grant selection
-and provider proxy policy hardening remain.
+listing recent grants, and creating capability grants. Jobs and scheduled agent
+tasks can now carry a grant token into the worker/container. Provider proxy
+policy hardening remains.
 
 Goal: support OpenRouter-style provider testing without putting raw API keys
 inside agent containers.
@@ -341,7 +342,8 @@ inside agent containers.
 Tasks:
 
 - Add admin UI forms for storing secrets and creating grants. First pass done.
-- Add per-job secret grant selection when queueing a job.
+- Add per-job secret grant selection when queueing a job. First pass done for
+  persisted grant tokens in CLI/admin/scheduled jobs.
 - Verify OpenRouter through the host broker/proxy path.
 - Add provider-specific proxy policies for allowed paths and HTTP methods.
 - Keep Codex CLI as the primary MVP path; this is the secondary provider/API

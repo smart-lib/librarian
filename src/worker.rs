@@ -192,7 +192,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         prompt: enriched_prompt,
         mount_mode: job.mount_mode,
         network_mode: job.network_mode,
-        secret_grant_token: None,
+        secret_grant_token: job.secret_grant_token.clone(),
     };
     let prompt_len = spec.prompt.chars().count();
 
@@ -406,7 +406,7 @@ async fn prepare_job(
         prompt: enriched_prompt,
         mount_mode: job.mount_mode,
         network_mode: job.network_mode,
-        secret_grant_token: None,
+        secret_grant_token: job.secret_grant_token.clone(),
     };
     let command = DockerRunner::new(config.clone())
         .docker_command_parts(&spec)

@@ -367,6 +367,7 @@ mod tests {
             goal: "test".to_string(),
             mount_mode: crate::domain::MountMode::ReadWrite,
             network_mode: crate::domain::NetworkMode::Open,
+            secret_grant_token: None,
             cancel_requested_at: None,
             last_heartbeat_at: None,
             started_at: None,
@@ -449,6 +450,7 @@ mod tests {
                 "test",
                 MountMode::ReadWrite,
                 NetworkMode::None,
+                None,
             )
             .await
             .expect("job");
@@ -489,6 +491,7 @@ mod tests {
                     "project": "scheduled-project",
                     "goal": "test scheduled provider",
                     "provider": "claude-code",
+                    "secret_grant_token": "test-token",
                 }),
             )
             .await
@@ -501,6 +504,12 @@ mod tests {
         assert!(jobs
             .iter()
             .any(|job| matches!(job.provider, ProviderKind::ClaudeCode)));
+        let job = jobs
+            .iter()
+            .find(|job| matches!(job.provider, ProviderKind::ClaudeCode))
+            .expect("scheduled job");
+        assert_eq!(job.secret_grant_token.as_deref(), Some("test-token"));
+        assert!(matches!(job.network_mode, NetworkMode::Open));
         std::fs::remove_dir_all(home).ok();
     }
 }

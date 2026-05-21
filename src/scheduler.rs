@@ -171,14 +171,30 @@ async fn run_agent_task_schedule(db: &Database, schedule: &Schedule) -> Result<(
         .get("allow_network")
         .and_then(|value| value.as_bool())
         .unwrap_or(false)
+        || schedule
+            .payload
+            .get("secret_grant_token")
+            .and_then(|value| value.as_str())
+            .is_some()
     {
         NetworkMode::Open
     } else {
         NetworkMode::None
     };
+    let secret_grant_token = schedule
+        .payload
+        .get("secret_grant_token")
+        .and_then(|value| value.as_str());
 
     let job = db
-        .create_job(project.id, provider, goal, mount_mode, network_mode)
+        .create_job(
+            project.id,
+            provider,
+            goal,
+            mount_mode,
+            network_mode,
+            secret_grant_token,
+        )
         .await?;
     db.add_job_event(
         job.id,

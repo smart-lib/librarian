@@ -101,6 +101,7 @@ pub struct Job {
     pub goal: String,
     pub mount_mode: MountMode,
     pub network_mode: NetworkMode,
+    pub secret_grant_token: Option<String>,
     pub cancel_requested_at: Option<DateTime<Utc>>,
     pub last_heartbeat_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,

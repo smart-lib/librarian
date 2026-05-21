@@ -652,6 +652,7 @@ async fn main() -> Result<()> {
                     &gated.content,
                     mount_mode,
                     network_mode,
+                    secret_grant_token.as_deref(),
                 )
                 .await?;
             db.add_job_event(

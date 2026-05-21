@@ -61,6 +61,7 @@ impl Database {
                 goal TEXT NOT NULL,
                 mount_mode TEXT NOT NULL,
                 network_mode TEXT NOT NULL,
+                secret_grant_token TEXT,
                 cancel_requested_at TEXT,
                 last_heartbeat_at TEXT,
                 started_at TEXT,
@@ -331,6 +332,7 @@ impl Database {
             "ALTER TABLE jobs ADD COLUMN last_heartbeat_at TEXT",
             "ALTER TABLE jobs ADD COLUMN started_at TEXT",
             "ALTER TABLE jobs ADD COLUMN finished_at TEXT",
+            "ALTER TABLE jobs ADD COLUMN secret_grant_token TEXT",
             "ALTER TABLE schedules ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'",
             "ALTER TABLE memory_items ADD COLUMN project_id TEXT",
             "ALTER TABLE memory_items ADD COLUMN activity_id TEXT",
@@ -468,6 +470,7 @@ impl Database {
         goal: &str,
         mount_mode: MountMode,
         network_mode: NetworkMode,
+        secret_grant_token: Option<&str>,
     ) -> Result<Job> {
         let now = Utc::now();
         let job = Job {
@@ -478,6 +481,7 @@ impl Database {
             goal: goal.to_string(),
             mount_mode,
             network_mode,
+            secret_grant_token: secret_grant_token.map(ToOwned::to_owned),
             cancel_requested_at: None,
             last_heartbeat_at: None,
             started_at: None,
@@ -489,8 +493,8 @@ impl Database {
         sqlx::query(
             r#"
             INSERT INTO jobs
-                (id, project_id, provider, status, goal, mount_mode, network_mode, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, project_id, provider, status, goal, mount_mode, network_mode, secret_grant_token, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(job.id.to_string())
@@ -500,6 +504,7 @@ impl Database {
         .bind(&job.goal)
         .bind(format!("{:?}", job.mount_mode))
         .bind(format!("{:?}", job.network_mode))
+        .bind(&job.secret_grant_token)
         .bind(job.created_at.to_rfc3339())
         .bind(job.updated_at.to_rfc3339())
         .execute(&self.pool)
@@ -512,7 +517,7 @@ impl Database {
         let rows = sqlx::query(
             r#"
             SELECT id, project_id, provider, status, goal, mount_mode, network_mode,
-                   cancel_requested_at, last_heartbeat_at, started_at, finished_at,
+                   secret_grant_token, cancel_requested_at, last_heartbeat_at, started_at, finished_at,
                    created_at, updated_at
             FROM jobs
             ORDER BY created_at DESC
@@ -527,7 +532,7 @@ impl Database {
         let rows = sqlx::query(
             r#"
             SELECT id, project_id, provider, status, goal, mount_mode, network_mode,
-                   cancel_requested_at, last_heartbeat_at, started_at, finished_at,
+                   secret_grant_token, cancel_requested_at, last_heartbeat_at, started_at, finished_at,
                    created_at, updated_at
             FROM jobs
             WHERE status IN ('Preparing', 'Running')
@@ -545,7 +550,7 @@ impl Database {
         let row = sqlx::query(
             r#"
             SELECT id, project_id, provider, status, goal, mount_mode, network_mode,
-                   cancel_requested_at, last_heartbeat_at, started_at, finished_at,
+                   secret_grant_token, cancel_requested_at, last_heartbeat_at, started_at, finished_at,
                    created_at, updated_at
             FROM jobs
             WHERE status = 'Queued'
@@ -586,7 +591,7 @@ impl Database {
         let row = sqlx::query(
             r#"
             SELECT id, project_id, provider, status, goal, mount_mode, network_mode,
-                   cancel_requested_at, last_heartbeat_at, started_at, finished_at,
+                   secret_grant_token, cancel_requested_at, last_heartbeat_at, started_at, finished_at,
                    created_at, updated_at
             FROM jobs
             WHERE id = ?
@@ -695,6 +700,7 @@ impl Database {
                 &job.goal,
                 job.mount_mode,
                 job.network_mode,
+                job.secret_grant_token.as_deref(),
             )
             .await?;
         self.add_job_event(
@@ -1810,6 +1816,7 @@ fn row_to_job(row: sqlx::sqlite::SqliteRow) -> Result<Job> {
         goal: row.get("goal"),
         mount_mode: parse_mount_mode(row.get::<String, _>("mount_mode").as_str())?,
         network_mode: parse_network_mode(row.get::<String, _>("network_mode").as_str())?,
+        secret_grant_token: row.get("secret_grant_token"),
         cancel_requested_at: parse_optional_time(
             row.get::<Option<String>, _>("cancel_requested_at"),
         )?,
