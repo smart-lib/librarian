@@ -3,13 +3,13 @@
 ## One-Line Ubuntu Install
 
 ```bash
-sh -c 'u=https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/install-ubuntu.sh; if command -v curl >/dev/null 2>&1; then curl -fsSL "$u"; else wget -qO- "$u"; fi' | bash
+wget -qO- https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/install-ubuntu.sh | bash
 ```
 
 Nightly/develop build:
 
 ```bash
-sh -c 'u=https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/install-ubuntu.sh; if command -v curl >/dev/null 2>&1; then curl -fsSL "$u"; else wget -qO- "$u"; fi' | bash -s -- --nightly
+wget -qO- https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/install-ubuntu.sh | bash -s -- --nightly
 ```
 
 Librarian is a local-first automation harness for ideas, projects, and coding agents.
