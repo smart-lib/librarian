@@ -87,10 +87,11 @@ bash scripts/bootstrap-ubuntu.sh --yes
 The bootstrap installs system packages, Rust, Node.js/npm, Codex CLI, Docker,
 builds Librarian, creates the default single root at `~/Librarian`, installs
 the binary to `~/Librarian/.app/bin/librarian`, and tries to build the agent
-image. Start the admin UI with the command printed at the end:
+image. It also links `librarian` into `~/.local/bin` for normal shell use.
+Start the admin UI with the command printed at the end:
 
 ```bash
-"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" admin --bind 0.0.0.0:17377
+librarian --home "$HOME/Librarian" admin --bind 0.0.0.0:17377
 ```
 
 From Windows with WSL2, open:
@@ -141,6 +142,8 @@ sudo systemctl enable --now docker
 sudo usermod -aG docker "$USER"
 cargo build --release
 install -Dm755 ./target/release/librarian "$HOME/Librarian/.app/bin/librarian"
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$HOME/Librarian/.app/bin/librarian" "$HOME/.local/bin/librarian"
 "$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" setup --yes --runtime host
 sg docker -c '"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" runtime build-agent-image'
 "$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" doctor

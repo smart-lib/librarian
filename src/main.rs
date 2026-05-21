@@ -1766,17 +1766,22 @@ async fn run_doctor(config: &Config) -> Result<()> {
         }
     }
     println!();
-    print_doctor_next_steps(color_enabled, &checks);
+    print_doctor_next_steps(color_enabled, &checks, config);
 
     Ok(())
 }
 
-fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck]) {
+fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: &Config) {
+    let command = doctor_command_prefix(config);
     let blockers = checks
         .iter()
         .filter(|check| check.severity == DoctorSeverity::Error)
         .collect::<Vec<_>>();
-    if blockers.is_empty() {
+    let warnings = checks
+        .iter()
+        .filter(|check| check.severity == DoctorSeverity::Warn)
+        .collect::<Vec<_>>();
+    if blockers.is_empty() && warnings.is_empty() {
         println!(
             "{}",
             color_text(
@@ -1785,9 +1790,31 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck]) {
                 "Next step: start the admin UI, add a project, then queue a smoke job."
             )
         );
-        println!("  librarian admin");
-        println!("  librarian project add <path>");
-        println!("  librarian worker --once");
+        println!("  {command} admin");
+        println!("  {command} project add <path>");
+        println!("  {command} worker --once");
+        return;
+    }
+
+    if blockers.is_empty() {
+        println!(
+            "{}",
+            color_text(color_enabled, "33", "Next important step:")
+        );
+        if let Some(first) = warnings.first() {
+            println!(
+                "  Fix `{}`: {}",
+                first.label,
+                first
+                    .next_step
+                    .as_deref()
+                    .unwrap_or("See the warning above.")
+            );
+        }
+        println!();
+        println!("Then:");
+        println!("  {command} doctor");
+        println!("  {command} admin");
         return;
     }
 
@@ -1814,8 +1841,28 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck]) {
     }
     println!();
     println!("After blockers are fixed:");
-    println!("  librarian doctor");
-    println!("  librarian admin");
+    println!("  {command} doctor");
+    println!("  {command} admin");
+}
+
+fn doctor_command_prefix(config: &Config) -> String {
+    let executable = std::env::current_exe()
+        .ok()
+        .map(|path| shell_path(&path))
+        .unwrap_or_else(|| "librarian".to_string());
+    format!("{executable} --home {}", shell_path(&config.home))
+}
+
+fn shell_path(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    if text
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\'' | '(' | ')' | '&' | ';'))
+    {
+        format!("\"{}\"", text.replace('"', "\\\""))
+    } else {
+        text
+    }
 }
 
 fn border_line(title_len: usize) -> String {

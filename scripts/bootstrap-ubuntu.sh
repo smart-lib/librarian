@@ -164,6 +164,12 @@ cp "$repo_root/target/release/librarian" "$install_bin"
 chmod +x "$install_bin"
 
 bin="$install_bin"
+link_bin="${LIBRARIAN_LINK_BIN:-$HOME/.local/bin/librarian}"
+mkdir -p "$(dirname "$link_bin")"
+ln -sfn "$bin" "$link_bin"
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+  export PATH="$HOME/.local/bin:$PATH"
+fi
 "$bin" --home "$librarian_home" setup --yes --runtime host --skip-doctor
 "$bin" --home "$librarian_home" config show >/dev/null
 
@@ -236,6 +242,10 @@ elif [[ "$codex_profile_ready" -eq 0 ]]; then
   next_title="Sign in Codex for Librarian"
   next_body="Create the portable Codex profile that will later be mounted into agent containers."
   next_command="export CODEX_HOME=\"$librarian_home/.cfg/codex-home\" && codex"
+elif ! grep -q "mount_host_home = true" "$librarian_home/.cfg/config.toml" 2>/dev/null; then
+  next_title="Enable Codex container access"
+  next_body="Codex is signed in, but agent containers cannot read that profile until you explicitly allow the mount."
+  next_command="$bin --home \"$librarian_home\" auth codex --enable-container-mount --codex-home \"$librarian_home/.cfg/codex-home\""
 else
   next_title="Start the admin UI"
   next_body="The basic setup is ready enough to open the web interface."
@@ -254,6 +264,9 @@ State root:
 Installed binary:
   $bin
 
+Shell command:
+  $link_bin
+
 NEXT STEP: $next_title
   $next_body
   $next_command
@@ -264,6 +277,7 @@ Useful commands:
 
   Admin UI:
     $bin --home "$librarian_home" admin --bind "$bind"
+    librarian --home "$librarian_home" admin --bind "$bind"
 
   Browser URL from Windows/host:
     http://127.0.0.1:17377
