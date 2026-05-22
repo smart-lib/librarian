@@ -8,14 +8,15 @@ the product direction.
 
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
-- Current phase: MVP readiness after Milestone 7 feature buildout.
-- Next implementation focus: make the core flow testable end to end from a
-  real user launch path, then hand off to environment setup for manual and
-  automated testing.
+- Current phase: working Librarian chat MVP.
+- Next implementation focus: replace the local memory responder with a real
+  provider-backed Librarian chat loop, then add explicit tools, permissions,
+  and background agent launch as separate actions.
 
 ## Product Defaults
 
-- MVP provider: Codex CLI.
+- MVP chat provider: Codex CLI on the host profile already configured through
+  Librarian auth. Background coding agents also use Codex CLI first.
 - Containers have no network access by default.
 - Project mounts are read-write by default, configurable per run/project.
 - No required paid or proprietary external secret service.
@@ -200,6 +201,68 @@ These tasks come before new product milestones. The goal is not more breadth;
 it is making the current MVP reliable enough that the environment can be set up
 and the core flows can be tested manually and automatically.
 
+## Priority 0: Working Librarian Chat
+
+Status: Not done. The UI is chat-first, but `/api/chat` currently uses a
+temporary local memory responder. It stores turns and retrieves memory, but it
+does not call an LLM and can echo its own placeholder responses back through
+memory retrieval.
+
+Goal: Librarian must be a real conversational assistant before agent automation
+is polished. A user must be able to talk without selecting a project, discuss
+many projects at a high level, and ask Librarian to use memory context when
+answering.
+
+Tasks:
+
+- Replace `local-memory-responder` with a provider-backed Librarian chat path.
+  First MVP target: Codex CLI using the already configured portable Codex
+  profile.
+- Build a dedicated Librarian chat prompt, separate from coding-agent prompts.
+  Inputs: identity/instructions, user message, recent conversation turns,
+  global memory, selected project memory when explicit, and compact citations.
+- Keep `/api/chat` as conversation only. It must not create background jobs or
+  wait for agent execution.
+- Remove current self-echo behavior: do not retrieve placeholder assistant
+  replies, and do not store local placeholder output as durable assistant
+  memory once real chat exists.
+- Save useful user and assistant turns into memory, but distinguish raw chat
+  transcript from durable facts/decisions/instructions.
+- Add a small chat transcript model: session/thread id, ordered turns, selected
+  project context, and durable memory links.
+- Add a clear fallback when the chat provider is unavailable: actionable
+  “Codex auth/runtime missing” message, not memory dump output.
+- Add tests for the chat endpoint that prove it does not create jobs and that
+  placeholder/self-echo memories are excluded.
+
+Dependencies:
+
+- Existing Codex host auth/profile setup.
+- Existing memory retrieval and gate/redaction pipeline.
+
+## Priority 0A: Iterative Thinking Loop
+
+Status: Planned after the first real chat response works.
+
+Goal: let Librarian decide when a question needs more reflection, memory search,
+or a clarifying question, without always spending the maximum budget.
+
+Tasks:
+
+- Add configurable thinking depth: minimum `1`, default around `5-10`, maximum
+  configurable up to `50-100` for deliberate long reasoning sessions.
+- Model each iteration as an internal loop step with a bounded budget, not as
+  user-visible spam. Store a compact trace/summary when useful.
+- Let Librarian stop early when the answer is good enough.
+- Let Librarian choose among actions per iteration: answer, search memory again,
+  refine draft, ask user a clarifying question, propose a tool call, or request
+  approval.
+- Add guardrails for cost/time: max iterations, max wall-clock time, max context
+  growth, and user-visible cancellation.
+- Keep “thinking” implementation separate from provider-specific hidden
+  reasoning. Librarian controls an iterative planning loop; provider hidden
+  reasoning remains opaque.
+
 ## Priority 1: Actionable Bootstrap and Doctor
 
 Status: Done for code readiness. First-run setup and basic packaging are now
@@ -266,8 +329,8 @@ Tasks:
 ## Priority 1B: Project Library and Friendly Admin UX
 
 Status: In progress. Chat-first shell is active and `/api/chat` is separated
-from background agent jobs; backend project library workflows and real chat
-model integration remain.
+from background agent jobs; backend project library workflows remain. Real chat
+model integration moved to Priority 0.
 
 Goal: make Librarian feel like a project library first, and hide low-level
 agent dispatch mechanics until they are needed.
@@ -286,15 +349,11 @@ Tasks:
   token, and network mode out of the main chat composer. First pass done with
   Codex as the default MVP provider and the selected/first project as context.
 - Keep Librarian chat as a normal AI conversation surface, usable without a
-  specific project. First pass now stores/retrieves global or project-scoped
-  memory and does not spawn background jobs.
+  specific project. First pass separates it from job dispatch; real model
+  response is tracked in Priority 0.
 - Polish the main chat shell for actual conversation: full-width thread and
   prompt input, Enter-to-send with Ctrl+Enter newline, floating corner controls,
   and a centered pull-tab identity marker. First pass done.
-- Add a dedicated chat model path for Librarian itself, separate from
-  background coding agents. Until this is connected, the MVP responder should
-  stay explicit about using local memory context rather than pretending an agent
-  has run.
 - Move background agent launch into explicit project actions and command blocks,
   so agents can run without interrupting the Librarian conversation.
 - Define the project library model: Markdown project memory folders live under
@@ -309,10 +368,114 @@ Tasks:
 - Capture the launched-from-unknown-folder behavior as a default reusable
   agent-instruction block once the visual instruction builder exists.
 
-## Priority 2: Job Dispatch Dry Run and Preflight
+## Priority 1C: Tools, Permissions, and Slash Commands
+
+Status: Planned. This comes after the first real chat path, because tool calls
+need a real assistant loop to propose and interpret them.
+
+Goal: Librarian should be useful inside its own root without unrestricted host
+power. Tools must be explicit, logged, permissioned, and available both through
+assistant decisions and direct slash commands that do not call the LLM.
+
+Tool groups:
+
+- Library/project filesystem tools within `Librarian/Library` and
+  `Librarian/Projects`: create empty folders/files, rename, move, and delete.
+- Markdown content tools for user content under `Librarian/Library`: read,
+  create, edit, append, summarize, and reorganize `.md` notes.
+- Memory tools: write durable facts, decisions, instructions, preferences,
+  status notes, and run observations; update/supersede/contradict older memory
+  with audit trail.
+- Settings/prompt tools: inspect settings, propose changes, and apply only
+  after explicit user approval.
+- Background agent tools: create project-scoped agent jobs, preflight them, run
+  worker actions, cancel/retry, and report results back into chat without
+  blocking the conversation.
+
+Permission model:
+
+- Each tool has a policy: `auto`, `ask`, or `deny`.
+- Destructive filesystem operations default to `ask`.
+- Editing user Markdown defaults to `ask` until the user grants broader trust.
+- Memory writes can be `auto` for low-risk chat-derived notes but must expose
+  what was remembered and allow correction.
+- Settings, prompt changes, auth, provider config, and background agent launch
+  default to `ask`.
+- All tool calls, including denied and direct slash-command calls, are logged to
+  history/system events so Librarian can account for them in future context.
+
+Slash commands:
+
+- Add a command dispatcher before LLM invocation for commands such as
+  `/remember`, `/project`, `/note`, `/move`, `/rename`, `/delete`, `/agent`,
+  `/preflight`, `/settings`, and `/help`.
+- Slash commands should execute without spending provider tokens when they are
+  deterministic.
+- Slash-command results should still be added to the conversation/event history
+  as context.
+
+## Priority 2: Prompt Builder and Instruction Authoring
+
+Status: Planned.
+
+Goal: provide a human-friendly visual editor for Librarian identity, chat
+prompt layers, agent instruction files, and provider-specific launch prompts.
+
+Tasks:
+
+- Research UI/UX patterns for block-based prompt/instruction editors before
+  implementing the admin surface.
+- Add reusable instruction blocks with drag-and-drop ordering, enable/disable
+  toggles, add/delete actions, and per-block controls.
+- Support presets for Librarian identity, operating principles, memory policy,
+  tool permissions, git policy, Obsidian/vault behavior, task planning style,
+  project goals, and provider caveats.
+- Render Markdown preview per block plus compiled preview for each target:
+  Librarian chat prompt, agent launch prompt, `AGENTS.md`, `CLAUDE.md`, and
+  future provider/user identity files.
+- Add block options for Markdown structure: heading level, wrapping, separators,
+  and whether the block is included in prompt output, file output, or both.
+- Store prompt/instruction versions so chat runs and agent jobs can cite which
+  instruction set they used.
+
+Dependencies:
+
+- Priority 0 chat prompt contract.
+- Priority 1C tools/permissions, because prompt blocks will define tool policy
+  and approval behavior.
+
+## Priority 3: Agent Runtime Validation and Background Work
+
+Status: In progress. Backend job dispatch exists; real Codex agent validation
+still needs to be run in the user Ubuntu/WSL environment.
+
+Goal: verify background agents as explicit project-scoped work, separate from
+normal Librarian chat.
+
+Tasks:
+
+- Register a test project and run a real containerized Codex job with the
+  mounted portable Codex profile.
+- Verify `codex exec` works in the agent image and diagnose auth/profile issues
+  without inspecting undocumented auth files.
+- Keep background runs non-blocking from the chat perspective: chat records
+  launch/preflight/result events but remains conversational.
+- Confirm status transitions, stdout/stderr events, provider diagnostics, usage
+  observation, vault run summary, and memory run observation.
+- Retry a failed job and cancel a queued/running job.
+- Add chat-visible compact action blocks for explicit agent launch, preflight,
+  progress, and result artifacts.
+
+Dependencies:
+
+- Priority 1 diagnostics.
+- User environment setup: container runtime, Codex auth, agent image.
+- Priority 1C tool permission model for launch approvals.
+
+## Priority 4: Job Dispatch Dry Run and Preflight
 
 Status: Done for CLI no-container preflight. Admin presentation can be improved
-under Priority 4.
+under the agent runtime/admin work.
 
 Goal: test the expensive/risky part of the worker path without launching a real
 agent container.
@@ -333,7 +496,7 @@ Dependencies:
 - Provider routing and budget checks.
 - Prompt file mount and Docker command construction.
 
-## Priority 3: Core Manual MVP Smoke Flow
+## Priority 5: Core Manual MVP Smoke Flow
 
 Goal: prove the main path once the user's environment is ready.
 
@@ -360,7 +523,7 @@ Acceptance notes:
 - This flow is allowed to fail on the first real environment attempt, but every
   failure should produce an actionable diagnostic rather than a mystery stack.
 
-## Priority 4: Admin Job Detail and Operations View
+## Priority 6: Admin Job Detail and Operations View
 
 Status: Done for MVP operations. Job grouping, UI preflight action, dedicated
 job detail rendering, lifecycle fields, and compact rendering for key event
@@ -385,10 +548,10 @@ Tasks:
 Dependencies:
 
 - Existing job events.
-- Priority 2 preflight events improve this view but do not block the first UI
+- Priority 4 preflight events improve this view but do not block the first UI
   pass.
 
-## Priority 5: Runtime Cleanup and Failure Categories
+## Priority 7: Runtime Cleanup and Failure Categories
 
 Status: In progress. Structured failure category events exist for provider
 pause, budget block, runtime unavailable, missing agent image, cancellation,
@@ -411,10 +574,10 @@ Tasks:
 
 Dependencies:
 
-- Priority 3 smoke flow, because cleanup behavior must be checked against the
+- Priority 5 smoke flow, because cleanup behavior must be checked against the
   real runtime.
 
-## Priority 6: Minimal Automated Test Harness
+## Priority 8: Minimal Automated Test Harness
 
 Status: In progress. No-container tests now cover routing fallback selection,
 budget blocking, routing/budget config persistence, schedule-created provider
@@ -430,21 +593,20 @@ Tasks:
 - Add tests for schedule-created agent jobs preserving provider selection.
   First pass done.
 - Add tests around provider diagnostic parsing. First pass done.
-- Add a no-container integration path for job preflight once Priority 2 exists.
+- Add a no-container integration path for job preflight once Priority 4 exists.
 - Add tests for platform-root resolution and setup persistence without touching
   the real user home.
 
 Dependencies:
 
-- Priority 2 for preflight integration tests.
+- Priority 4 for preflight integration tests.
 - No container runtime required for the first test layer.
 
-## Priority 7: Secret and API Provider MVP Path
+## Priority 9: OpenRouter, Claude, and API Provider Path
 
-Status: In progress. Minimal admin UI exists for storing redacted secrets,
-listing recent grants, and creating capability grants. Jobs and scheduled agent
-tasks can now carry a grant token into the worker/container. Provider proxy
-policy hardening remains.
+Status: Later MVP. Minimal secret/grant backend and first-pass provider
+adapters exist, but OpenRouter and Claude are not the first priority until the
+Librarian chat and Codex paths work.
 
 Goal: support OpenRouter-style provider testing without putting raw API keys
 inside agent containers.
@@ -456,8 +618,11 @@ Tasks:
   persisted grant tokens in CLI/admin/scheduled jobs.
 - Verify OpenRouter through the host broker/proxy path.
 - Add provider-specific proxy policies for allowed paths and HTTP methods.
-- Keep Codex CLI as the primary MVP path; this is the secondary provider/API
-  validation path.
+- Keep Codex CLI as the primary chat and agent path until the basic flows work.
+- Add OpenRouter as the first API provider once chat/agent boundaries are
+  stable.
+- Add Claude Code after OpenRouter and Codex are verified, including provider
+  auth/config UX.
 
 Dependencies:
 
@@ -473,11 +638,11 @@ readiness or a later planned milestone.
 ## Admin UI Backlog
 
 - Show running jobs separately from queued, completed, failed, and cancelled
-  jobs. Covered by MVP Priority 4.
+  jobs. Covered by MVP Priority 6.
 - Show per-job lifecycle fields: created, started, last heartbeat, finished,
-  cancellation requested. Covered by MVP Priority 4.
+  cancellation requested. Covered by MVP Priority 6.
 - Show recent job events inline: context pack, prepared command, stdout/stderr,
-  vault summary, retry source. Covered by MVP Priority 4.
+  vault summary, retry source. Covered by MVP Priority 6.
 - Add compact expandable action blocks in chat for command execution, task
   creation, agent launch, memory retrieval, scheduling decisions, and provider
   routing.
@@ -504,11 +669,11 @@ readiness or a later planned milestone.
 ## Secret Broker Backlog
 
 - Add admin UI forms for storing secrets and creating grants. Covered by MVP
-  Priority 7.
+  Priority 9.
 - Add per-job secret grant selection when queueing a job. Covered by MVP
-  Priority 7.
+  Priority 9.
 - Add provider-specific proxy policies for allowed paths and HTTP methods.
-  Covered by MVP Priority 7.
+  Covered by MVP Priority 9.
 - Add short-lived derived provider credentials where providers support them.
 - Add Unix-domain/named-pipe broker transport as a tighter local alternative to
   localhost HTTP.
@@ -529,40 +694,89 @@ readiness or a later planned milestone.
 - Keep gates cheap and automatic by default; expensive gates should be opt-in
   per provider, project, or session.
 
-## Agent Instruction Authoring Backlog
+## Prompt Builder Backlog
 
-Goal: let the user visually compose provider-specific agent instruction files
-and launch-time prompt layers from reusable blocks instead of hand-editing
-separate Markdown files.
+Goal: keep later prompt-builder details visible without duplicating the active
+Priority 2 work.
 
 Tasks:
 
-- Add a visual admin editor for instruction blocks with drag-and-drop ordering,
-  enable/disable toggles, add/delete actions, and per-block controls.
-- Support block presets for identity, operating principles, git policy,
-  Obsidian/vault behavior, task planning style, project goals, and provider
-  caveats.
-- Render a large Markdown preview for each block and a full compiled preview
-  for each target output.
-- Add top-row block options for Markdown structure, such as heading level,
-  wrapping, separators, and whether the block is included in file output,
-  launch prompt output, or both.
-- Compile active blocks into provider-specific files such as `AGENTS.md`,
-  `CLAUDE.md`, and future provider/user identity files, based on configured or
-  connected providers.
 - Support channel/profile variants later, so host-level, project-level, and
   agent-launch instructions can differ without duplicating every block.
 - Decide whether launch-time instruction bundles are injected only into prompts,
   mounted into the container as additional read-only files, or both, so agents
   can reread their operating instructions during a run.
+- Add import/export for prompt-builder presets so a working Librarian identity
+  can be shared across installs.
+- Add diff/review UI for prompt changes before applying them to the active
+  chat or agent profile.
 
 Dependencies:
 
 - Provider registry and routing metadata, so Librarian knows which target files
   are relevant.
-- Admin UI improvements from MVP Priority 4.
+- Active Prompt Builder work from MVP Priority 2.
+- Admin UI improvements from MVP Priority 6.
 - Context economy work, because stable instruction blocks should become part of
   the prompt prefix/cache strategy.
+
+## Technical Debt and Codebase Audit
+
+Status: Active audit snapshot as of May 22, 2026.
+
+Goal: keep temporary MVP scaffolding visible so it does not silently become
+product architecture.
+
+Findings and tasks:
+
+- `src/admin.rs` is too large and mixes active UI, legacy UI, API handlers, and
+  helper logic. Split into modules: routes/API, active chat UI, settings UI,
+  project map UI, and legacy removal.
+- `src/admin.rs` still contains old inactive HTML functions behind
+  `#[allow(dead_code)]`. Delete or move them into archived design notes once
+  the new chat-first UI has covered the needed controls.
+- `/api/chat` currently uses `build_librarian_local_reply`, a temporary
+  `local-memory-responder`. Replace it under Priority 0.
+- The temporary responder stores its own placeholder answers as
+  `AssistantMessage`, causing self-echo memory retrieval. Fix immediately or
+  remove with the real chat provider path.
+- `looks_like_agent_request` contains mojibake Russian literals and should not
+  exist as a hardcoded multilingual intent detector. Replace with slash
+  commands and the tool/permission intent layer.
+- Chat has no session/thread model yet; messages are stored as generic memory
+  without ordered transcript structure.
+- Memory retrieval lacks filters for source/mode, so placeholder assistant
+  output and low-value operational messages can pollute context.
+- `local-hash` embeddings are useful for offline MVP plumbing but weak for
+  semantic quality. Keep as fallback; add real embedding providers later.
+- Codex agent adapter exists, but real containerized Codex execution has not
+  been validated end to end in the Ubuntu/WSL install.
+- OpenRouter adapter is a first-pass shell command against the broker and has
+  not been validated as a production chat/agent provider.
+- Claude Code adapter is a minimal command wrapper and lacks real auth/config
+  UX, diagnostics, and validation.
+- Provider cost/budget logic uses observed spend only; no estimated reservation
+  exists before dispatch.
+- Gate/redaction logic is heuristic. It can over-capture high-entropy strings
+  and needs review/undo UX plus stronger tests.
+- Tool permissions do not exist yet. Any future filesystem, memory, settings,
+  or agent-launch operation must go through a policy/audit layer.
+- Admin authentication is not implemented. Before exposing non-localhost admin
+  access, add auth, CSRF/session handling where relevant, and clear bind/router
+  guidance.
+- External HTTP access by IP/router is not a current MVP target. Track it as
+  polish after auth exists.
+- Project library UI cannot yet create/link memory folders and working
+  directories from the admin surface.
+- Vault writes are basic Markdown files without conflict handling, rename
+  policy, or richer Obsidian link maintenance.
+- Installer upgrade still rebuilds from source through git. Keep command UX,
+  but replace internals with release binary downloads once releases are stable.
+- Windows path remains developer/bootstrap-oriented; Ubuntu is the current
+  golden path.
+- Automated coverage is mostly unit/no-container. Add endpoint tests for chat,
+  memory filtering, slash commands, tool permission decisions, and project
+  library operations.
 
 ## Planned
 
