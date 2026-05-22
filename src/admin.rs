@@ -15,7 +15,10 @@ use uuid::Uuid;
 use crate::{
     config::Config,
     db::Database,
-    domain::{JobStatus, MemoryKind, MountMode, NetworkMode, ScheduleKind, ScheduleStatus},
+    domain::{
+        ContextPack, JobStatus, MemoryKind, MountMode, NetworkMode, Project, ScheduleKind,
+        ScheduleStatus,
+    },
     gates, memory, router, scheduler,
     secrets::SecretVault,
     third_eye, worker,
@@ -227,7 +230,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .message.assistant, .message.system { align-self: flex-start; }
     .message.system { color: var(--muted); }
-    .message.live { border-color: #42605a; }
     .message small {
       display: block;
       margin-top: 8px;
@@ -427,8 +429,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         jobs: [],
         providers: { catalog: [], states: [] },
         health: null,
-        activeProject: '',
-        trackedJobs: new Map()
+        activeProject: ''
       };
       const el = id => document.getElementById(id);
       const qsa = selector => Array.from(document.querySelectorAll(selector));
@@ -465,10 +466,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
       }
       function activeProjectName() {
-        if (state.activeProject) return state.activeProject;
-        const first = state.projects[0];
-        state.activeProject = first ? first.name : '';
-        return state.activeProject;
+        return state.activeProject || '';
       }
       async function loadJson(path, fallback) {
         try {
@@ -492,7 +490,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         state.jobs = Array.isArray(jobs) ? jobs : [];
         state.providers = providers || { catalog: [], states: [] };
         if (!state.projects.some(project => project.name === state.activeProject)) {
-          state.activeProject = state.projects[0]?.name || '';
+          state.activeProject = '';
         }
         renderOverview();
         renderProviders();
@@ -503,7 +501,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
       function renderContext() {
         const project = activeProjectName();
-        el('context-line').textContent = project ? `project: ${project}` : 'no project selected';
+        el('context-line').textContent = project ? `project: ${project}` : 'global library';
       }
       function renderOverview() {
         const health = state.health || {};
@@ -555,90 +553,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function card(title, body) {
         return `<div class="card"><h3>${htmlEscape(title)}</h3><div>${body}</div></div>`;
       }
-      function isFinalStatus(status) {
-        return status === 'Completed' || status === 'Failed' || status === 'Cancelled';
-      }
-      function eventPayload(event) {
-        return event && typeof event.payload === 'object' && event.payload ? event.payload : {};
-      }
-      function lastEvent(events, kinds) {
-        for (let index = events.length - 1; index >= 0; index -= 1) {
-          if (kinds.includes(events[index].kind)) return events[index];
-        }
-        return null;
-      }
-      function lineFromEvent(event) {
-        const payload = eventPayload(event);
-        if (payload.line) return payload.line;
-        if (payload.error) return payload.error;
-        if (payload.category && payload.category.message) return payload.category.message;
-        return '';
-      }
-      function jobSummary(job, events, health) {
-        const status = job.status || 'Queued';
-        const worker = (health && health.worker) || {};
-        if (status === 'Queued') {
-          const detail = worker.running_jobs
-            ? 'The worker is busy with another run.'
-            : 'Start the worker from the terminal when you are ready to process queued work.';
-          return ['Waiting for the worker.', detail];
-        }
-        if (status === 'Preparing') {
-          const prepared = lastEvent(events, ['prepared', 'context_pack']);
-          const payload = eventPayload(prepared);
-          const detail = payload.context_hits !== undefined
-            ? `Context hits: ${payload.context_hits}`
-            : 'Resolving provider, project memory, and runtime command.';
-          return ['Preparing the agent run.', detail];
-        }
-        if (status === 'Running') {
-          const output = lastEvent(events, ['stderr', 'stdout', 'provider_diagnostic', 'provider_limit_detected']);
-          const line = lineFromEvent(output);
-          return ['Worker is running.', line || 'Waiting for agent output...'];
-        }
-        if (status === 'Completed') {
-          const vault = lastEvent(events, ['vault']);
-          const runSummary = eventPayload(vault).run_summary;
-          return ['Done.', runSummary ? `Run summary: ${runSummary}` : 'The worker completed successfully.'];
-        }
-        if (status === 'Cancelled') {
-          return ['Cancelled.', 'The queued run was cancelled.'];
-        }
-        const failure = lastEvent(events, ['failure_category', 'error', 'stderr']);
-        const payload = eventPayload(failure);
-        const category = payload.category || {};
-        const detail = category.next_step || category.message || payload.error || lineFromEvent(failure) || 'Open Settings -> Jobs for details.';
-        return ['The worker could not complete this run.', detail];
-      }
-      async function refreshJobMessage(jobId) {
-        const tracker = state.trackedJobs.get(jobId);
-        if (!tracker) return;
-        try {
-          const [job, events, health] = await Promise.all([
-            fetch(`/api/jobs/${jobId}`).then(response => response.json()),
-            fetch(`/api/jobs/${jobId}/events`).then(response => response.json()),
-            loadJson('/api/health', state.health)
-          ]);
-          state.health = health || state.health;
-          const [text, detail] = jobSummary(job, Array.isArray(events) ? events : [], state.health);
-          setMessage(tracker.element, text, detail ? `job ${shortId(jobId)} · ${detail}` : `job ${shortId(jobId)}`);
-          await refresh();
-          if (isFinalStatus(job.status)) {
-            tracker.element.classList.remove('live');
-            clearInterval(tracker.timer);
-            state.trackedJobs.delete(jobId);
-          }
-        } catch (error) {
-          setMessage(tracker.element, 'Could not refresh this run.', `job ${shortId(jobId)} · ${error.message || error}`);
-        }
-      }
-      function trackJob(jobId, element) {
-        if (!jobId || state.trackedJobs.has(jobId)) return;
-        element.classList.add('live');
-        const timer = setInterval(() => refreshJobMessage(jobId), 2200);
-        state.trackedJobs.set(jobId, { element, timer });
-        refreshJobMessage(jobId);
-      }
       async function submitChat(event) {
         event.preventDefault();
         const input = el('goal-input');
@@ -647,23 +561,18 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         appendMessage('user', goal);
         input.value = '';
         const project = activeProjectName();
-        if (!project) {
-          appendMessage('assistant', 'I need a project before I can queue agent work.', 'Open the project map in the top-right corner after registering a project.');
-          return;
-        }
         try {
           const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ project, provider: 'codex', goal, secret_grant_token: null, allow_network: false })
+            body: JSON.stringify({ message: goal, project: project || null })
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-          const live = appendMessage('assistant', 'Queued for the worker.', `job ${shortId(data.id || '')}`);
-          trackJob(data.id, live);
+          appendMessage('assistant', data.reply || 'I am here.', data.project ? `project: ${data.project}` : 'global library');
           await refresh();
         } catch (error) {
-          appendMessage('system', `Could not queue the message: ${error.message || error}`);
+          appendMessage('system', `Could not answer: ${error.message || error}`);
         }
       }
 
@@ -1330,6 +1239,12 @@ struct CreateJobRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct LibrarianChatRequest {
+    message: String,
+    project: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct CreateScheduleRequest {
     name: String,
     kind: String,
@@ -1425,7 +1340,8 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
             "/api/schedules/:id",
             patch(update_schedule).delete(delete_schedule),
         )
-        .route("/api/chat", post(create_job))
+        .route("/api/chat", post(librarian_chat))
+        .route("/api/agent-jobs", post(create_job))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -1965,6 +1881,84 @@ async fn update_budget_settings(
     })))
 }
 
+async fn librarian_chat(
+    State(state): State<AppState>,
+    Json(input): Json<LibrarianChatRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let message = input.message.trim();
+    if message.is_empty() {
+        return Err(anyhow::anyhow!("message must not be empty").into());
+    }
+
+    let project = match input
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => Some(state.db.get_project_by_name_or_id(value).await?),
+        None => None,
+    };
+    let project_id = project.as_ref().map(|project| project.id);
+    let config = state.config.read().await.clone();
+    let gated = gates::process_user_prompt(&state.db, &config, message, "librarian-chat").await?;
+
+    let context_pack = memory::retrieve_context_with_config(
+        &state.db,
+        Some(&config),
+        memory::RetrievalRequest {
+            query: gated.content.clone(),
+            project_id,
+            activity_id: None,
+            limit: memory::default_hit_limit(),
+        },
+    )
+    .await?;
+
+    let user_memory = state
+        .db
+        .add_memory_item(
+            project_id,
+            None,
+            MemoryKind::UserMessage,
+            Some("librarian-chat"),
+            &gated.content,
+            Some("admin:librarian-chat"),
+            serde_json::json!({
+                "project": project.as_ref().map(|project| project.name.clone()),
+                "scope": if project.is_some() { "project" } else { "global" },
+            }),
+        )
+        .await?;
+    memory::embed_item(&state.db, &config, &user_memory).await?;
+
+    let reply = build_librarian_local_reply(&gated.content, project.as_ref(), &context_pack);
+    let assistant_memory = state
+        .db
+        .add_memory_item(
+            project_id,
+            None,
+            MemoryKind::AssistantMessage,
+            Some("librarian-chat"),
+            &reply,
+            Some("admin:librarian-chat"),
+            serde_json::json!({
+                "project": project.as_ref().map(|project| project.name.clone()),
+                "scope": if project.is_some() { "project" } else { "global" },
+                "mode": "local-memory-responder",
+            }),
+        )
+        .await?;
+    memory::embed_item(&state.db, &config, &assistant_memory).await?;
+
+    Ok(Json(serde_json::json!({
+        "reply": reply,
+        "project": project.as_ref().map(|project| project.name.clone()),
+        "memory_hits": context_pack.hits,
+        "mode": "local-memory-responder",
+    })))
+}
+
 async fn create_job(
     State(state): State<AppState>,
     Json(input): Json<CreateJobRequest>,
@@ -2042,6 +2036,64 @@ async fn create_job(
             .await?;
     }
     Ok(Json(job))
+}
+
+fn build_librarian_local_reply(
+    message: &str,
+    project: Option<&Project>,
+    context_pack: &ContextPack,
+) -> String {
+    let scope = project
+        .map(|project| format!("project `{}`", project.name))
+        .unwrap_or_else(|| "the global library".to_string());
+    let mut reply = String::new();
+    reply.push_str("I am here as Librarian, not as a background agent runner.\n\n");
+    reply.push_str(&format!(
+        "I saved this turn in {scope} memory and looked up related context before answering."
+    ));
+
+    if context_pack.hits.is_empty() {
+        reply.push_str("\n\nI do not have a relevant memory thread for this yet. We can think it through from here, and I will keep the useful decisions as memory.");
+    } else {
+        reply.push_str("\n\nRelevant memory I found:");
+        for hit in context_pack.hits.iter().take(3) {
+            let content = hit.item.content.trim();
+            let snippet = if content.chars().count() > 220 {
+                let mut shortened = content.chars().take(220).collect::<String>();
+                shortened.push_str("...");
+                shortened
+            } else {
+                content.to_string()
+            };
+            reply.push_str(&format!(
+                "\n- [{:?}, score {:.2}] {}",
+                hit.item.kind, hit.score, snippet
+            ));
+        }
+    }
+
+    if looks_like_agent_request(message) {
+        reply.push_str("\n\nThis sounds like it may eventually become agent work. I will keep it in the conversation for now; launching a background agent should be a separate explicit action tied to a project.");
+    }
+
+    reply
+}
+
+fn looks_like_agent_request(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    [
+        "запусти",
+        "сделай",
+        "почини",
+        "реализуй",
+        "агент",
+        "agent",
+        "run",
+        "implement",
+        "fix",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 fn parse_schedule_kind(value: &str) -> Result<ScheduleKind> {

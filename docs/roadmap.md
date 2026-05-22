@@ -260,8 +260,9 @@ Tasks:
 
 ## Priority 1B: Project Library and Friendly Admin UX
 
-Status: In progress. Chat-first shell and job-status chat follow-up are active;
-backend project library workflows remain.
+Status: In progress. Chat-first shell is active and `/api/chat` is separated
+from background agent jobs; backend project library workflows and real chat
+model integration remain.
 
 Goal: make Librarian feel like a project library first, and hide low-level
 agent dispatch mechanics until they are needed.
@@ -279,10 +280,15 @@ Tasks:
 - Keep low-level dispatch fields such as provider, project id, secret grant
   token, and network mode out of the main chat composer. First pass done with
   Codex as the default MVP provider and the selected/first project as context.
-- Convert queued-job chat into a friendlier live conversation: show worker
-  progress and final result in the thread, and make it clear when the worker is
-  not running. First polling-based pass done; later work should stream richer
-  agent output and artifacts into expandable chat blocks.
+- Keep Librarian chat as a normal AI conversation surface, usable without a
+  specific project. First pass now stores/retrieves global or project-scoped
+  memory and does not spawn background jobs.
+- Add a dedicated chat model path for Librarian itself, separate from
+  background coding agents. Until this is connected, the MVP responder should
+  stay explicit about using local memory context rather than pretending an agent
+  has run.
+- Move background agent launch into explicit project actions and command blocks,
+  so agents can run without interrupting the Librarian conversation.
 - Define the project library model: Markdown project memory folders live under
   `Librarian/Library/projects/{ProjectName}` by default, and each can attach to an
   external working directory mounted into agent containers.
