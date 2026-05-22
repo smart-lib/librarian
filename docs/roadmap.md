@@ -288,6 +288,9 @@ Tasks:
 - Keep Librarian chat as a normal AI conversation surface, usable without a
   specific project. First pass now stores/retrieves global or project-scoped
   memory and does not spawn background jobs.
+- Polish the main chat shell for actual conversation: full-width thread and
+  prompt input, Enter-to-send with Ctrl+Enter newline, floating corner controls,
+  and a centered pull-tab identity marker. First pass done.
 - Add a dedicated chat model path for Librarian itself, separate from
   background coding agents. Until this is connected, the MVP responder should
   stay explicit about using local memory context rather than pretending an agent

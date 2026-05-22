@@ -112,45 +112,64 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       height: 100dvh;
       min-height: 560px;
       display: grid;
-      grid-template-rows: 58px minmax(0, 1fr) auto;
+      grid-template-rows: minmax(0, 1fr) auto;
       overflow: hidden;
     }
     .topbar {
-      display: grid;
-      grid-template-columns: 64px minmax(0, 1fr) 64px;
-      align-items: center;
-      border-bottom: 1px solid var(--line);
-      background: rgba(18, 22, 25, .96);
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 6;
+      height: 64px;
+      pointer-events: none;
     }
     .brand {
-      justify-self: center;
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      min-width: 210px;
+      padding: 8px 22px 10px;
+      border: 1px solid var(--line);
+      border-top: 0;
+      border-radius: 0 0 18px 18px;
+      background: rgba(18, 22, 25, .96);
+      box-shadow: var(--shadow);
       text-align: center;
       line-height: 1.2;
       font-weight: 800;
+      pointer-events: auto;
     }
     .brand span {
       display: block;
       margin-top: 2px;
-      color: var(--muted);
+      color: var(--accent);
       font-size: 11px;
-      font-weight: 500;
+      font-weight: 700;
     }
     .icon-button {
+      position: absolute;
+      top: 10px;
       width: 44px;
       height: 44px;
       min-height: 44px;
-      margin: 0 auto;
       padding: 0;
       display: grid;
       place-items: center;
       background: transparent;
       border-color: transparent;
       color: var(--muted);
+      pointer-events: auto;
+      transition: color .16s ease, transform .18s cubic-bezier(.2, 1.4, .4, 1);
     }
+    #settings-open { left: 12px; }
+    #projects-open { right: 12px; }
     .icon-button:hover, .icon-button:focus-visible {
-      color: var(--text);
-      background: var(--panel-2);
-      border-color: var(--line);
+      color: var(--accent);
+      background: transparent;
+      border-color: transparent;
+      transform: translateY(-2px) scale(1.08);
       outline: none;
     }
     .settings-icon, .map-icon {
@@ -204,18 +223,18 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .chat-log {
       min-height: 0;
       overflow: auto;
-      padding: 28px clamp(24px, 6vw, 90px);
+      padding: 86px 18px 28px;
       scroll-behavior: smooth;
     }
     .thread {
-      width: min(920px, 100%);
-      margin: 0 auto;
+      width: 100%;
+      margin: 0;
       display: flex;
       flex-direction: column;
       gap: 14px;
     }
     .message {
-      max-width: min(760px, 92%);
+      max-width: 100%;
       padding: 13px 15px;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -238,19 +257,17 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .composer {
       border-top: 1px solid var(--line);
       background: rgba(18, 22, 25, .98);
-      padding: 14px clamp(18px, 5vw, 72px) 16px;
+      padding: 12px 14px 14px;
     }
     .composer-inner {
-      width: min(920px, 100%);
-      margin: 0 auto;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) 92px;
-      gap: 10px;
-      align-items: end;
+      width: 100%;
+      margin: 0;
+      display: block;
     }
     #goal-input {
-      height: 76px;
-      max-height: 160px;
+      height: 112px;
+      max-height: 38vh;
+      resize: vertical;
     }
     .overlay {
       position: fixed;
@@ -265,8 +282,16 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       display: grid;
       grid-template-columns: 64px minmax(0, 1fr) 64px;
       align-items: center;
+      position: relative;
       border-bottom: 1px solid var(--line);
       background: rgba(18, 22, 25, .96);
+    }
+    .overlay-head .icon-button {
+      position: static;
+      margin: 0 auto;
+    }
+    .overlay-head .icon-button:hover, .overlay-head .icon-button:focus-visible {
+      transform: none;
     }
     .overlay-title {
       justify-self: center;
@@ -364,10 +389,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     @media (max-width: 900px), (max-height: 600px) {
       html, body { min-width: 720px; min-height: 500px; }
       .app { min-height: 500px; }
-      .chat-log { padding: 18px; }
+      .chat-log { padding: 78px 12px 18px; }
       .composer { padding: 10px 12px; }
       .overlay-body { grid-template-columns: 180px minmax(0, 1fr); }
-      #goal-input { height: 64px; }
+      #goal-input { height: 88px; }
     }
   </style>
 </head>
@@ -375,7 +400,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
   <div class="app">
     <header class="topbar">
       <button id="settings-open" class="icon-button" type="button" aria-label="Settings" title="Settings"><span class="settings-icon"></span></button>
-      <div class="brand">Librarian<span id="context-line">localhost __BIND__</span></div>
+      <div class="brand">Librarian<span id="context-line">Smart. Silent. Steady.</span></div>
       <button id="projects-open" class="icon-button" type="button" aria-label="Projects" title="Projects"><span class="map-icon"></span></button>
     </header>
     <main id="chat-log" class="chat-log">
@@ -386,7 +411,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     <form id="chat-form" class="composer" autocomplete="off">
       <div class="composer-inner">
         <textarea id="goal-input" name="goal" placeholder="Message Librarian" autocomplete="off" required></textarea>
-        <button id="send-button" type="submit">Send</button>
       </div>
     </form>
   </div>
@@ -500,8 +524,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         renderContext();
       }
       function renderContext() {
-        const project = activeProjectName();
-        el('context-line').textContent = project ? `project: ${project}` : 'global library';
+        el('context-line').textContent = 'Smart. Silent. Steady.';
       }
       function renderOverview() {
         const health = state.health || {};
@@ -582,7 +605,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       qsa('.tab-button').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab)));
       el('chat-form').addEventListener('submit', submitChat);
       el('goal-input').addEventListener('keydown', event => {
-        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+          event.preventDefault();
           el('chat-form').requestSubmit();
         }
       });
