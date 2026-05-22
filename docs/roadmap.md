@@ -405,8 +405,9 @@ Tool groups:
   system events.
 - Markdown content tools for user content under `Librarian/Library`: read,
   create, edit, append, summarize, and reorganize `.md` notes. First API pass
-  supports whole-file read/write for `.md` under `Library`; safer patch/section
-  editing remains.
+  supports whole-file read/write for `.md` under `Library`; second pass adds
+  range reads, line-range cut/replace, append, find, cut-first-match, and
+  replace-first-match. Safer section-aware Markdown editing remains.
 - Memory tools: write durable facts, decisions, instructions, preferences,
   status notes, and run observations; update/supersede/contradict older memory
   with audit trail.
@@ -432,9 +433,9 @@ Slash commands:
 
 - Add a command dispatcher before LLM invocation for commands such as
   `/remember`, `/project`, `/note`, `/move`, `/rename`, `/delete`, `/agent`,
-  `/preflight`, `/settings`, and `/help`. First pass supports `/library`,
-  `/mkdir`, `/touch`, `/read`, `/write`, `/move`/`/rename`, `/delete`, and
-  `/help` for library tools.
+  `/preflight`, `/settings`, and `/help`. First pass used root-level library
+  commands; second pass moves the primary surface under `/lib ...` and keeps old
+  root commands as deprecated compatibility shims.
 - Slash commands should execute without spending provider tokens when they are
   deterministic. First library-tool pass bypasses Codex inside `/api/chat`.
 - Slash-command results should still be added to the conversation/event history

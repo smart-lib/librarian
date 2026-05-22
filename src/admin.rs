@@ -2304,12 +2304,55 @@ async fn execute_slash_command(
     }
 
     let command = args[0].to_ascii_lowercase();
+    let result = if command == "lib" {
+        execute_library_slash_command(db, config, &args[1..]).await?
+    } else {
+        match command.as_str() {
+            "help" => slash_reply(
+                library_slash_help(),
+                serde_json::json!({ "command": command }),
+            ),
+            "library" => execute_library_slash_command(db, config, &["tree".to_string()]).await?,
+            "mkdir" | "touch" | "read" | "write" | "move" | "rename" | "delete" => {
+                let mut namespaced = vec![command.clone()];
+                namespaced.extend(args.iter().skip(1).cloned());
+                let mut reply = execute_library_slash_command(db, config, &namespaced).await?;
+                reply.reply = format!(
+                    "Deprecated root command. Prefer `/lib {}`.\n\n{}",
+                    namespaced.join(" "),
+                    reply.reply
+                );
+                reply
+            }
+            _ => slash_reply(
+                "Unknown slash command. Try /help.",
+                serde_json::json!({ "command": command, "status": "unknown" }),
+            ),
+        }
+    };
+
+    Ok(Some(result))
+}
+
+async fn execute_library_slash_command(
+    db: &Database,
+    config: &Config,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            library_slash_help(),
+            serde_json::json!({ "command": "lib" }),
+        ));
+    }
+
+    let command = args[0].to_ascii_lowercase();
     let result = match command.as_str() {
         "help" => slash_reply(
-            "Available commands:\n/library [library|projects] [depth]\n/mkdir <library|projects> <path>\n/touch <library|projects> <path>\n/read <library-md-path>\n/write <library-md-path> <content>\n/move <library|projects> <from> <to>\n/delete <library|projects> <path> --yes [--recursive]",
-            serde_json::json!({ "command": command }),
+            library_slash_help(),
+            serde_json::json!({ "tool": "library", "command": command }),
         ),
-        "library" => {
+        "tree" => {
             let root = args
                 .get(1)
                 .map(|value| parse_library_root(value))
@@ -2330,7 +2373,7 @@ async fn execute_slash_command(
             };
             slash_reply(
                 &format!("Library tree loaded: {} root(s).", roots.len()),
-                serde_json::json!({ "command": command, "roots": roots }),
+                serde_json::json!({ "tool": "library", "command": command, "roots": roots }),
             )
         }
         "mkdir" => {
@@ -2344,7 +2387,7 @@ async fn execute_slash_command(
             .await?;
             slash_reply(
                 &format!("Created folder in {:?}: {}", root, tool_path.path),
-                serde_json::json!({ "command": command, "root": root, "path": tool_path.path }),
+                serde_json::json!({ "tool": "library", "command": command, "root": root, "path": tool_path.path }),
             )
         }
         "touch" => {
@@ -2358,25 +2401,31 @@ async fn execute_slash_command(
             .await?;
             slash_reply(
                 &format!("Created empty file in {:?}: {}", root, tool_path.path),
-                serde_json::json!({ "command": command, "root": root, "path": tool_path.path }),
+                serde_json::json!({ "tool": "library", "command": command, "root": root, "path": tool_path.path }),
             )
         }
         "read" => {
             let path = args
                 .get(1)
                 .ok_or_else(|| anyhow::anyhow!("Usage: /read <library-md-path>"))?;
-            let content = library_tools::read_markdown(config, path)?;
+            let content = if args.len() >= 4 {
+                let start = parse_line_number(&args[2])?;
+                let end = parse_line_number(&args[3])?;
+                library_tools::read_markdown_lines(config, path, start, end)?.content
+            } else {
+                library_tools::read_markdown(config, path)?
+            };
             slash_reply(
                 &format!("Read `{path}`:\n\n{content}"),
-                serde_json::json!({ "command": command, "root": "library", "path": path }),
+                serde_json::json!({ "tool": "library", "command": command, "root": "library", "path": path }),
             )
         }
-        "write" => {
-            let path = args
-                .get(1)
-                .ok_or_else(|| anyhow::anyhow!("Usage: /write <library-md-path> <content>"))?;
+        "write" | "write-overwrite" => {
+            let path = args.get(1).ok_or_else(|| {
+                anyhow::anyhow!("Usage: /lib write-overwrite <library-md-path> <content>")
+            })?;
             if args.len() < 3 {
-                anyhow::bail!("Usage: /write <library-md-path> <content>");
+                anyhow::bail!("Usage: /lib write-overwrite <library-md-path> <content>");
             }
             let content = args[2..].join(" ");
             let tool_path = library_tools::write_markdown(config, path, &content)?;
@@ -2387,13 +2436,166 @@ async fn execute_slash_command(
             )
             .await?;
             slash_reply(
-                &format!("Wrote Markdown note: {}", tool_path.path),
-                serde_json::json!({ "command": command, "root": "library", "path": tool_path.path }),
+                &format!("Overwrote Markdown note: {}", tool_path.path),
+                serde_json::json!({ "tool": "library", "command": command, "root": "library", "path": tool_path.path }),
+            )
+        }
+        "append" => {
+            let path = args
+                .get(1)
+                .ok_or_else(|| anyhow::anyhow!("Usage: /lib append <library-md-path> <content>"))?;
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /lib append <library-md-path> <content>");
+            }
+            let content = args[2..].join(" ");
+            let tool_path = library_tools::append_markdown(config, path, &content)?;
+            log_slash_library_event(
+                db,
+                "append_markdown",
+                serde_json::json!({ "root": "library", "path": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Appended to Markdown note: {}", tool_path.path),
+                serde_json::json!({ "tool": "library", "command": command, "root": "library", "path": tool_path.path }),
+            )
+        }
+        "read-lines" => {
+            let path = args.get(1).ok_or_else(|| {
+                anyhow::anyhow!("Usage: /lib read-lines <library-md-path> <start> <end>")
+            })?;
+            if args.len() < 4 {
+                anyhow::bail!("Usage: /lib read-lines <library-md-path> <start> <end>");
+            }
+            let slice = library_tools::read_markdown_lines(
+                config,
+                path,
+                parse_line_number(&args[2])?,
+                parse_line_number(&args[3])?,
+            )?;
+            slash_reply(
+                &format!(
+                    "Read `{}` lines {}-{} of {}:\n\n{}",
+                    slice.path, slice.start_line, slice.end_line, slice.total_lines, slice.content
+                ),
+                serde_json::json!({ "tool": "library", "command": command, "slice": slice }),
+            )
+        }
+        "cut-lines" => {
+            let edit = slash_line_edit(
+                config,
+                &args,
+                None,
+                "/lib cut-lines <library-md-path> <start> <end>",
+            )?;
+            log_slash_library_event(
+                db,
+                "cut_markdown_lines",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "Cut `{}` lines {}-{}:\n\n{}",
+                    edit.path, edit.start_line, edit.end_line, edit.removed
+                ),
+                serde_json::json!({ "tool": "library", "command": command, "edit": edit }),
+            )
+        }
+        "replace-lines" => {
+            if args.len() < 5 {
+                anyhow::bail!(
+                    "Usage: /lib replace-lines <library-md-path> <start> <end> <content>"
+                );
+            }
+            let replacement = args[4..].join(" ");
+            let edit = slash_line_edit(
+                config,
+                &args[..4],
+                Some(&replacement),
+                "/lib replace-lines <library-md-path> <start> <end> <content>",
+            )?;
+            log_slash_library_event(
+                db,
+                "replace_markdown_lines",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "Replaced `{}` lines {}-{}.",
+                    edit.path, edit.start_line, edit.end_line
+                ),
+                serde_json::json!({ "tool": "library", "command": command, "edit": edit }),
+            )
+        }
+        "find" => {
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /lib find <library-md-path> <query> [limit]");
+            }
+            let limit = args
+                .get(3)
+                .map(|value| value.parse::<usize>())
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("Invalid limit: {error}"))?
+                .unwrap_or(10);
+            let matches = library_tools::find_markdown(config, &args[1], &args[2], limit)?;
+            let mut reply = format!("Found {} match(es) in `{}`.", matches.len(), args[1]);
+            for item in &matches {
+                reply.push_str(&format!("\n{}: {}", item.line_number, item.line));
+            }
+            slash_reply(
+                &reply,
+                serde_json::json!({ "tool": "library", "command": command, "matches": matches }),
+            )
+        }
+        "cut-find" => {
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /lib cut-find <library-md-path> <query>");
+            }
+            let edit = library_tools::cut_first_markdown_match(config, &args[1], &args[2])?;
+            log_slash_library_event(
+                db,
+                "cut_markdown_match",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "Cut first match in `{}` at line {}:\n\n{}",
+                    edit.path, edit.start_line, edit.removed
+                ),
+                serde_json::json!({ "tool": "library", "command": command, "edit": edit }),
+            )
+        }
+        "replace-find" => {
+            if args.len() < 4 {
+                anyhow::bail!("Usage: /lib replace-find <library-md-path> <query> <content>");
+            }
+            let replacement = args[3..].join(" ");
+            let edit = library_tools::replace_first_markdown_match(
+                config,
+                &args[1],
+                &args[2],
+                &replacement,
+            )?;
+            log_slash_library_event(
+                db,
+                "replace_markdown_match",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "Replaced first match in `{}` at line {}.",
+                    edit.path, edit.start_line
+                ),
+                serde_json::json!({ "tool": "library", "command": command, "edit": edit }),
             )
         }
         "move" | "rename" => {
             if args.len() < 4 {
-                anyhow::bail!("Usage: /move <library|projects> <from> <to>");
+                anyhow::bail!("Usage: /lib move <library|projects> <from> <to>");
             }
             let root = parse_library_root(&args[1])?;
             let tool_path = library_tools::move_path(config, root, &args[2], &args[3])?;
@@ -2405,15 +2607,15 @@ async fn execute_slash_command(
             .await?;
             slash_reply(
                 &format!("Moved {:?} item to: {}", root, tool_path.path),
-                serde_json::json!({ "command": command, "root": root, "from": args[2], "to": tool_path.path }),
+                serde_json::json!({ "tool": "library", "command": command, "root": root, "from": args[2], "to": tool_path.path }),
             )
         }
         "delete" => {
             if args.len() < 4 || !args.iter().any(|arg| arg == "--yes") {
-                return Ok(Some(slash_reply(
-                    "Delete is destructive. Use: /delete <library|projects> <path> --yes [--recursive]",
-                    serde_json::json!({ "command": command, "status": "needs_explicit_confirmation" }),
-                )));
+                return Ok(slash_reply(
+                    "Delete is destructive. Use: /lib delete <library|projects> <path> --yes [--recursive]",
+                    serde_json::json!({ "tool": "library", "command": command, "status": "needs_explicit_confirmation" }),
+                ));
             }
             let root = parse_library_root(&args[1])?;
             let recursive = args.iter().any(|arg| arg == "--recursive");
@@ -2426,16 +2628,16 @@ async fn execute_slash_command(
             .await?;
             slash_reply(
                 &format!("Deleted {:?} item: {}", root, tool_path.path),
-                serde_json::json!({ "command": command, "root": root, "path": tool_path.path, "recursive": recursive }),
+                serde_json::json!({ "tool": "library", "command": command, "root": root, "path": tool_path.path, "recursive": recursive }),
             )
         }
         _ => slash_reply(
-            "Unknown slash command. Try /help.",
-            serde_json::json!({ "command": command, "status": "unknown" }),
+            "Unknown library command. Try /lib help.",
+            serde_json::json!({ "tool": "library", "command": command, "status": "unknown" }),
         ),
     };
 
-    Ok(Some(result))
+    Ok(result)
 }
 
 fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
@@ -2446,6 +2648,10 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
         trace: vec![trace],
         mode: "slash-command",
     }
+}
+
+fn library_slash_help() -> &'static str {
+    "Library commands live under /lib:\n/lib tree [library|projects] [depth]\n/lib mkdir <library|projects> <path>\n/lib touch <library|projects> <path>\n/lib read <library-md-path> [start] [end]\n/lib read-lines <library-md-path> <start> <end>\n/lib write-overwrite <library-md-path> <content>\n/lib append <library-md-path> <content>\n/lib cut-lines <library-md-path> <start> <end>\n/lib replace-lines <library-md-path> <start> <end> <content>\n/lib find <library-md-path> <query> [limit]\n/lib cut-find <library-md-path> <query>\n/lib replace-find <library-md-path> <query> <content>\n/lib move <library|projects> <from> <to>\n/lib delete <library|projects> <path> --yes [--recursive]"
 }
 
 fn slash_root_path_args(args: &[String]) -> Result<(LibraryRoot, &str)> {
@@ -2460,6 +2666,32 @@ fn parse_library_root(value: &str) -> Result<LibraryRoot> {
         "library" | "lib" => Ok(LibraryRoot::Library),
         "projects" | "project" => Ok(LibraryRoot::Projects),
         _ => anyhow::bail!("Root must be `library` or `projects`"),
+    }
+}
+
+fn parse_line_number(value: &str) -> Result<usize> {
+    value
+        .parse::<usize>()
+        .map_err(|error| anyhow::anyhow!("Invalid line number `{value}`: {error}"))
+}
+
+fn slash_line_edit(
+    config: &Config,
+    args: &[String],
+    replacement: Option<&str>,
+    usage: &str,
+) -> Result<library_tools::MarkdownEdit> {
+    if args.len() < 4 {
+        anyhow::bail!("Usage: {usage}");
+    }
+    let path = &args[1];
+    let start = parse_line_number(&args[2])?;
+    let end = parse_line_number(&args[3])?;
+    match replacement {
+        Some(replacement) => {
+            library_tools::replace_markdown_lines(config, path, start, end, replacement)
+        }
+        None => library_tools::cut_markdown_lines(config, path, start, end),
     }
 }
 

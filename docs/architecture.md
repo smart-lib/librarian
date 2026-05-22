@@ -141,12 +141,16 @@ integration is currently compatibility-level only: Markdown files, folders,
 frontmatter, and wikilinks. No Obsidian CLI or plugin API is required or invoked
 yet.
 
-Direct slash commands are dispatched before the LLM chat provider. The first
-library command set is `/library`, `/mkdir`, `/touch`, `/read`, `/write`,
-`/move`/`/rename`, `/delete`, and `/help`. Deterministic slash commands are
-logged into chat memory, and mutating library commands also write `library_tool`
-system events. Destructive delete requires an explicit `--yes` flag even though
-it is already inside the sandbox.
+Direct slash commands are dispatched before the LLM chat provider. Library
+commands live under the `/lib` namespace so future tool groups can have their
+own namespaces. The first library command set covers tree/folder/file
+operations, whole-note overwrite/append, range reads, line-range cut/replace,
+and search-based cut/replace. Whole-note overwrite is intentionally explicit as
+`/lib write-overwrite`; routine edits should use line or search operations so a
+large note does not need to be loaded and rewritten by the caller. Deterministic
+slash commands are logged into chat memory, and mutating library commands also
+write `library_tool` system events. Destructive delete requires an explicit
+`--yes` flag even though it is already inside the sandbox.
 
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
