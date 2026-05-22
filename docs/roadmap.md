@@ -420,14 +420,15 @@ Tool groups:
   `/remember <content>` as a fact shortcut, and `/mem recent [limit]` in the
   current chat scope.
 - Settings/prompt tools: inspect settings, propose changes, and apply only
-  after explicit user approval.
+  after explicit user approval. First settings slash pass supports
+  `/settings tool-permissions` and guarded
+  `/settings set-tool-permission <key> <auto|ask|deny> --yes`.
 - Background agent tools: create project-scoped agent jobs, preflight them, run
   worker actions, cancel/retry, and report results back into chat without
   blocking the conversation.
 
 Permission model:
 
-- Each tool has a policy: `auto`, `ask`, or `deny`.
 - Each tool has a policy: `auto`, `ask`, or `deny`. First persisted
   `[tool_permissions]` config is implemented for library, workspace, memory,
   settings, and agent-launch groups.
@@ -437,7 +438,8 @@ Permission model:
 - Memory writes can be `auto` for low-risk chat-derived notes but must expose
   what was remembered and allow correction.
 - Settings, prompt changes, auth, provider config, and background agent launch
-  default to `ask`.
+  default to `ask`. Tool-permission changes require both the `settings_change`
+  gate and an explicit slash confirmation flag.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
   First pass logs `tool_permission` decisions and mutating library/workspace
@@ -451,12 +453,14 @@ Slash commands:
   commands; second pass moves the library surface under `/lib ...`, removes
   project-folder operations from `/lib`, and adds `/work ...` for default
   working folders. Memory commands now live under `/mem ...` with `/remember`
-  as a shortcut.
+  as a shortcut. Settings inspection and tool-permission updates now live under
+  `/settings ...`.
 - Slash commands should execute without spending provider tokens when they are
   deterministic. First library-tool pass bypasses Codex inside `/api/chat`.
 - Slash-command results should still be added to the conversation/event history
   as context. First pass stores the command turn in memory and writes
-  `library_tool` system events for mutating commands.
+  `library_tool`, `workspace_tool`, `memory_tool`, and `settings_tool` events
+  for mutating commands.
 
 ## Priority 2: Prompt Builder and Instruction Authoring
 

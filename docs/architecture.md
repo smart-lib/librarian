@@ -172,6 +172,12 @@ when one is active or global memory otherwise. `/remember <content>` is a
 shortcut for a global/project-scoped fact. Memory writes pass through
 `tool_permissions.memory_write` and produce `memory_tool` system events.
 
+Settings inspection and guarded tool-permission updates use the `/settings`
+namespace. `/settings tool-permissions` reports the current policy matrix, while
+`/settings set-tool-permission <key> <auto|ask|deny> --yes` passes through
+`tool_permissions.settings_change`, persists `.cfg/config.toml`, and records a
+`settings_tool` event.
+
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
 `~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired

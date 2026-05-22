@@ -122,3 +122,6 @@ logs a `tool_permission` event. Destructive delete still requires an explicit
 
 Memory writes through `/mem remember` and `/remember` use the same policy gate
 via `tool_permissions.memory_write` and are logged as `memory_tool` events.
+Tool-permission changes are exposed through `/settings`, pass through
+`tool_permissions.settings_change`, require an explicit `--yes` confirmation,
+persist back to `.cfg/config.toml`, and are logged as `settings_tool` events.

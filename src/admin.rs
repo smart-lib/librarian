@@ -14,7 +14,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
 use crate::{
-    config::{Config, ToolPermissionPolicy},
+    config::{Config, ToolPermissionPolicy, ToolPermissionsConfig},
     db::Database,
     domain::{
         ContextPack, JobStatus, MemoryKind, MountMode, NetworkMode, Project, ScheduleKind,
@@ -2147,7 +2147,7 @@ async fn librarian_chat(
     memory::embed_item(&state.db, &config, &user_memory).await?;
 
     let chat_result = if let Some(result) =
-        execute_slash_command(&state.db, &config, project.as_ref(), &gated.content).await?
+        execute_slash_command(&state, &config, project.as_ref(), &gated.content).await?
     {
         result
     } else {
@@ -2298,7 +2298,7 @@ struct LibrarianChatDirective {
 }
 
 async fn execute_slash_command(
-    db: &Database,
+    state: &AppState,
     config: &Config,
     project: Option<&Project>,
     message: &str,
@@ -2309,31 +2309,35 @@ async fn execute_slash_command(
     let args = split_slash_args(command_line)?;
     if args.is_empty() {
         return Ok(Some(slash_reply(
-            "Available commands: /lib, /work, /mem, /remember, /help",
+            "Available commands: /lib, /work, /mem, /settings, /remember, /help",
             serde_json::json!({ "command": "empty" }),
         )));
     }
 
     let command = args[0].to_ascii_lowercase();
     let result = if command == "lib" {
-        execute_library_slash_command(db, config, &args[1..]).await?
+        execute_library_slash_command(&state.db, config, &args[1..]).await?
     } else if matches!(command.as_str(), "work" | "workspace") {
-        execute_workspace_slash_command(db, config, &args[1..]).await?
+        execute_workspace_slash_command(&state.db, config, &args[1..]).await?
     } else if matches!(command.as_str(), "mem" | "memory") {
-        execute_memory_slash_command(db, config, project, &args[1..]).await?
+        execute_memory_slash_command(&state.db, config, project, &args[1..]).await?
+    } else if matches!(command.as_str(), "settings" | "config") {
+        execute_settings_slash_command(state, config, &args[1..]).await?
     } else if command == "remember" {
         let mut memory_args = vec!["remember".to_string(), "fact".to_string()];
         memory_args.extend(args.iter().skip(1).cloned());
-        execute_memory_slash_command(db, config, project, &memory_args).await?
+        execute_memory_slash_command(&state.db, config, project, &memory_args).await?
     } else {
         match command.as_str() {
             "help" => slash_reply(
                 slash_help(),
                 serde_json::json!({ "command": command }),
             ),
-            "library" => execute_library_slash_command(db, config, &["tree".to_string()]).await?,
+            "library" => {
+                execute_library_slash_command(&state.db, config, &["tree".to_string()]).await?
+            }
             _ => slash_reply(
-                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem.",
+                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; settings commands live under /settings.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -2748,7 +2752,7 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
 }
 
 fn slash_help() -> &'static str {
-    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/mem help - durable memory tools\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/mem help - durable memory tools\n/settings help - inspect and change guarded settings\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
 }
 
 fn library_slash_help() -> &'static str {
@@ -3009,6 +3013,167 @@ async fn execute_memory_slash_command(
 
 fn memory_slash_help() -> &'static str {
     "Memory commands live under /mem:\n/mem remember <fact|decision|instruction|status|summary> <content>\n/remember <content> - shortcut for /mem remember fact <content>\n/mem recent [limit]\n\nMemory is stored in the current chat scope: selected project when present, otherwise global."
+}
+
+async fn execute_settings_slash_command(
+    state: &AppState,
+    config: &Config,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            settings_slash_help(),
+            serde_json::json!({ "command": "settings" }),
+        ));
+    }
+
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            settings_slash_help(),
+            serde_json::json!({ "tool": "settings", "command": command }),
+        ),
+        "tool-permissions" | "permissions" => slash_reply(
+            &format_tool_permissions(&config.tool_permissions),
+            serde_json::json!({
+                "tool": "settings",
+                "command": command,
+                "tool_permissions": config.tool_permissions,
+            }),
+        ),
+        "set-tool-permission" | "set-permission" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            if args.len() < 4 {
+                anyhow::bail!("Usage: /settings set-tool-permission <key> <auto|ask|deny> --yes");
+            }
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                return Ok(slash_reply(
+                    "Settings changes require explicit confirmation. Use: /settings set-tool-permission <key> <auto|ask|deny> --yes",
+                    serde_json::json!({
+                        "tool": "settings",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                    }),
+                ));
+            }
+            let key = args[1].as_str();
+            let policy = parse_tool_permission_policy(&args[2])?;
+            let config_path = {
+                let mut writable_config = state.config.write().await;
+                set_tool_permission(&mut writable_config.tool_permissions, key, policy)?;
+                writable_config.save()?;
+                writable_config.config_path.clone()
+            };
+            state
+                .db
+                .add_system_event(
+                    "settings_tool",
+                    serde_json::json!({
+                        "action": "set_tool_permission",
+                        "source": "slash-command",
+                        "key": key,
+                        "policy": policy,
+                        "config_path": config_path,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!(
+                    "Updated tool permission `{key}` to `{}`.",
+                    policy_label(policy)
+                ),
+                serde_json::json!({
+                    "tool": "settings",
+                    "command": command,
+                    "key": key,
+                    "policy": policy,
+                }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown settings command. Try /settings help.",
+            serde_json::json!({ "tool": "settings", "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(result)
+}
+
+fn settings_slash_help() -> &'static str {
+    "Settings commands live under /settings:\n/settings tool-permissions - show current tool permission policies\n/settings set-tool-permission <key> <auto|ask|deny> --yes - update one permission\n\nPermission keys: library_read, library_create, library_edit_markdown, library_move, library_delete, workspace_create, workspace_move, workspace_delete, memory_write, settings_change, agent_launch."
+}
+
+fn format_tool_permissions(permissions: &ToolPermissionsConfig) -> String {
+    format!(
+        "Tool permissions:\n\
+library_read = {}\n\
+library_create = {}\n\
+library_edit_markdown = {}\n\
+library_move = {}\n\
+library_delete = {}\n\
+workspace_create = {}\n\
+workspace_move = {}\n\
+workspace_delete = {}\n\
+memory_write = {}\n\
+settings_change = {}\n\
+agent_launch = {}",
+        policy_label(permissions.library_read),
+        policy_label(permissions.library_create),
+        policy_label(permissions.library_edit_markdown),
+        policy_label(permissions.library_move),
+        policy_label(permissions.library_delete),
+        policy_label(permissions.workspace_create),
+        policy_label(permissions.workspace_move),
+        policy_label(permissions.workspace_delete),
+        policy_label(permissions.memory_write),
+        policy_label(permissions.settings_change),
+        policy_label(permissions.agent_launch),
+    )
+}
+
+fn parse_tool_permission_policy(value: &str) -> Result<ToolPermissionPolicy> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(ToolPermissionPolicy::Auto),
+        "ask" => Ok(ToolPermissionPolicy::Ask),
+        "deny" => Ok(ToolPermissionPolicy::Deny),
+        _ => anyhow::bail!("Tool permission policy must be auto, ask, or deny"),
+    }
+}
+
+fn set_tool_permission(
+    permissions: &mut ToolPermissionsConfig,
+    key: &str,
+    policy: ToolPermissionPolicy,
+) -> Result<()> {
+    match key.trim().to_ascii_lowercase().as_str() {
+        "library_read" => permissions.library_read = policy,
+        "library_create" => permissions.library_create = policy,
+        "library_edit_markdown" => permissions.library_edit_markdown = policy,
+        "library_move" => permissions.library_move = policy,
+        "library_delete" => permissions.library_delete = policy,
+        "workspace_create" => permissions.workspace_create = policy,
+        "workspace_move" => permissions.workspace_move = policy,
+        "workspace_delete" => permissions.workspace_delete = policy,
+        "memory_write" => permissions.memory_write = policy,
+        "settings_change" => permissions.settings_change = policy,
+        "agent_launch" => permissions.agent_launch = policy,
+        _ => anyhow::bail!("Unknown tool permission key `{key}`. Try /settings tool-permissions."),
+    }
+    Ok(())
+}
+
+fn policy_label(policy: ToolPermissionPolicy) -> &'static str {
+    match policy {
+        ToolPermissionPolicy::Auto => "auto",
+        ToolPermissionPolicy::Ask => "ask",
+        ToolPermissionPolicy::Deny => "deny",
+    }
 }
 
 fn parse_memory_kind_token(value: &str) -> Result<MemoryKind> {
@@ -4302,5 +4467,43 @@ mod tests {
     #[test]
     fn rejects_unclosed_slash_command_quotes() {
         assert!(split_slash_args(r#"read "Project Shelf/Book Notes.md"#).is_err());
+    }
+
+    #[test]
+    fn parses_tool_permission_policy_tokens() {
+        assert_eq!(
+            parse_tool_permission_policy("auto").expect("auto"),
+            ToolPermissionPolicy::Auto
+        );
+        assert_eq!(
+            parse_tool_permission_policy("ASK").expect("ask"),
+            ToolPermissionPolicy::Ask
+        );
+        assert_eq!(
+            parse_tool_permission_policy("deny").expect("deny"),
+            ToolPermissionPolicy::Deny
+        );
+        assert!(parse_tool_permission_policy("maybe").is_err());
+    }
+
+    #[test]
+    fn sets_tool_permission_by_key() {
+        let mut permissions = ToolPermissionsConfig::default();
+        set_tool_permission(
+            &mut permissions,
+            "library_edit_markdown",
+            ToolPermissionPolicy::Auto,
+        )
+        .expect("set permission");
+        assert_eq!(
+            permissions.library_edit_markdown,
+            ToolPermissionPolicy::Auto
+        );
+        assert!(set_tool_permission(
+            &mut permissions,
+            "unknown_permission",
+            ToolPermissionPolicy::Deny,
+        )
+        .is_err());
     }
 }
