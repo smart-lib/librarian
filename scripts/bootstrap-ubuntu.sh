@@ -164,6 +164,25 @@ cp "$repo_root/target/release/librarian" "$install_bin"
 chmod +x "$install_bin"
 
 bin="$install_bin"
+version_file="$librarian_home/.app/version.json"
+installed_version="$("$bin" --version 2>/dev/null | awk '{print $2}')"
+git_ref="${LIBRARIAN_INSTALL_REF:-$(git -C "$repo_root" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+git_commit="$(git -C "$repo_root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+python3 - "$version_file" "$installed_version" "$git_ref" "$git_commit" "$installed_at" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+path.write_text(json.dumps({
+    "version": sys.argv[2] or "unknown",
+    "git_ref": sys.argv[3] or "unknown",
+    "git_commit": sys.argv[4] or "unknown",
+    "installed_at": sys.argv[5],
+}, indent=2) + "\n")
+PY
 link_bin="${LIBRARIAN_LINK_BIN:-$HOME/.local/bin/librarian}"
 system_link_bin="${LIBRARIAN_SYSTEM_LINK_BIN:-/usr/local/bin/librarian}"
 mkdir -p "$(dirname "$link_bin")"

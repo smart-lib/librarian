@@ -75,7 +75,7 @@ fi
 git -C "$source_dir" checkout "$ref"
 git -C "$source_dir" pull --ff-only origin "$ref" || true
 
-"$source_dir/scripts/bootstrap-ubuntu.sh" --yes --home "$install_root" "${bootstrap_args[@]}"
+LIBRARIAN_INSTALL_REF="$ref" "$source_dir/scripts/bootstrap-ubuntu.sh" --yes --home "$install_root" "${bootstrap_args[@]}"
 
 if [[ "$keep_source" -ne 1 ]]; then
   rm -rf "$source_dir"

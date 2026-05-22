@@ -185,6 +185,8 @@ next.
   builds in `Librarian/.app/source`, installs the binary to
   `Librarian/.app/bin/librarian`, and removes the checkout unless explicitly
   preserved.
+- Ubuntu installs now record `.app/version.json`, and `doctor` reports the
+  running version plus install metadata and prints the `upgrade` command.
 - Doctor output now highlights the overall status, distinguishes state root
   from launch context, and prints a single next important step plus remaining
   blockers.
@@ -228,6 +230,9 @@ Tasks:
 - Add an Ubuntu golden-path bootstrap: one command after clone, plus a README
   one-line starter that installs Git, clones the default branch, and runs silent
   setup.
+- Add a first `upgrade` command that reuses the Ubuntu starter, preserves the
+  Librarian root, and records install metadata. First source-build pass done;
+  later release-binary upgrades should keep the same command.
 
 Dependencies:
 

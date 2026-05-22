@@ -115,7 +115,18 @@ CODEX_HOME="$HOME/Librarian/.cfg/codex-home" codex
 The one-line installer uses a temporary source checkout under
 `~/Librarian/.app/source`, builds the binary, installs it into
 `~/Librarian/.app/bin`, then removes the checkout. Normal use does not require a
-Git working tree.
+Git working tree. It also writes install metadata to
+`~/Librarian/.app/version.json`.
+
+Upgrade an installed Ubuntu/WSL Librarian with:
+
+```bash
+librarian --home "$HOME/Librarian" upgrade
+```
+
+Use `--nightly` to upgrade from `develop`, or `--ref <branch-or-tag>` for a
+specific ref. `doctor` prints the same upgrade command and reports the running
+binary version plus the recorded install metadata.
 
 Default installed layout:
 

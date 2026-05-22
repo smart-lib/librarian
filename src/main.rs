@@ -16,6 +16,7 @@ mod vault;
 mod worker;
 
 use std::{
+    fs,
     io::{self, Write},
     path::PathBuf,
 };
@@ -35,6 +36,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug, Parser)]
 #[command(name = "librarian")]
+#[command(version)]
 #[command(about = "Local-first harness for containerized coding agents")]
 struct Cli {
     #[arg(long, env = "LIBRARIAN_HOME")]
@@ -62,6 +64,12 @@ enum Command {
     },
     Init,
     Doctor,
+    Upgrade {
+        #[arg(long)]
+        nightly: bool,
+        #[arg(long = "ref")]
+        reference: Option<String>,
+    },
     Admin {
         #[arg(long)]
         bind: Option<String>,
@@ -626,6 +634,37 @@ async fn build_agent_image_with_config(config: &Config, no_codex: bool) -> Resul
     Ok(())
 }
 
+async fn run_upgrade(config: &Config, nightly: bool, reference: Option<&str>) -> Result<()> {
+    if cfg!(windows) {
+        anyhow::bail!(
+            "The built-in upgrade command currently supports Ubuntu/Linux installs. Re-run the Windows bootstrap script for now."
+        );
+    }
+    let mut command = format!(
+        "LIBRARIAN_ROOT={} wget -qO- https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/install-ubuntu.sh | bash -s -- --dir {}",
+        shell_path(&config.home),
+        shell_path(&config.home)
+    );
+    if nightly {
+        command.push_str(" --nightly");
+    }
+    if let Some(reference) = reference {
+        command.push_str(" --ref ");
+        command.push_str(&shell_word(reference));
+    }
+    println!("Running Librarian upgrade:");
+    println!("  {command}");
+    let status = TokioCommand::new("sh")
+        .arg("-lc")
+        .arg(&command)
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("Librarian upgrade failed with status {status}");
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -663,6 +702,9 @@ async fn main() -> Result<()> {
         }
         Command::Doctor => {
             run_doctor(&config).await?;
+        }
+        Command::Upgrade { nightly, reference } => {
+            run_upgrade(&config, nightly, reference.as_deref()).await?;
         }
         Command::Admin { bind } => {
             config.ensure_layout()?;
@@ -1668,6 +1710,7 @@ async fn run_doctor(config: &Config) -> Result<()> {
     config.ensure_layout()?;
 
     let mut checks = vec![
+        DoctorCheck::ok("librarian version", version_detail(config)),
         DoctorCheck::ok("librarian root (state)", config.home.display().to_string()),
         DoctorCheck::ok(
             "launch context (cwd)",
@@ -1802,6 +1845,9 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
         println!("  {command} admin");
         println!("  {command} project add <path>");
         println!("  {command} worker --once");
+        println!();
+        println!("Upgrade:");
+        println!("  {command} upgrade");
         return;
     }
 
@@ -1824,6 +1870,9 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
         println!("Then:");
         println!("  {command} doctor");
         println!("  {command} admin");
+        println!();
+        println!("Upgrade:");
+        println!("  {command} upgrade");
         return;
     }
 
@@ -1852,6 +1901,9 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
     println!("After blockers are fixed:");
     println!("  {command} doctor");
     println!("  {command} admin");
+    println!();
+    println!("Upgrade:");
+    println!("  {command} upgrade");
 }
 
 fn doctor_command_prefix(config: &Config) -> String {
@@ -1877,6 +1929,40 @@ fn installed_app_binary(config: &Config) -> bool {
     paths_equivalent(&exe, &expected)
 }
 
+fn version_detail(config: &Config) -> String {
+    let running = env!("CARGO_PKG_VERSION");
+    let metadata_path = config.home.join(".app").join("version.json");
+    let Ok(text) = fs::read_to_string(&metadata_path) else {
+        return format!(
+            "running={running}; install metadata missing at {}",
+            metadata_path.display()
+        );
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return format!(
+            "running={running}; install metadata is not valid JSON at {}",
+            metadata_path.display()
+        );
+    };
+    let installed = value
+        .get("version")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let git_ref = value
+        .get("git_ref")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let commit = value
+        .get("git_commit")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    let installed_at = value
+        .get("installed_at")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    format!("running={running}; installed={installed}; ref={git_ref}; commit={commit}; installed_at={installed_at}")
+}
+
 fn paths_equivalent(left: &std::path::Path, right: &std::path::Path) -> bool {
     match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
@@ -1893,6 +1979,17 @@ fn shell_path(path: &std::path::Path) -> String {
         format!("\"{}\"", text.replace('"', "\\\""))
     } else {
         text
+    }
+}
+
+fn shell_word(text: &str) -> String {
+    if text
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/'))
+    {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
     }
 }
 
