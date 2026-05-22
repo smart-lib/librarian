@@ -2146,30 +2146,31 @@ async fn librarian_chat(
         .await?;
     memory::embed_item(&state.db, &config, &user_memory).await?;
 
-    let chat_result =
-        if let Some(result) = execute_slash_command(&state.db, &config, &gated.content).await? {
-            result
-        } else {
-            let initial_context_pack = memory::retrieve_context_with_config(
-                &state.db,
-                Some(&config),
-                memory::RetrievalRequest {
-                    query: gated.content.clone(),
-                    project_id,
-                    activity_id: None,
-                    limit: config.chat.memory_hit_limit,
-                },
-            )
-            .await?;
-            run_librarian_chat_loop(
-                &state.db,
-                &config,
-                &gated.content,
-                project.as_ref(),
-                initial_context_pack,
-            )
-            .await?
-        };
+    let chat_result = if let Some(result) =
+        execute_slash_command(&state.db, &config, project.as_ref(), &gated.content).await?
+    {
+        result
+    } else {
+        let initial_context_pack = memory::retrieve_context_with_config(
+            &state.db,
+            Some(&config),
+            memory::RetrievalRequest {
+                query: gated.content.clone(),
+                project_id,
+                activity_id: None,
+                limit: config.chat.memory_hit_limit,
+            },
+        )
+        .await?;
+        run_librarian_chat_loop(
+            &state.db,
+            &config,
+            &gated.content,
+            project.as_ref(),
+            initial_context_pack,
+        )
+        .await?
+    };
     let reply = chat_result.reply;
     let assistant_memory = state
         .db
@@ -2299,6 +2300,7 @@ struct LibrarianChatDirective {
 async fn execute_slash_command(
     db: &Database,
     config: &Config,
+    project: Option<&Project>,
     message: &str,
 ) -> Result<Option<LibrarianChatResult>> {
     let Some(command_line) = message.trim().strip_prefix('/') else {
@@ -2307,7 +2309,7 @@ async fn execute_slash_command(
     let args = split_slash_args(command_line)?;
     if args.is_empty() {
         return Ok(Some(slash_reply(
-            "Available commands: /lib, /work, /help",
+            "Available commands: /lib, /work, /mem, /remember, /help",
             serde_json::json!({ "command": "empty" }),
         )));
     }
@@ -2317,6 +2319,12 @@ async fn execute_slash_command(
         execute_library_slash_command(db, config, &args[1..]).await?
     } else if matches!(command.as_str(), "work" | "workspace") {
         execute_workspace_slash_command(db, config, &args[1..]).await?
+    } else if matches!(command.as_str(), "mem" | "memory") {
+        execute_memory_slash_command(db, config, project, &args[1..]).await?
+    } else if command == "remember" {
+        let mut memory_args = vec!["remember".to_string(), "fact".to_string()];
+        memory_args.extend(args.iter().skip(1).cloned());
+        execute_memory_slash_command(db, config, project, &memory_args).await?
     } else {
         match command.as_str() {
             "help" => slash_reply(
@@ -2325,7 +2333,7 @@ async fn execute_slash_command(
             ),
             "library" => execute_library_slash_command(db, config, &["tree".to_string()]).await?,
             _ => slash_reply(
-                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work.",
+                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -2740,7 +2748,7 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
 }
 
 fn slash_help() -> &'static str {
-    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/mem help - durable memory tools\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
 }
 
 fn library_slash_help() -> &'static str {
@@ -2884,6 +2892,137 @@ async fn execute_workspace_slash_command(
 
 fn workspace_slash_help() -> &'static str {
     "Workspace commands live under /work and operate only inside Librarian/Projects:\n/work tree [depth]\n/work mkdir <path>\n/work touch <path>\n/work move <from> <to>\n/work delete <path> --yes [--recursive]\n\nUse this for default implementation/product folders, not for library knowledge."
+}
+
+async fn execute_memory_slash_command(
+    db: &Database,
+    config: &Config,
+    project: Option<&Project>,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            memory_slash_help(),
+            serde_json::json!({ "command": "mem" }),
+        ));
+    }
+
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            memory_slash_help(),
+            serde_json::json!({ "tool": "memory", "command": command }),
+        ),
+        "remember" | "add" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "memory.write",
+                config.tool_permissions.memory_write,
+            )
+            .await?;
+            if args.len() < 3 {
+                anyhow::bail!(
+                    "Usage: /mem remember <fact|decision|instruction|status|summary> <content>"
+                );
+            }
+            let kind = parse_memory_kind_token(&args[1])?;
+            let content = args[2..].join(" ");
+            let item = db
+                .add_memory_item(
+                    project.map(|project| project.id),
+                    None,
+                    kind,
+                    None,
+                    &content,
+                    Some("admin:slash-memory"),
+                    serde_json::json!({
+                        "tool": "memory",
+                        "command": command,
+                        "scope": if project.is_some() { "project" } else { "global" },
+                        "project": project.map(|project| project.name.clone()),
+                    }),
+                )
+                .await?;
+            memory::embed_item(db, config, &item).await?;
+            db.add_system_event(
+                "memory_tool",
+                serde_json::json!({
+                    "action": "remember",
+                    "source": "slash-command",
+                    "memory_id": item.id,
+                    "kind": item.kind,
+                    "scope": if project.is_some() { "project" } else { "global" },
+                    "project": project.map(|project| project.name.clone()),
+                }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Remembered {:?}: {}", item.kind, item.content),
+                serde_json::json!({
+                    "tool": "memory",
+                    "command": command,
+                    "memory_id": item.id,
+                    "kind": item.kind,
+                    "scope": if project.is_some() { "project" } else { "global" },
+                }),
+            )
+        }
+        "recent" => {
+            let limit = args
+                .get(1)
+                .map(|value| value.parse::<i64>())
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("Invalid limit: {error}"))?
+                .unwrap_or(10)
+                .clamp(1, 50);
+            let items = db
+                .recent_memory_for_project(project.map(|project| project.id), limit)
+                .await?;
+            let mut reply = format!("Recent memory: {} item(s).", items.len());
+            for item in &items {
+                reply.push_str(&format!(
+                    "\n{} {:?}: {}",
+                    item.observed_at.format("%Y-%m-%d %H:%M"),
+                    item.kind,
+                    item.content
+                ));
+            }
+            slash_reply(
+                &reply,
+                serde_json::json!({
+                    "tool": "memory",
+                    "command": command,
+                    "items": items,
+                    "scope": if project.is_some() { "project" } else { "global" },
+                }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown memory command. Try /mem help.",
+            serde_json::json!({ "tool": "memory", "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(result)
+}
+
+fn memory_slash_help() -> &'static str {
+    "Memory commands live under /mem:\n/mem remember <fact|decision|instruction|status|summary> <content>\n/remember <content> - shortcut for /mem remember fact <content>\n/mem recent [limit]\n\nMemory is stored in the current chat scope: selected project when present, otherwise global."
+}
+
+fn parse_memory_kind_token(value: &str) -> Result<MemoryKind> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "fact" => Ok(MemoryKind::Fact),
+        "decision" => Ok(MemoryKind::Decision),
+        "instruction" => Ok(MemoryKind::Instruction),
+        "status" => Ok(MemoryKind::Status),
+        "summary" => Ok(MemoryKind::Summary),
+        "observation" | "run-observation" | "run_observation" => Ok(MemoryKind::RunObservation),
+        _ => anyhow::bail!(
+            "Memory kind must be fact, decision, instruction, status, summary, or observation"
+        ),
+    }
 }
 
 async fn ensure_tool_permission(

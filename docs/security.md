@@ -119,3 +119,6 @@ first policy values are `auto`, `ask`, and `deny`. Direct slash commands count a
 explicit user intent for `ask` policies, while `deny` blocks the operation and
 logs a `tool_permission` event. Destructive delete still requires an explicit
 `--yes` flag in addition to policy allowance.
+
+Memory writes through `/mem remember` and `/remember` use the same policy gate
+via `tool_permissions.memory_write` and are logged as `memory_tool` events.

@@ -416,7 +416,9 @@ Tool groups:
   replace-first-match. Safer section-aware Markdown editing remains.
 - Memory tools: write durable facts, decisions, instructions, preferences,
   status notes, and run observations; update/supersede/contradict older memory
-  with audit trail.
+  with audit trail. First slash pass supports `/mem remember <kind> <content>`,
+  `/remember <content>` as a fact shortcut, and `/mem recent [limit]` in the
+  current chat scope.
 - Settings/prompt tools: inspect settings, propose changes, and apply only
   after explicit user approval.
 - Background agent tools: create project-scoped agent jobs, preflight them, run
@@ -448,7 +450,8 @@ Slash commands:
   `/preflight`, `/settings`, and `/help`. First pass used root-level library
   commands; second pass moves the library surface under `/lib ...`, removes
   project-folder operations from `/lib`, and adds `/work ...` for default
-  working folders.
+  working folders. Memory commands now live under `/mem ...` with `/remember`
+  as a shortcut.
 - Slash commands should execute without spending provider tokens when they are
   deterministic. First library-tool pass bypasses Codex inside `/api/chat`.
 - Slash-command results should still be added to the conversation/event history

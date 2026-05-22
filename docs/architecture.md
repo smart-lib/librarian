@@ -166,6 +166,12 @@ the operation and records a `tool_permission` system event. Future
 assistant-initiated tool calls should use the same policy gate but surface an
 interactive approval request for `ask`.
 
+Memory tools use a separate `/mem` namespace. `/mem remember <kind> <content>`
+stores durable memory in the current chat scope, meaning the selected project
+when one is active or global memory otherwise. `/remember <content>` is a
+shortcut for a global/project-scoped fact. Memory writes pass through
+`tool_permissions.memory_write` and produce `memory_tool` system events.
+
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
 `~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired
