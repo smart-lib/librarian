@@ -244,7 +244,12 @@ Dependencies:
 
 ## Priority 0A: Iterative Thinking Loop
 
-Status: Planned after the first real chat response works.
+Status: First safe pass implemented. Normal chat still answers with one Codex
+call, but Librarian can now return an internal JSON control message to request
+another memory search, ask a clarifying question, or finalize an answer. The
+loop is bounded by `[chat].max_iterations` and stores a compact trace in
+assistant memory metadata. UI controls, cancellation, richer traces, and tests
+remain.
 
 Goal: let Librarian decide when a question needs more reflection, memory search,
 or a clarifying question, without always spending the maximum budget.
@@ -252,18 +257,26 @@ or a clarifying question, without always spending the maximum budget.
 Tasks:
 
 - Add configurable thinking depth: minimum `1`, default around `5-10`, maximum
-  configurable up to `50-100` for deliberate long reasoning sessions.
+  configurable up to `50-100` for deliberate long reasoning sessions. First
+  pass is persisted as `[chat].max_iterations` and clamped to `1..=100`.
 - Model each iteration as an internal loop step with a bounded budget, not as
-  user-visible spam. Store a compact trace/summary when useful.
-- Let Librarian stop early when the answer is good enough.
+  user-visible spam. Store a compact trace/summary when useful. First pass
+  stores compact action/query/reason trace in assistant memory metadata.
+- Let Librarian stop early when the answer is good enough. First pass treats
+  plain text as a final answer, so simple turns remain one provider call.
 - Let Librarian choose among actions per iteration: answer, search memory again,
   refine draft, ask user a clarifying question, propose a tool call, or request
-  approval.
+  approval. First pass supports answer, search memory again, and clarify.
 - Add guardrails for cost/time: max iterations, max wall-clock time, max context
   growth, and user-visible cancellation.
 - Keep “thinking” implementation separate from provider-specific hidden
   reasoning. Librarian controls an iterative planning loop; provider hidden
   reasoning remains opaque.
+- Add tests for internal JSON directives, fallback to plain text, and bounded
+  memory-search iteration. Directive parsing and plain-text fallback have unit
+  coverage; bounded async loop coverage remains.
+- Add admin controls/readout for chat iteration settings and optionally expose a
+  compact developer trace when diagnostics are enabled.
 
 ## Priority 1: Actionable Bootstrap and Doctor
 

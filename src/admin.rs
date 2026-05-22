@@ -1,4 +1,4 @@
-use std::{process::Stdio, sync::Arc, time::Duration};
+use std::{collections::HashSet, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
@@ -1935,7 +1935,7 @@ async fn librarian_chat(
     let config = state.config.read().await.clone();
     let gated = gates::process_user_prompt(&state.db, &config, message, "librarian-chat").await?;
 
-    let context_pack = memory::retrieve_context_with_config(
+    let initial_context_pack = memory::retrieve_context_with_config(
         &state.db,
         Some(&config),
         memory::RetrievalRequest {
@@ -1964,8 +1964,15 @@ async fn librarian_chat(
         .await?;
     memory::embed_item(&state.db, &config, &user_memory).await?;
 
-    let prompt = build_librarian_chat_prompt(&gated.content, project.as_ref(), &context_pack);
-    let reply = run_librarian_codex_chat(&config, &prompt).await?;
+    let chat_result = run_librarian_chat_loop(
+        &state.db,
+        &config,
+        &gated.content,
+        project.as_ref(),
+        initial_context_pack,
+    )
+    .await?;
+    let reply = chat_result.reply;
     let assistant_memory = state
         .db
         .add_memory_item(
@@ -1979,6 +1986,8 @@ async fn librarian_chat(
                 "project": project.as_ref().map(|project| project.name.clone()),
                 "scope": if project.is_some() { "project" } else { "global" },
                 "mode": "codex-chat",
+                "iterations": chat_result.iterations,
+                "trace": chat_result.trace,
             }),
         )
         .await?;
@@ -1987,8 +1996,9 @@ async fn librarian_chat(
     Ok(Json(serde_json::json!({
         "reply": reply,
         "project": project.as_ref().map(|project| project.name.clone()),
-        "memory_hits": context_pack.hits,
+        "memory_hits": chat_result.memory_hits,
         "mode": "codex-chat",
+        "iterations": chat_result.iterations,
     })))
 }
 
@@ -2071,10 +2081,154 @@ async fn create_job(
     Ok(Json(job))
 }
 
+struct LibrarianChatResult {
+    reply: String,
+    iterations: usize,
+    memory_hits: Vec<crate::domain::MemoryHit>,
+    trace: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LibrarianChatDirective {
+    action: String,
+    query: Option<String>,
+    answer: Option<String>,
+    question: Option<String>,
+    reason: Option<String>,
+}
+
+async fn run_librarian_chat_loop(
+    db: &Database,
+    config: &Config,
+    message: &str,
+    project: Option<&Project>,
+    initial_context_pack: ContextPack,
+) -> Result<LibrarianChatResult> {
+    let project_id = project.map(|project| project.id);
+    let max_iterations = config.chat.max_iterations.clamp(1, 100);
+    let mut context_packs = vec![initial_context_pack];
+    let mut trace = Vec::new();
+    let mut last_raw_reply = String::new();
+
+    for iteration in 1..=max_iterations {
+        let prompt = build_librarian_chat_prompt(
+            message,
+            project,
+            &context_packs,
+            iteration,
+            max_iterations,
+        );
+        let raw_reply = run_librarian_codex_chat(config, &prompt).await?;
+        last_raw_reply = raw_reply.clone();
+
+        let Some(directive) = parse_librarian_chat_directive(&raw_reply) else {
+            return Ok(LibrarianChatResult {
+                reply: raw_reply,
+                iterations: iteration,
+                memory_hits: combined_memory_hits(&context_packs),
+                trace,
+            });
+        };
+
+        let action = directive.action.trim().to_ascii_lowercase();
+        match action.as_str() {
+            "answer" => {
+                let reply = directive
+                    .answer
+                    .map(|answer| answer.trim().to_string())
+                    .filter(|answer| !answer.is_empty())
+                    .unwrap_or(raw_reply);
+                trace.push(serde_json::json!({
+                    "iteration": iteration,
+                    "action": "answer",
+                    "reason": directive.reason,
+                }));
+                return Ok(LibrarianChatResult {
+                    reply,
+                    iterations: iteration,
+                    memory_hits: combined_memory_hits(&context_packs),
+                    trace,
+                });
+            }
+            "clarify" => {
+                let reply = directive
+                    .question
+                    .or(directive.answer)
+                    .map(|answer| answer.trim().to_string())
+                    .filter(|answer| !answer.is_empty())
+                    .unwrap_or_else(|| "Can you clarify what you want me to focus on?".to_string());
+                trace.push(serde_json::json!({
+                    "iteration": iteration,
+                    "action": "clarify",
+                    "reason": directive.reason,
+                }));
+                return Ok(LibrarianChatResult {
+                    reply,
+                    iterations: iteration,
+                    memory_hits: combined_memory_hits(&context_packs),
+                    trace,
+                });
+            }
+            "search_memory" => {
+                let query = directive
+                    .query
+                    .map(|query| query.trim().to_string())
+                    .filter(|query| !query.is_empty())
+                    .unwrap_or_else(|| message.to_string());
+                trace.push(serde_json::json!({
+                    "iteration": iteration,
+                    "action": "search_memory",
+                    "query": query,
+                    "reason": directive.reason,
+                }));
+                if iteration == max_iterations {
+                    return Ok(LibrarianChatResult {
+                        reply: format!(
+                            "I need a bit more context before I can answer well. The next thing I would look for is: {query}"
+                        ),
+                        iterations: iteration,
+                        memory_hits: combined_memory_hits(&context_packs),
+                        trace,
+                    });
+                }
+                let context_pack = memory::retrieve_context_with_config(
+                    db,
+                    Some(config),
+                    memory::RetrievalRequest {
+                        query,
+                        project_id,
+                        activity_id: None,
+                        limit: config.chat.memory_hit_limit,
+                    },
+                )
+                .await?;
+                context_packs.push(context_pack);
+            }
+            _ => {
+                return Ok(LibrarianChatResult {
+                    reply: raw_reply,
+                    iterations: iteration,
+                    memory_hits: combined_memory_hits(&context_packs),
+                    trace,
+                });
+            }
+        }
+    }
+
+    Ok(LibrarianChatResult {
+        reply: last_raw_reply,
+        iterations: max_iterations,
+        memory_hits: combined_memory_hits(&context_packs),
+        trace,
+    })
+}
+
 fn build_librarian_chat_prompt(
     message: &str,
     project: Option<&Project>,
-    context_pack: &ContextPack,
+    context_packs: &[ContextPack],
+    iteration: usize,
+    max_iterations: usize,
 ) -> String {
     let scope = project
         .map(|project| format!("project `{}`", project.name))
@@ -2087,15 +2241,17 @@ fn build_librarian_chat_prompt(
     prompt.push_str("Use the retrieved memory as context, but do not dump it back verbatim. Answer naturally and helpfully.\n");
     prompt.push_str("If the user asks for work that should become an agent task, discuss the plan and say that launching a background agent should be an explicit separate action.\n");
     prompt.push_str("Keep the answer concise unless the user asks for detail.\n\n");
+    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
 
     prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));
+    prompt.push_str(&format!(
+        "## Loop Budget\n\nIteration {iteration} of {max_iterations}. Stop early and answer when you have enough context.\n\n"
+    ));
+    if iteration >= max_iterations {
+        prompt.push_str("This is the final allowed iteration. Do not request another memory search; answer with the available context or ask one clarifying question.\n\n");
+    }
     prompt.push_str("## Retrieved Memory\n\n");
-    let hits = context_pack
-        .hits
-        .iter()
-        .filter(|hit| !is_placeholder_memory(&hit.item))
-        .take(8)
-        .collect::<Vec<_>>();
+    let hits = filtered_memory_hits(context_packs);
     if hits.is_empty() {
         prompt.push_str("No relevant durable memory was found.\n\n");
     } else {
@@ -2117,6 +2273,55 @@ fn build_librarian_chat_prompt(
     prompt.push_str(message.trim());
     prompt.push_str("\n\n## Response\n\n");
     prompt
+}
+
+fn parse_librarian_chat_directive(raw: &str) -> Option<LibrarianChatDirective> {
+    let candidate = raw.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    let candidate = candidate
+        .strip_prefix("```json")
+        .and_then(|value| value.strip_suffix("```"))
+        .or_else(|| {
+            candidate
+                .strip_prefix("```")
+                .and_then(|value| value.strip_suffix("```"))
+        })
+        .unwrap_or(candidate)
+        .trim();
+    if !candidate.starts_with('{') {
+        return None;
+    }
+    serde_json::from_str(candidate).ok()
+}
+
+fn filtered_memory_hits(context_packs: &[ContextPack]) -> Vec<&crate::domain::MemoryHit> {
+    let mut seen = HashSet::new();
+    let mut hits = Vec::new();
+    for pack in context_packs {
+        for hit in &pack.hits {
+            if is_placeholder_memory(&hit.item) || !seen.insert(hit.item.id) {
+                continue;
+            }
+            hits.push(hit);
+        }
+    }
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    hits.truncate(12);
+    hits
+}
+
+fn combined_memory_hits(context_packs: &[ContextPack]) -> Vec<crate::domain::MemoryHit> {
+    filtered_memory_hits(context_packs)
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 async fn run_librarian_codex_chat(config: &Config, prompt: &str) -> Result<String> {
@@ -2994,4 +3199,28 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
 </body>
 </html>"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_internal_chat_directive_from_json_fence() {
+        let directive = parse_librarian_chat_directive(
+            r#"```json
+{"action":"search_memory","query":"project map","reason":"need project context"}
+```"#,
+        )
+        .expect("directive");
+
+        assert_eq!(directive.action, "search_memory");
+        assert_eq!(directive.query.as_deref(), Some("project map"));
+        assert_eq!(directive.reason.as_deref(), Some("need project context"));
+    }
+
+    #[test]
+    fn leaves_plain_chat_reply_as_final_text() {
+        assert!(parse_librarian_chat_directive("Yes, I am here and I see the context.").is_none());
+    }
 }
