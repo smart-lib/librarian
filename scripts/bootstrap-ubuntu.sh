@@ -160,8 +160,10 @@ if [[ -z "$install_bin" ]]; then
   install_bin="$librarian_home/.app/bin/librarian"
 fi
 mkdir -p "$(dirname "$install_bin")"
-cp "$repo_root/target/release/librarian" "$install_bin"
-chmod +x "$install_bin"
+install_tmp="$(dirname "$install_bin")/.librarian.new.$$"
+cp "$repo_root/target/release/librarian" "$install_tmp"
+chmod +x "$install_tmp"
+mv -f "$install_tmp" "$install_bin"
 
 bin="$install_bin"
 version_file="$librarian_home/.app/version.json"
