@@ -339,6 +339,7 @@ mod tests {
     fn blocks_absolute_and_parent_paths() {
         assert!(normalize_relative_path("../outside").is_err());
         assert!(normalize_relative_path("/tmp/outside").is_err());
+        assert!(normalize_relative_path("Projects/../../someOtherDirOutside").is_err());
         assert!(normalize_relative_path("notes/ok.md").is_ok());
     }
 
