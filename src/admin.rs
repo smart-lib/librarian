@@ -2120,18 +2120,6 @@ async fn librarian_chat(
     let config = state.config.read().await.clone();
     let gated = gates::process_user_prompt(&state.db, &config, message, "librarian-chat").await?;
 
-    let initial_context_pack = memory::retrieve_context_with_config(
-        &state.db,
-        Some(&config),
-        memory::RetrievalRequest {
-            query: gated.content.clone(),
-            project_id,
-            activity_id: None,
-            limit: config.chat.memory_hit_limit,
-        },
-    )
-    .await?;
-
     let user_memory = state
         .db
         .add_memory_item(
@@ -2149,14 +2137,30 @@ async fn librarian_chat(
         .await?;
     memory::embed_item(&state.db, &config, &user_memory).await?;
 
-    let chat_result = run_librarian_chat_loop(
-        &state.db,
-        &config,
-        &gated.content,
-        project.as_ref(),
-        initial_context_pack,
-    )
-    .await?;
+    let chat_result =
+        if let Some(result) = execute_slash_command(&state.db, &config, &gated.content).await? {
+            result
+        } else {
+            let initial_context_pack = memory::retrieve_context_with_config(
+                &state.db,
+                Some(&config),
+                memory::RetrievalRequest {
+                    query: gated.content.clone(),
+                    project_id,
+                    activity_id: None,
+                    limit: config.chat.memory_hit_limit,
+                },
+            )
+            .await?;
+            run_librarian_chat_loop(
+                &state.db,
+                &config,
+                &gated.content,
+                project.as_ref(),
+                initial_context_pack,
+            )
+            .await?
+        };
     let reply = chat_result.reply;
     let assistant_memory = state
         .db
@@ -2170,7 +2174,7 @@ async fn librarian_chat(
             serde_json::json!({
                 "project": project.as_ref().map(|project| project.name.clone()),
                 "scope": if project.is_some() { "project" } else { "global" },
-                "mode": "codex-chat",
+                "mode": chat_result.mode,
                 "iterations": chat_result.iterations,
                 "trace": chat_result.trace,
             }),
@@ -2182,7 +2186,7 @@ async fn librarian_chat(
         "reply": reply,
         "project": project.as_ref().map(|project| project.name.clone()),
         "memory_hits": chat_result.memory_hits,
-        "mode": "codex-chat",
+        "mode": chat_result.mode,
         "iterations": chat_result.iterations,
     })))
 }
@@ -2271,6 +2275,7 @@ struct LibrarianChatResult {
     iterations: usize,
     memory_hits: Vec<crate::domain::MemoryHit>,
     trace: Vec<serde_json::Value>,
+    mode: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2280,6 +2285,233 @@ struct LibrarianChatDirective {
     answer: Option<String>,
     question: Option<String>,
     reason: Option<String>,
+}
+
+async fn execute_slash_command(
+    db: &Database,
+    config: &Config,
+    message: &str,
+) -> Result<Option<LibrarianChatResult>> {
+    let Some(command_line) = message.trim().strip_prefix('/') else {
+        return Ok(None);
+    };
+    let args = split_slash_args(command_line)?;
+    if args.is_empty() {
+        return Ok(Some(slash_reply(
+            "Available commands: /library, /mkdir, /touch, /read, /write, /move, /delete, /help",
+            serde_json::json!({ "command": "empty" }),
+        )));
+    }
+
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            "Available commands:\n/library [library|projects] [depth]\n/mkdir <library|projects> <path>\n/touch <library|projects> <path>\n/read <library-md-path>\n/write <library-md-path> <content>\n/move <library|projects> <from> <to>\n/delete <library|projects> <path> --yes [--recursive]",
+            serde_json::json!({ "command": command }),
+        ),
+        "library" => {
+            let root = args
+                .get(1)
+                .map(|value| parse_library_root(value))
+                .transpose()?;
+            let depth = args
+                .get(2)
+                .map(|value| value.parse::<usize>())
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("Invalid depth: {error}"))?
+                .unwrap_or(4);
+            let roots = if let Some(root) = root {
+                vec![library_tools::tree(config, root, depth)?]
+            } else {
+                vec![
+                    library_tools::tree(config, LibraryRoot::Library, depth)?,
+                    library_tools::tree(config, LibraryRoot::Projects, depth)?,
+                ]
+            };
+            slash_reply(
+                &format!("Library tree loaded: {} root(s).", roots.len()),
+                serde_json::json!({ "command": command, "roots": roots }),
+            )
+        }
+        "mkdir" => {
+            let (root, path) = slash_root_path_args(&args)?;
+            let tool_path = library_tools::create_folder(config, root, path)?;
+            log_slash_library_event(
+                db,
+                "create_folder",
+                serde_json::json!({ "root": root, "path": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Created folder in {:?}: {}", root, tool_path.path),
+                serde_json::json!({ "command": command, "root": root, "path": tool_path.path }),
+            )
+        }
+        "touch" => {
+            let (root, path) = slash_root_path_args(&args)?;
+            let tool_path = library_tools::create_empty_file(config, root, path)?;
+            log_slash_library_event(
+                db,
+                "create_empty_file",
+                serde_json::json!({ "root": root, "path": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Created empty file in {:?}: {}", root, tool_path.path),
+                serde_json::json!({ "command": command, "root": root, "path": tool_path.path }),
+            )
+        }
+        "read" => {
+            let path = args
+                .get(1)
+                .ok_or_else(|| anyhow::anyhow!("Usage: /read <library-md-path>"))?;
+            let content = library_tools::read_markdown(config, path)?;
+            slash_reply(
+                &format!("Read `{path}`:\n\n{content}"),
+                serde_json::json!({ "command": command, "root": "library", "path": path }),
+            )
+        }
+        "write" => {
+            let path = args
+                .get(1)
+                .ok_or_else(|| anyhow::anyhow!("Usage: /write <library-md-path> <content>"))?;
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /write <library-md-path> <content>");
+            }
+            let content = args[2..].join(" ");
+            let tool_path = library_tools::write_markdown(config, path, &content)?;
+            log_slash_library_event(
+                db,
+                "write_markdown",
+                serde_json::json!({ "root": "library", "path": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Wrote Markdown note: {}", tool_path.path),
+                serde_json::json!({ "command": command, "root": "library", "path": tool_path.path }),
+            )
+        }
+        "move" | "rename" => {
+            if args.len() < 4 {
+                anyhow::bail!("Usage: /move <library|projects> <from> <to>");
+            }
+            let root = parse_library_root(&args[1])?;
+            let tool_path = library_tools::move_path(config, root, &args[2], &args[3])?;
+            log_slash_library_event(
+                db,
+                "move",
+                serde_json::json!({ "root": root, "from": args[2], "to": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Moved {:?} item to: {}", root, tool_path.path),
+                serde_json::json!({ "command": command, "root": root, "from": args[2], "to": tool_path.path }),
+            )
+        }
+        "delete" => {
+            if args.len() < 4 || !args.iter().any(|arg| arg == "--yes") {
+                return Ok(Some(slash_reply(
+                    "Delete is destructive. Use: /delete <library|projects> <path> --yes [--recursive]",
+                    serde_json::json!({ "command": command, "status": "needs_explicit_confirmation" }),
+                )));
+            }
+            let root = parse_library_root(&args[1])?;
+            let recursive = args.iter().any(|arg| arg == "--recursive");
+            let tool_path = library_tools::delete_path(config, root, &args[2], recursive)?;
+            log_slash_library_event(
+                db,
+                "delete",
+                serde_json::json!({ "root": root, "path": tool_path.path, "recursive": recursive }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Deleted {:?} item: {}", root, tool_path.path),
+                serde_json::json!({ "command": command, "root": root, "path": tool_path.path, "recursive": recursive }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown slash command. Try /help.",
+            serde_json::json!({ "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(Some(result))
+}
+
+fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
+    LibrarianChatResult {
+        reply: reply.to_string(),
+        iterations: 0,
+        memory_hits: Vec::new(),
+        trace: vec![trace],
+        mode: "slash-command",
+    }
+}
+
+fn slash_root_path_args(args: &[String]) -> Result<(LibraryRoot, &str)> {
+    if args.len() < 3 {
+        anyhow::bail!("Usage: /{} <library|projects> <path>", args[0]);
+    }
+    Ok((parse_library_root(&args[1])?, args[2].as_str()))
+}
+
+fn parse_library_root(value: &str) -> Result<LibraryRoot> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "library" | "lib" => Ok(LibraryRoot::Library),
+        "projects" | "project" => Ok(LibraryRoot::Projects),
+        _ => anyhow::bail!("Root must be `library` or `projects`"),
+    }
+}
+
+async fn log_slash_library_event(
+    db: &Database,
+    action: &str,
+    payload: serde_json::Value,
+) -> Result<()> {
+    db.add_system_event(
+        "library_tool",
+        serde_json::json!({
+            "action": action,
+            "source": "slash-command",
+            "payload": payload,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+fn split_slash_args(command_line: &str) -> Result<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut chars = command_line.trim().chars().peekable();
+    let mut quote = None;
+
+    while let Some(ch) = chars.next() {
+        match (quote, ch) {
+            (Some(active), ch) if ch == active => quote = None,
+            (Some(_), '\\') => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            (Some(_), ch) => current.push(ch),
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, ch) if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            (None, ch) => current.push(ch),
+        }
+    }
+
+    if quote.is_some() {
+        anyhow::bail!("Unclosed quote in slash command");
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    Ok(args)
 }
 
 async fn run_librarian_chat_loop(
@@ -2312,6 +2544,7 @@ async fn run_librarian_chat_loop(
                 iterations: iteration,
                 memory_hits: combined_memory_hits(&context_packs),
                 trace,
+                mode: "codex-chat",
             });
         };
 
@@ -2333,6 +2566,7 @@ async fn run_librarian_chat_loop(
                     iterations: iteration,
                     memory_hits: combined_memory_hits(&context_packs),
                     trace,
+                    mode: "codex-chat",
                 });
             }
             "clarify" => {
@@ -2352,6 +2586,7 @@ async fn run_librarian_chat_loop(
                     iterations: iteration,
                     memory_hits: combined_memory_hits(&context_packs),
                     trace,
+                    mode: "codex-chat",
                 });
             }
             "search_memory" => {
@@ -2374,6 +2609,7 @@ async fn run_librarian_chat_loop(
                         iterations: iteration,
                         memory_hits: combined_memory_hits(&context_packs),
                         trace,
+                        mode: "codex-chat",
                     });
                 }
                 let context_pack = memory::retrieve_context_with_config(
@@ -2395,6 +2631,7 @@ async fn run_librarian_chat_loop(
                     iterations: iteration,
                     memory_hits: combined_memory_hits(&context_packs),
                     trace,
+                    mode: "codex-chat",
                 });
             }
         }
@@ -2405,6 +2642,7 @@ async fn run_librarian_chat_loop(
         iterations: max_iterations,
         memory_hits: combined_memory_hits(&context_packs),
         trace,
+        mode: "codex-chat",
     })
 }
 
@@ -3407,5 +3645,23 @@ mod tests {
     #[test]
     fn leaves_plain_chat_reply_as_final_text() {
         assert!(parse_librarian_chat_directive("Yes, I am here and I see the context.").is_none());
+    }
+
+    #[test]
+    fn splits_quoted_slash_command_arguments() {
+        let args = split_slash_args(r#"mkdir library "Project Shelf/Book Notes""#).expect("args");
+        assert_eq!(
+            args,
+            vec![
+                "mkdir".to_string(),
+                "library".to_string(),
+                "Project Shelf/Book Notes".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unclosed_slash_command_quotes() {
+        assert!(split_slash_args(r#"read "Project Shelf/Book Notes.md"#).is_err());
     }
 }

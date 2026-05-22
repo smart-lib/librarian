@@ -389,8 +389,9 @@ Tasks:
 ## Priority 1C: Tools, Permissions, and Slash Commands
 
 Status: First backend tool boundary started. Library filesystem tools now exist
-as narrow host-side operations for `Library` and `Projects`; chat/LLM invocation,
-permission prompts, slash commands, and UI controls remain.
+as narrow host-side operations for `Library` and `Projects`; direct slash
+commands can invoke them without an LLM call. Assistant-initiated tool
+invocation, permission prompts, richer command UX, and UI controls remain.
 
 Goal: Librarian should be useful inside its own root without unrestricted host
 power. Tools must be explicit, logged, permissioned, and available both through
@@ -431,11 +432,14 @@ Slash commands:
 
 - Add a command dispatcher before LLM invocation for commands such as
   `/remember`, `/project`, `/note`, `/move`, `/rename`, `/delete`, `/agent`,
-  `/preflight`, `/settings`, and `/help`.
+  `/preflight`, `/settings`, and `/help`. First pass supports `/library`,
+  `/mkdir`, `/touch`, `/read`, `/write`, `/move`/`/rename`, `/delete`, and
+  `/help` for library tools.
 - Slash commands should execute without spending provider tokens when they are
-  deterministic.
+  deterministic. First library-tool pass bypasses Codex inside `/api/chat`.
 - Slash-command results should still be added to the conversation/event history
-  as context.
+  as context. First pass stores the command turn in memory and writes
+  `library_tool` system events for mutating commands.
 
 ## Priority 2: Prompt Builder and Instruction Authoring
 
