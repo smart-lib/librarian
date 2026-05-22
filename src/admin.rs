@@ -530,10 +530,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function renderOverview() {
         const health = state.health || {};
         const worker = health.worker || {};
+        const chat = health.chat || {};
         const memory = health.memory || {};
         const secrets = health.secrets || {};
         el('overview').innerHTML = [
           card('Worker', `queued=${worker.queued_jobs ?? 0}<br>running=${worker.running_jobs ?? 0}<br>slots=${worker.available_slots ?? '__WORKER_CONCURRENCY__'}`),
+          card('Chat', `timeout=${chat.codex_timeout_seconds ?? 180}s<br>memory hits=${chat.memory_hit_limit ?? 12}<br>max iterations=${chat.max_iterations ?? 6}`),
           card('Memory', `items=${memory.items ?? 0}<br>embedded=${memory.embedded_items ?? 0}<br>missing=${memory.missing_embeddings ?? 0}`),
           card('Storage', `${htmlEscape(health.vault_path || 'Library')}<br><span class="muted">${htmlEscape(health.database_path || '.mdb/librarian.db')}</span>`),
           card('Secrets', `${htmlEscape(secrets.status || 'unknown')}<br><span class="muted">${htmlEscape(secrets.location || '')}</span>`)
@@ -1412,11 +1414,16 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let available_slots = max_concurrent_jobs.saturating_sub(running_jobs);
     Json(serde_json::json!({
         "ok": true,
-        "worker": {
-            "max_concurrent_jobs": max_concurrent_jobs,
-            "running_jobs": running_jobs,
-            "queued_jobs": queued_jobs,
-            "available_slots": available_slots,
+            "worker": {
+                "max_concurrent_jobs": max_concurrent_jobs,
+                "running_jobs": running_jobs,
+                "queued_jobs": queued_jobs,
+                "available_slots": available_slots,
+            },
+        "chat": {
+            "codex_timeout_seconds": config.chat.codex_timeout_seconds,
+            "memory_hit_limit": config.chat.memory_hit_limit,
+            "max_iterations": config.chat.max_iterations,
         },
         "routing": {
             "fallback_enabled": config.routing.fallback_enabled,
@@ -1935,7 +1942,7 @@ async fn librarian_chat(
             query: gated.content.clone(),
             project_id,
             activity_id: None,
-            limit: memory::default_hit_limit(),
+            limit: config.chat.memory_hit_limit,
         },
     )
     .await?;
@@ -2159,9 +2166,13 @@ async fn run_librarian_codex_chat(config: &Config, prompt: &str) -> Result<Strin
         stdin.write_all(prompt.as_bytes()).await?;
     }
 
-    let output = timeout(Duration::from_secs(180), child.wait_with_output())
-        .await
-        .map_err(|_| anyhow::anyhow!("Codex chat timed out after 180 seconds"))??;
+    let timeout_seconds = config.chat.codex_timeout_seconds.max(1);
+    let output = timeout(
+        Duration::from_secs(timeout_seconds),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Codex chat timed out after {timeout_seconds} seconds"))??;
     let last_message = std::fs::read_to_string(&output_path).unwrap_or_default();
     let _ = std::fs::remove_file(&output_path);
     if output.status.success() {
@@ -2195,24 +2206,6 @@ fn is_placeholder_memory(item: &crate::domain::MemoryItem) -> bool {
         || item
             .content
             .starts_with("I am here as Librarian, not as a background agent runner.")
-}
-
-#[allow(dead_code)]
-fn looks_like_agent_request(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    [
-        "запусти",
-        "сделай",
-        "почини",
-        "реализуй",
-        "агент",
-        "agent",
-        "run",
-        "implement",
-        "fix",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
 }
 
 fn parse_schedule_kind(value: &str) -> Result<ScheduleKind> {

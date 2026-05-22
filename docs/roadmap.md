@@ -226,6 +226,8 @@ Tasks:
   wait for agent execution.
 - Remove current self-echo behavior: placeholder assistant replies are filtered
   from the chat prompt, and new responses are stored as `mode=codex-chat`.
+- Add persisted chat runtime settings for Codex timeout, memory hit limit, and
+  future max iterations. First pass done in `[chat]`.
 - Save useful user and assistant turns into memory, but distinguish raw chat
   transcript from durable facts/decisions/instructions.
 - Add a small chat transcript model: session/thread id, ordered turns, selected
@@ -740,9 +742,9 @@ Findings and tasks:
 - Legacy `local-memory-responder` memories may remain in existing user
   databases. Keep filtering them from chat context and add a cleanup/backfill
   command later.
-- `looks_like_agent_request` contains mojibake Russian literals and should not
-  exist as a hardcoded multilingual intent detector. Replace with slash
-  commands and the tool/permission intent layer.
+- The previous hardcoded `looks_like_agent_request` intent detector had mojibake
+  Russian literals and was removed. Do not reintroduce multilingual intent
+  heuristics; use slash commands and the tool/permission intent layer.
 - Chat has no session/thread model yet; messages are stored as generic memory
   without ordered transcript structure.
 - Memory retrieval lacks filters for source/mode, so placeholder assistant

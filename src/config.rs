@@ -15,6 +15,7 @@ pub struct Config {
     pub admin: AdminConfig,
     pub docker: DockerConfig,
     pub worker: WorkerConfig,
+    pub chat: ChatConfig,
     pub memory: MemoryConfig,
     pub routing: RoutingConfig,
     pub budget: BudgetConfig,
@@ -41,6 +42,13 @@ pub struct DockerConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WorkerConfig {
     pub max_concurrent_jobs: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChatConfig {
+    pub codex_timeout_seconds: u64,
+    pub memory_hit_limit: usize,
+    pub max_iterations: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -127,6 +135,16 @@ impl Default for MemoryConfig {
     }
 }
 
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            codex_timeout_seconds: 180,
+            memory_hit_limit: 12,
+            max_iterations: 6,
+        }
+    }
+}
+
 impl Default for RoutingConfig {
     fn default() -> Self {
         Self {
@@ -177,6 +195,7 @@ impl Config {
                     .and_then(|value| value.parse().ok())
                     .unwrap_or(1),
             },
+            chat: ChatConfig::default(),
             memory: MemoryConfig::default(),
             routing: RoutingConfig::default(),
             budget: BudgetConfig::default(),
@@ -231,6 +250,7 @@ impl Config {
             admin: self.admin.clone(),
             docker: self.docker.clone(),
             worker: self.worker.clone(),
+            chat: self.chat.clone(),
             memory: self.memory.clone(),
             routing: self.routing.clone(),
             budget: self.budget.clone(),
@@ -252,6 +272,7 @@ impl Config {
         self.admin = stored.admin;
         self.docker = stored.docker;
         self.worker = stored.worker;
+        self.chat = stored.chat;
         self.memory = stored.memory;
         self.routing = stored.routing;
         self.budget = stored.budget;
@@ -277,6 +298,8 @@ struct StoredConfig {
     admin: AdminConfig,
     docker: DockerConfig,
     worker: WorkerConfig,
+    #[serde(default)]
+    chat: ChatConfig,
     #[serde(default)]
     memory: MemoryConfig,
     #[serde(default)]
@@ -423,6 +446,9 @@ mod tests {
         config.budget.daily_total_usd = Some(5.0);
         config.budget.daily_provider_usd = Some(3.0);
         config.budget.daily_project_usd = Some(2.0);
+        config.chat.codex_timeout_seconds = 42;
+        config.chat.memory_hit_limit = 7;
+        config.chat.max_iterations = 5;
         config.save().expect("save");
 
         let stored =
@@ -434,6 +460,8 @@ mod tests {
         assert!(stored.contains("host_home = "));
         assert!(stored.contains(".cfg"));
         assert!(stored.contains("codex-home"));
+        assert!(stored.contains("[chat]"));
+        assert!(stored.contains("codex_timeout_seconds = 42"));
 
         let reloaded = Config::load_or_default(Some(home.clone())).expect("reload");
         assert!(reloaded.routing.fallback_enabled);
@@ -445,6 +473,9 @@ mod tests {
         assert_eq!(reloaded.budget.daily_total_usd, Some(5.0));
         assert_eq!(reloaded.budget.daily_provider_usd, Some(3.0));
         assert_eq!(reloaded.budget.daily_project_usd, Some(2.0));
+        assert_eq!(reloaded.chat.codex_timeout_seconds, 42);
+        assert_eq!(reloaded.chat.memory_hit_limit, 7);
+        assert_eq!(reloaded.chat.max_iterations, 5);
         std::fs::remove_dir_all(home).ok();
     }
 }
