@@ -14,7 +14,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
 use crate::{
-    config::Config,
+    config::{Config, ToolPermissionPolicy},
     db::Database,
     domain::{
         ContextPack, JobStatus, MemoryKind, MountMode, NetworkMode, Project, ScheduleKind,
@@ -1468,6 +1468,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
             "memory_hit_limit": config.chat.memory_hit_limit,
             "max_iterations": config.chat.max_iterations,
         },
+        "tool_permissions": config.tool_permissions,
         "routing": {
             "fallback_enabled": config.routing.fallback_enabled,
             "fallback_order": config.routing.fallback_order,
@@ -2352,6 +2353,13 @@ async fn execute_library_slash_command(
             serde_json::json!({ "tool": "library", "command": command }),
         ),
         "tree" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.read",
+                config.tool_permissions.library_read,
+            )
+            .await?;
             let depth = args
                 .get(1)
                 .map(|value| value.parse::<usize>())
@@ -2367,6 +2375,13 @@ async fn execute_library_slash_command(
         "mkdir" => {
             let path = slash_single_path_arg(&args, "/lib mkdir <path>")?;
             let root = LibraryRoot::Library;
+            ensure_tool_permission(
+                db,
+                config,
+                "library.create",
+                config.tool_permissions.library_create,
+            )
+            .await?;
             let tool_path = library_tools::create_folder(config, root, path)?;
             log_slash_library_event(
                 db,
@@ -2382,6 +2397,13 @@ async fn execute_library_slash_command(
         "touch" => {
             let path = slash_single_path_arg(&args, "/lib touch <path>")?;
             let root = LibraryRoot::Library;
+            ensure_tool_permission(
+                db,
+                config,
+                "library.create",
+                config.tool_permissions.library_create,
+            )
+            .await?;
             let tool_path = library_tools::create_empty_file(config, root, path)?;
             log_slash_library_event(
                 db,
@@ -2395,6 +2417,13 @@ async fn execute_library_slash_command(
             )
         }
         "read" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.read",
+                config.tool_permissions.library_read,
+            )
+            .await?;
             let path = args
                 .get(1)
                 .ok_or_else(|| anyhow::anyhow!("Usage: /read <library-md-path>"))?;
@@ -2411,6 +2440,13 @@ async fn execute_library_slash_command(
             )
         }
         "write" | "write-overwrite" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
             let path = args.get(1).ok_or_else(|| {
                 anyhow::anyhow!("Usage: /lib write-overwrite <library-md-path> <content>")
             })?;
@@ -2431,6 +2467,13 @@ async fn execute_library_slash_command(
             )
         }
         "append" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
             let path = args
                 .get(1)
                 .ok_or_else(|| anyhow::anyhow!("Usage: /lib append <library-md-path> <content>"))?;
@@ -2451,6 +2494,13 @@ async fn execute_library_slash_command(
             )
         }
         "read-lines" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.read",
+                config.tool_permissions.library_read,
+            )
+            .await?;
             let path = args.get(1).ok_or_else(|| {
                 anyhow::anyhow!("Usage: /lib read-lines <library-md-path> <start> <end>")
             })?;
@@ -2472,6 +2522,13 @@ async fn execute_library_slash_command(
             )
         }
         "cut-lines" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
             let edit = slash_line_edit(
                 config,
                 &args,
@@ -2493,6 +2550,13 @@ async fn execute_library_slash_command(
             )
         }
         "replace-lines" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
             if args.len() < 5 {
                 anyhow::bail!(
                     "Usage: /lib replace-lines <library-md-path> <start> <end> <content>"
@@ -2520,6 +2584,13 @@ async fn execute_library_slash_command(
             )
         }
         "find" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.read",
+                config.tool_permissions.library_read,
+            )
+            .await?;
             if args.len() < 3 {
                 anyhow::bail!("Usage: /lib find <library-md-path> <query> [limit]");
             }
@@ -2540,6 +2611,13 @@ async fn execute_library_slash_command(
             )
         }
         "cut-find" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
             if args.len() < 3 {
                 anyhow::bail!("Usage: /lib cut-find <library-md-path> <query>");
             }
@@ -2559,6 +2637,13 @@ async fn execute_library_slash_command(
             )
         }
         "replace-find" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
             if args.len() < 4 {
                 anyhow::bail!("Usage: /lib replace-find <library-md-path> <query> <content>");
             }
@@ -2584,6 +2669,13 @@ async fn execute_library_slash_command(
             )
         }
         "move" | "rename" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.move",
+                config.tool_permissions.library_move,
+            )
+            .await?;
             if args.len() < 3 {
                 anyhow::bail!("Usage: /lib move <from> <to>");
             }
@@ -2601,6 +2693,13 @@ async fn execute_library_slash_command(
             )
         }
         "delete" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.delete",
+                config.tool_permissions.library_delete,
+            )
+            .await?;
             if args.len() < 3 || !args.iter().any(|arg| arg == "--yes") {
                 return Ok(slash_reply(
                     "Delete is destructive. Use: /lib delete <path> --yes [--recursive]",
@@ -2668,6 +2767,8 @@ async fn execute_workspace_slash_command(
             serde_json::json!({ "tool": "workspace", "command": command }),
         ),
         "tree" => {
+            ensure_tool_permission(db, config, "workspace.read", ToolPermissionPolicy::Auto)
+                .await?;
             let depth = args
                 .get(1)
                 .map(|value| value.parse::<usize>())
@@ -2682,6 +2783,13 @@ async fn execute_workspace_slash_command(
         }
         "mkdir" => {
             let path = slash_single_path_arg(args, "/work mkdir <path>")?;
+            ensure_tool_permission(
+                db,
+                config,
+                "workspace.create",
+                config.tool_permissions.workspace_create,
+            )
+            .await?;
             let tool_path = library_tools::create_folder(config, root, path)?;
             log_workspace_event(
                 db,
@@ -2696,6 +2804,13 @@ async fn execute_workspace_slash_command(
         }
         "touch" => {
             let path = slash_single_path_arg(args, "/work touch <path>")?;
+            ensure_tool_permission(
+                db,
+                config,
+                "workspace.create",
+                config.tool_permissions.workspace_create,
+            )
+            .await?;
             let tool_path = library_tools::create_empty_file(config, root, path)?;
             log_workspace_event(
                 db,
@@ -2709,6 +2824,13 @@ async fn execute_workspace_slash_command(
             )
         }
         "move" | "rename" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "workspace.move",
+                config.tool_permissions.workspace_move,
+            )
+            .await?;
             if args.len() < 3 {
                 anyhow::bail!("Usage: /work move <from> <to>");
             }
@@ -2725,6 +2847,13 @@ async fn execute_workspace_slash_command(
             )
         }
         "delete" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "workspace.delete",
+                config.tool_permissions.workspace_delete,
+            )
+            .await?;
             if args.len() < 3 || !args.iter().any(|arg| arg == "--yes") {
                 return Ok(slash_reply(
                     "Delete is destructive. Use: /work delete <path> --yes [--recursive]",
@@ -2755,6 +2884,34 @@ async fn execute_workspace_slash_command(
 
 fn workspace_slash_help() -> &'static str {
     "Workspace commands live under /work and operate only inside Librarian/Projects:\n/work tree [depth]\n/work mkdir <path>\n/work touch <path>\n/work move <from> <to>\n/work delete <path> --yes [--recursive]\n\nUse this for default implementation/product folders, not for library knowledge."
+}
+
+async fn ensure_tool_permission(
+    db: &Database,
+    config: &Config,
+    action: &str,
+    policy: ToolPermissionPolicy,
+) -> Result<()> {
+    let decision = match policy {
+        ToolPermissionPolicy::Auto => "allowed_auto",
+        ToolPermissionPolicy::Ask => "allowed_user_slash",
+        ToolPermissionPolicy::Deny => "denied",
+    };
+    db.add_system_event(
+        "tool_permission",
+        serde_json::json!({
+            "action": action,
+            "policy": policy,
+            "decision": decision,
+            "source": "slash-command",
+            "config_path": config.config_path,
+        }),
+    )
+    .await?;
+    if policy == ToolPermissionPolicy::Deny {
+        anyhow::bail!("Tool action `{action}` is denied by tool permissions");
+    }
+    Ok(())
 }
 
 fn slash_single_path_arg<'a>(args: &'a [String], usage: &str) -> Result<&'a str> {

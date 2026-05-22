@@ -16,6 +16,7 @@ pub struct Config {
     pub docker: DockerConfig,
     pub worker: WorkerConfig,
     pub chat: ChatConfig,
+    pub tool_permissions: ToolPermissionsConfig,
     pub memory: MemoryConfig,
     pub routing: RoutingConfig,
     pub budget: BudgetConfig,
@@ -49,6 +50,29 @@ pub struct ChatConfig {
     pub codex_timeout_seconds: u64,
     pub memory_hit_limit: usize,
     pub max_iterations: usize,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPermissionPolicy {
+    Auto,
+    Ask,
+    Deny,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ToolPermissionsConfig {
+    pub library_read: ToolPermissionPolicy,
+    pub library_create: ToolPermissionPolicy,
+    pub library_edit_markdown: ToolPermissionPolicy,
+    pub library_move: ToolPermissionPolicy,
+    pub library_delete: ToolPermissionPolicy,
+    pub workspace_create: ToolPermissionPolicy,
+    pub workspace_move: ToolPermissionPolicy,
+    pub workspace_delete: ToolPermissionPolicy,
+    pub memory_write: ToolPermissionPolicy,
+    pub settings_change: ToolPermissionPolicy,
+    pub agent_launch: ToolPermissionPolicy,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -145,6 +169,24 @@ impl Default for ChatConfig {
     }
 }
 
+impl Default for ToolPermissionsConfig {
+    fn default() -> Self {
+        Self {
+            library_read: ToolPermissionPolicy::Auto,
+            library_create: ToolPermissionPolicy::Auto,
+            library_edit_markdown: ToolPermissionPolicy::Ask,
+            library_move: ToolPermissionPolicy::Ask,
+            library_delete: ToolPermissionPolicy::Ask,
+            workspace_create: ToolPermissionPolicy::Auto,
+            workspace_move: ToolPermissionPolicy::Ask,
+            workspace_delete: ToolPermissionPolicy::Ask,
+            memory_write: ToolPermissionPolicy::Auto,
+            settings_change: ToolPermissionPolicy::Ask,
+            agent_launch: ToolPermissionPolicy::Ask,
+        }
+    }
+}
+
 impl Default for RoutingConfig {
     fn default() -> Self {
         Self {
@@ -196,6 +238,7 @@ impl Config {
                     .unwrap_or(1),
             },
             chat: ChatConfig::default(),
+            tool_permissions: ToolPermissionsConfig::default(),
             memory: MemoryConfig::default(),
             routing: RoutingConfig::default(),
             budget: BudgetConfig::default(),
@@ -251,6 +294,7 @@ impl Config {
             docker: self.docker.clone(),
             worker: self.worker.clone(),
             chat: self.chat.clone(),
+            tool_permissions: self.tool_permissions.clone(),
             memory: self.memory.clone(),
             routing: self.routing.clone(),
             budget: self.budget.clone(),
@@ -273,6 +317,7 @@ impl Config {
         self.docker = stored.docker;
         self.worker = stored.worker;
         self.chat = stored.chat;
+        self.tool_permissions = stored.tool_permissions;
         self.memory = stored.memory;
         self.routing = stored.routing;
         self.budget = stored.budget;
@@ -300,6 +345,8 @@ struct StoredConfig {
     worker: WorkerConfig,
     #[serde(default)]
     chat: ChatConfig,
+    #[serde(default)]
+    tool_permissions: ToolPermissionsConfig,
     #[serde(default)]
     memory: MemoryConfig,
     #[serde(default)]
@@ -449,6 +496,7 @@ mod tests {
         config.chat.codex_timeout_seconds = 42;
         config.chat.memory_hit_limit = 7;
         config.chat.max_iterations = 5;
+        config.tool_permissions.library_delete = ToolPermissionPolicy::Deny;
         config.save().expect("save");
 
         let stored =
@@ -462,6 +510,8 @@ mod tests {
         assert!(stored.contains("codex-home"));
         assert!(stored.contains("[chat]"));
         assert!(stored.contains("codex_timeout_seconds = 42"));
+        assert!(stored.contains("[tool_permissions]"));
+        assert!(stored.contains("library_delete = \"deny\""));
 
         let reloaded = Config::load_or_default(Some(home.clone())).expect("reload");
         assert!(reloaded.routing.fallback_enabled);
@@ -476,6 +526,10 @@ mod tests {
         assert_eq!(reloaded.chat.codex_timeout_seconds, 42);
         assert_eq!(reloaded.chat.memory_hit_limit, 7);
         assert_eq!(reloaded.chat.max_iterations, 5);
+        assert_eq!(
+            reloaded.tool_permissions.library_delete,
+            ToolPermissionPolicy::Deny
+        );
         std::fs::remove_dir_all(home).ok();
     }
 }

@@ -113,3 +113,9 @@ boundary is explicit:
   the user selected an existing directory; library tools do not create arbitrary
   external directories.
 - Tool writes are recorded as `library_tool` system events.
+
+Tool execution also passes through persisted `[tool_permissions]` policy. The
+first policy values are `auto`, `ask`, and `deny`. Direct slash commands count as
+explicit user intent for `ask` policies, while `deny` blocks the operation and
+logs a `tool_permission` event. Destructive delete still requires an explicit
+`--yes` flag in addition to policy allowance.

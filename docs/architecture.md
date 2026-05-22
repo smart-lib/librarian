@@ -159,6 +159,13 @@ separate from implementation/product folder operations even when the underlying
 sandboxing mechanics are similar. External attached implementation directories
 are still project-record behavior, not `/work` folder creation.
 
+Tool execution is controlled by persisted `[tool_permissions]` config. The first
+policy gate supports `auto`, `ask`, and `deny`; slash commands are explicit user
+actions, so `ask` is allowed and audited as `allowed_user_slash`. `deny` blocks
+the operation and records a `tool_permission` system event. Future
+assistant-initiated tool calls should use the same policy gate but surface an
+interactive approval request for `ask`.
+
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
 `~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired

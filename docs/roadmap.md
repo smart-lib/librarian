@@ -391,8 +391,10 @@ Tasks:
 Status: First backend tool boundary started. Library filesystem tools now exist
 as narrow host-side operations for `Library`; default working-folder tools for
 `Projects` are split into the separate `/work` namespace. Direct slash commands
-can invoke both without an LLM call. Assistant-initiated tool invocation,
-permission prompts, richer command UX, and UI controls remain.
+can invoke both without an LLM call. First persisted `auto/ask/deny` policies
+exist and slash commands pass through the policy/audit gate. Assistant-initiated
+tool invocation, interactive approval prompts, richer command UX, and UI
+controls remain.
 
 Goal: Librarian should be useful inside its own root without unrestricted host
 power. Tools must be explicit, logged, permissioned, and available both through
@@ -424,7 +426,11 @@ Tool groups:
 Permission model:
 
 - Each tool has a policy: `auto`, `ask`, or `deny`.
-- Destructive filesystem operations default to `ask`.
+- Each tool has a policy: `auto`, `ask`, or `deny`. First persisted
+  `[tool_permissions]` config is implemented for library, workspace, memory,
+  settings, and agent-launch groups.
+- Destructive filesystem operations default to `ask`. Slash commands are treated
+  as explicit user intent when policy is `ask`, while `deny` blocks and logs.
 - Editing user Markdown defaults to `ask` until the user grants broader trust.
 - Memory writes can be `auto` for low-risk chat-derived notes but must expose
   what was remembered and allow correction.
@@ -432,6 +438,8 @@ Permission model:
   default to `ask`.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
+  First pass logs `tool_permission` decisions and mutating library/workspace
+  events.
 
 Slash commands:
 
