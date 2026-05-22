@@ -373,7 +373,10 @@ Tasks:
   so agents can run without interrupting the Librarian conversation.
 - Define the project library model: Markdown project memory folders live under
   `Librarian/Library/projects/{ProjectName}` by default, and each can attach to an
-  external working directory mounted into agent containers.
+  external working directory mounted into agent containers. Refined model:
+  any folder or Markdown note in `Library` can behave as a project-like library
+  item (book/shelf/rack/row metaphor), while implementation/product folders stay
+  separate attached working directories.
 - Add project creation/linking from the admin UI: create the memory folder,
   optionally create the working directory under the default projects root, or
   attach an existing directory.
@@ -385,8 +388,9 @@ Tasks:
 
 ## Priority 1C: Tools, Permissions, and Slash Commands
 
-Status: Planned. This comes after the first real chat path, because tool calls
-need a real assistant loop to propose and interpret them.
+Status: First backend tool boundary started. Library filesystem tools now exist
+as narrow host-side operations for `Library` and `Projects`; chat/LLM invocation,
+permission prompts, slash commands, and UI controls remain.
 
 Goal: Librarian should be useful inside its own root without unrestricted host
 power. Tools must be explicit, logged, permissioned, and available both through
@@ -396,8 +400,12 @@ Tool groups:
 
 - Library/project filesystem tools within `Librarian/Library` and
   `Librarian/Projects`: create empty folders/files, rename, move, and delete.
+  First API pass implemented with relative-path sandboxing and `library_tool`
+  system events.
 - Markdown content tools for user content under `Librarian/Library`: read,
-  create, edit, append, summarize, and reorganize `.md` notes.
+  create, edit, append, summarize, and reorganize `.md` notes. First API pass
+  supports whole-file read/write for `.md` under `Library`; safer patch/section
+  editing remains.
 - Memory tools: write durable facts, decisions, instructions, preferences,
   status notes, and run observations; update/supersede/contradict older memory
   with audit trail.

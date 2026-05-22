@@ -95,3 +95,20 @@ Git behavior is configured per project. The default policy allows commits and
 pushes, while marking `main` and `master` as protected branch names for future
 strategy checks. Later milestones should add branch-pattern rules, protected
 branch handling, remote allowlists, and audit records for every git write.
+
+## Library Tools Boundary
+
+Librarian chat must not receive broad host filesystem access. The MVP tool
+boundary is explicit:
+
+- `Library` and `Projects` are the only roots available to library tools.
+- Tool inputs are relative paths only; absolute paths and `..` traversal are
+  rejected.
+- Existing paths are canonicalized and checked to remain inside the selected
+  root before use.
+- Folder and empty-file creation is allowed only inside those roots.
+- Markdown content read/write is allowed only for `.md` files under `Library`.
+- External implementation directories may be attached to project records only if
+  the user selected an existing directory; library tools do not create arbitrary
+  external directories.
+- Tool writes are recorded as `library_tool` system events.

@@ -2,7 +2,7 @@ use std::{collections::HashSet, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Query, State},
     response::{Html, IntoResponse},
     routing::{get, patch, post},
     Json, Router,
@@ -20,7 +20,9 @@ use crate::{
         ContextPack, JobStatus, MemoryKind, MountMode, NetworkMode, Project, ScheduleKind,
         ScheduleStatus,
     },
-    gates, memory, router, scheduler,
+    gates, library_tools,
+    library_tools::LibraryRoot,
+    memory, router, scheduler,
     secrets::SecretVault,
     third_eye, worker,
 };
@@ -1272,6 +1274,38 @@ struct LibrarianChatRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct LibraryTreeQuery {
+    root: Option<LibraryRoot>,
+    max_depth: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LibraryPathRequest {
+    root: LibraryRoot,
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LibraryMoveRequest {
+    root: LibraryRoot,
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LibraryDeleteRequest {
+    root: LibraryRoot,
+    path: String,
+    recursive: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LibraryMarkdownRequest {
+    path: String,
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct CreateScheduleRequest {
     name: String,
     kind: String,
@@ -1355,6 +1389,15 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/providers/resume", post(resume_provider))
         .route("/api/usage", get(usage_observations))
         .route("/api/third-eye", get(third_eye_status))
+        .route("/api/library/tree", get(library_tree))
+        .route("/api/library/folders", post(library_create_folder))
+        .route("/api/library/files", post(library_create_file))
+        .route(
+            "/api/library/markdown",
+            get(library_read_markdown).post(library_write_markdown),
+        )
+        .route("/api/library/move", post(library_move))
+        .route("/api/library/delete", post(library_delete))
         .route("/api/jobs/:id", get(job))
         .route("/api/jobs/:id/events", get(job_events))
         .route("/api/jobs/:id/preflight", post(preflight_job))
@@ -1451,6 +1494,148 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn projects(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.db.list_projects().await?))
+}
+
+async fn library_tree(
+    State(state): State<AppState>,
+    Query(query): Query<LibraryTreeQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let max_depth = query.max_depth.unwrap_or(6);
+    if let Some(root) = query.root {
+        return Ok(Json(serde_json::json!({
+            "roots": [library_tools::tree(&config, root, max_depth)?],
+        })));
+    }
+    Ok(Json(serde_json::json!({
+        "roots": [
+            library_tools::tree(&config, LibraryRoot::Library, max_depth)?,
+            library_tools::tree(&config, LibraryRoot::Projects, max_depth)?,
+        ],
+    })))
+}
+
+async fn library_create_folder(
+    State(state): State<AppState>,
+    Json(input): Json<LibraryPathRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let path = library_tools::create_folder(&config, input.root, &input.path)?;
+    state
+        .db
+        .add_system_event(
+            "library_tool",
+            serde_json::json!({
+                "action": "create_folder",
+                "root": input.root,
+                "path": path.path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true, "path": path })))
+}
+
+async fn library_create_file(
+    State(state): State<AppState>,
+    Json(input): Json<LibraryPathRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let path = library_tools::create_empty_file(&config, input.root, &input.path)?;
+    state
+        .db
+        .add_system_event(
+            "library_tool",
+            serde_json::json!({
+                "action": "create_empty_file",
+                "root": input.root,
+                "path": path.path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true, "path": path })))
+}
+
+async fn library_read_markdown(
+    State(state): State<AppState>,
+    Query(input): Query<LibraryMarkdownRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let content = library_tools::read_markdown(&config, &input.path)?;
+    Ok(Json(serde_json::json!({
+        "root": "library",
+        "path": input.path,
+        "content": content,
+    })))
+}
+
+async fn library_write_markdown(
+    State(state): State<AppState>,
+    Json(input): Json<LibraryMarkdownRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Some(content) = input.content.as_deref() else {
+        return Err(anyhow::anyhow!("content is required").into());
+    };
+    let config = state.config.read().await.clone();
+    let path = library_tools::write_markdown(&config, &input.path, content)?;
+    state
+        .db
+        .add_system_event(
+            "library_tool",
+            serde_json::json!({
+                "action": "write_markdown",
+                "root": "library",
+                "path": path.path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true, "path": path })))
+}
+
+async fn library_move(
+    State(state): State<AppState>,
+    Json(input): Json<LibraryMoveRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let path = library_tools::move_path(&config, input.root, &input.from, &input.to)?;
+    state
+        .db
+        .add_system_event(
+            "library_tool",
+            serde_json::json!({
+                "action": "move",
+                "root": input.root,
+                "from": input.from,
+                "to": path.path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true, "path": path })))
+}
+
+async fn library_delete(
+    State(state): State<AppState>,
+    Json(input): Json<LibraryDeleteRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let path = library_tools::delete_path(
+        &config,
+        input.root,
+        &input.path,
+        input.recursive.unwrap_or(false),
+    )?;
+    state
+        .db
+        .add_system_event(
+            "library_tool",
+            serde_json::json!({
+                "action": "delete",
+                "root": input.root,
+                "path": path.path,
+                "recursive": input.recursive.unwrap_or(false),
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true, "path": path })))
 }
 
 async fn jobs(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {

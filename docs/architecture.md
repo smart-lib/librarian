@@ -117,6 +117,30 @@ knowledge across chats, projects, and background runs:
 The vault is Obsidian-compatible: Markdown files, YAML frontmatter, and ordinary
 folder structure under version control.
 
+Project memory is modeled as a real library hierarchy. A "project" can be any
+folder or Markdown note inside `Library`: a book, shelf, rack, or row of racks in
+the future visual metaphor. This documentation/product knowledge is separate
+from the implementation working directory. When a project needs executable or
+editable product files, Librarian attaches it to a working directory: by default
+`Projects/{ProjectName}` under the Librarian root, or an existing user-selected
+external directory. Librarian must not create arbitrary external directories.
+
+The first library tool layer exposes narrow operations instead of general
+filesystem access:
+
+- list the `Library` and `Projects` trees;
+- create folders and empty files inside those two roots;
+- rename or move paths inside the same approved root;
+- delete paths inside the same approved root, with explicit recursive delete for
+  folders;
+- read and write Markdown content only under `Library`.
+
+All tool paths are relative to the selected root, reject absolute paths and
+parent traversal, and are checked against the canonical root before use. Obsidian
+integration is currently compatibility-level only: Markdown files, folders,
+frontmatter, and wikilinks. No Obsidian CLI or plugin API is required or invoked
+yet.
+
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
 `~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired

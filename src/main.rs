@@ -5,6 +5,7 @@ mod db;
 mod docker_runner;
 mod domain;
 mod gates;
+mod library_tools;
 mod memory;
 mod prompt;
 mod providers;
