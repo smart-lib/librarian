@@ -101,12 +101,13 @@ branch handling, remote allowlists, and audit records for every git write.
 Librarian chat must not receive broad host filesystem access. The MVP tool
 boundary is explicit:
 
-- `Library` and `Projects` are the only roots available to library tools.
+- `Library` is the only root available to library tools.
+- `Projects` is handled by a separate workspace/project tool namespace.
 - Tool inputs are relative paths only; absolute paths and `..` traversal are
   rejected.
 - Existing paths are canonicalized and checked to remain inside the selected
   root before use.
-- Folder and empty-file creation is allowed only inside those roots.
+- Folder and empty-file creation is allowed only inside the selected tool root.
 - Markdown content read/write is allowed only for `.md` files under `Library`.
 - External implementation directories may be attached to project records only if
   the user selected an existing directory; library tools do not create arbitrary

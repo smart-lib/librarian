@@ -125,11 +125,12 @@ editable product files, Librarian attaches it to a working directory: by default
 `Projects/{ProjectName}` under the Librarian root, or an existing user-selected
 external directory. Librarian must not create arbitrary external directories.
 
-The first library tool layer exposes narrow operations instead of general
-filesystem access:
+The first library/workspace tool layer exposes narrow operations instead of
+general filesystem access:
 
-- list the `Library` and `Projects` trees;
-- create folders and empty files inside those two roots;
+- list the `Library` tree through library tools and the `Projects` tree through
+  workspace tools;
+- create folders and empty files inside the selected tool root;
 - rename or move paths inside the same approved root;
 - delete paths inside the same approved root, with explicit recursive delete for
   folders;
@@ -151,6 +152,12 @@ large note does not need to be loaded and rewritten by the caller. Deterministic
 slash commands are logged into chat memory, and mutating library commands also
 write `library_tool` system events. Destructive delete requires an explicit
 `--yes` flag even though it is already inside the sandbox.
+
+Default working directories under `Projects` are handled by a separate
+workspace tool namespace, `/work`. This keeps knowledge-library operations
+separate from implementation/product folder operations even when the underlying
+sandboxing mechanics are similar. External attached implementation directories
+are still project-record behavior, not `/work` folder creation.
 
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and

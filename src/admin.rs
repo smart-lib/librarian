@@ -1503,15 +1503,10 @@ async fn library_tree(
     let config = state.config.read().await.clone();
     let max_depth = query.max_depth.unwrap_or(6);
     if let Some(root) = query.root {
-        return Ok(Json(serde_json::json!({
-            "roots": [library_tools::tree(&config, root, max_depth)?],
-        })));
+        ensure_library_api_root(root)?;
     }
     Ok(Json(serde_json::json!({
-        "roots": [
-            library_tools::tree(&config, LibraryRoot::Library, max_depth)?,
-            library_tools::tree(&config, LibraryRoot::Projects, max_depth)?,
-        ],
+        "roots": [library_tools::tree(&config, LibraryRoot::Library, max_depth)?],
     })))
 }
 
@@ -1519,6 +1514,7 @@ async fn library_create_folder(
     State(state): State<AppState>,
     Json(input): Json<LibraryPathRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    ensure_library_api_root(input.root)?;
     let config = state.config.read().await.clone();
     let path = library_tools::create_folder(&config, input.root, &input.path)?;
     state
@@ -1539,6 +1535,7 @@ async fn library_create_file(
     State(state): State<AppState>,
     Json(input): Json<LibraryPathRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    ensure_library_api_root(input.root)?;
     let config = state.config.read().await.clone();
     let path = library_tools::create_empty_file(&config, input.root, &input.path)?;
     state
@@ -1595,6 +1592,7 @@ async fn library_move(
     State(state): State<AppState>,
     Json(input): Json<LibraryMoveRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    ensure_library_api_root(input.root)?;
     let config = state.config.read().await.clone();
     let path = library_tools::move_path(&config, input.root, &input.from, &input.to)?;
     state
@@ -1616,6 +1614,7 @@ async fn library_delete(
     State(state): State<AppState>,
     Json(input): Json<LibraryDeleteRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    ensure_library_api_root(input.root)?;
     let config = state.config.read().await.clone();
     let path = library_tools::delete_path(
         &config,
@@ -1636,6 +1635,15 @@ async fn library_delete(
         )
         .await?;
     Ok(Json(serde_json::json!({ "ok": true, "path": path })))
+}
+
+fn ensure_library_api_root(root: LibraryRoot) -> Result<()> {
+    if root != LibraryRoot::Library {
+        anyhow::bail!(
+            "Library API only accepts root=library; use workspace/project tools for Projects"
+        );
+    }
+    Ok(())
 }
 
 async fn jobs(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
@@ -2298,7 +2306,7 @@ async fn execute_slash_command(
     let args = split_slash_args(command_line)?;
     if args.is_empty() {
         return Ok(Some(slash_reply(
-            "Available commands: /library, /mkdir, /touch, /read, /write, /move, /delete, /help",
+            "Available commands: /lib, /work, /help",
             serde_json::json!({ "command": "empty" }),
         )));
     }
@@ -2306,26 +2314,17 @@ async fn execute_slash_command(
     let command = args[0].to_ascii_lowercase();
     let result = if command == "lib" {
         execute_library_slash_command(db, config, &args[1..]).await?
+    } else if matches!(command.as_str(), "work" | "workspace") {
+        execute_workspace_slash_command(db, config, &args[1..]).await?
     } else {
         match command.as_str() {
             "help" => slash_reply(
-                library_slash_help(),
+                slash_help(),
                 serde_json::json!({ "command": command }),
             ),
             "library" => execute_library_slash_command(db, config, &["tree".to_string()]).await?,
-            "mkdir" | "touch" | "read" | "write" | "move" | "rename" | "delete" => {
-                let mut namespaced = vec![command.clone()];
-                namespaced.extend(args.iter().skip(1).cloned());
-                let mut reply = execute_library_slash_command(db, config, &namespaced).await?;
-                reply.reply = format!(
-                    "Deprecated root command. Prefer `/lib {}`.\n\n{}",
-                    namespaced.join(" "),
-                    reply.reply
-                );
-                reply
-            }
             _ => slash_reply(
-                "Unknown slash command. Try /help.",
+                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -2353,31 +2352,21 @@ async fn execute_library_slash_command(
             serde_json::json!({ "tool": "library", "command": command }),
         ),
         "tree" => {
-            let root = args
-                .get(1)
-                .map(|value| parse_library_root(value))
-                .transpose()?;
             let depth = args
-                .get(2)
+                .get(1)
                 .map(|value| value.parse::<usize>())
                 .transpose()
                 .map_err(|error| anyhow::anyhow!("Invalid depth: {error}"))?
                 .unwrap_or(4);
-            let roots = if let Some(root) = root {
-                vec![library_tools::tree(config, root, depth)?]
-            } else {
-                vec![
-                    library_tools::tree(config, LibraryRoot::Library, depth)?,
-                    library_tools::tree(config, LibraryRoot::Projects, depth)?,
-                ]
-            };
+            let roots = vec![library_tools::tree(config, LibraryRoot::Library, depth)?];
             slash_reply(
                 &format!("Library tree loaded: {} root(s).", roots.len()),
                 serde_json::json!({ "tool": "library", "command": command, "roots": roots }),
             )
         }
         "mkdir" => {
-            let (root, path) = slash_root_path_args(&args)?;
+            let path = slash_single_path_arg(&args, "/lib mkdir <path>")?;
+            let root = LibraryRoot::Library;
             let tool_path = library_tools::create_folder(config, root, path)?;
             log_slash_library_event(
                 db,
@@ -2391,7 +2380,8 @@ async fn execute_library_slash_command(
             )
         }
         "touch" => {
-            let (root, path) = slash_root_path_args(&args)?;
+            let path = slash_single_path_arg(&args, "/lib touch <path>")?;
+            let root = LibraryRoot::Library;
             let tool_path = library_tools::create_empty_file(config, root, path)?;
             log_slash_library_event(
                 db,
@@ -2594,32 +2584,32 @@ async fn execute_library_slash_command(
             )
         }
         "move" | "rename" => {
-            if args.len() < 4 {
-                anyhow::bail!("Usage: /lib move <library|projects> <from> <to>");
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /lib move <from> <to>");
             }
-            let root = parse_library_root(&args[1])?;
-            let tool_path = library_tools::move_path(config, root, &args[2], &args[3])?;
+            let root = LibraryRoot::Library;
+            let tool_path = library_tools::move_path(config, root, &args[1], &args[2])?;
             log_slash_library_event(
                 db,
                 "move",
-                serde_json::json!({ "root": root, "from": args[2], "to": tool_path.path }),
+                serde_json::json!({ "root": root, "from": args[1], "to": tool_path.path }),
             )
             .await?;
             slash_reply(
                 &format!("Moved {:?} item to: {}", root, tool_path.path),
-                serde_json::json!({ "tool": "library", "command": command, "root": root, "from": args[2], "to": tool_path.path }),
+                serde_json::json!({ "tool": "library", "command": command, "root": root, "from": args[1], "to": tool_path.path }),
             )
         }
         "delete" => {
-            if args.len() < 4 || !args.iter().any(|arg| arg == "--yes") {
+            if args.len() < 3 || !args.iter().any(|arg| arg == "--yes") {
                 return Ok(slash_reply(
-                    "Delete is destructive. Use: /lib delete <library|projects> <path> --yes [--recursive]",
+                    "Delete is destructive. Use: /lib delete <path> --yes [--recursive]",
                     serde_json::json!({ "tool": "library", "command": command, "status": "needs_explicit_confirmation" }),
                 ));
             }
-            let root = parse_library_root(&args[1])?;
+            let root = LibraryRoot::Library;
             let recursive = args.iter().any(|arg| arg == "--recursive");
-            let tool_path = library_tools::delete_path(config, root, &args[2], recursive)?;
+            let tool_path = library_tools::delete_path(config, root, &args[1], recursive)?;
             log_slash_library_event(
                 db,
                 "delete",
@@ -2650,23 +2640,127 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
     }
 }
 
+fn slash_help() -> &'static str {
+    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+}
+
 fn library_slash_help() -> &'static str {
-    "Library commands live under /lib:\n/lib tree [library|projects] [depth]\n/lib mkdir <library|projects> <path>\n/lib touch <library|projects> <path>\n/lib read <library-md-path> [start] [end]\n/lib read-lines <library-md-path> <start> <end>\n/lib write-overwrite <library-md-path> <content>\n/lib append <library-md-path> <content>\n/lib cut-lines <library-md-path> <start> <end>\n/lib replace-lines <library-md-path> <start> <end> <content>\n/lib find <library-md-path> <query> [limit]\n/lib cut-find <library-md-path> <query>\n/lib replace-find <library-md-path> <query> <content>\n/lib move <library|projects> <from> <to>\n/lib delete <library|projects> <path> --yes [--recursive]"
+    "Library commands live under /lib:\n/lib tree [depth]\n/lib mkdir <path>\n/lib touch <path>\n/lib read <library-md-path> [start] [end]\n/lib read-lines <library-md-path> <start> <end>\n/lib write-overwrite <library-md-path> <content>\n/lib append <library-md-path> <content>\n/lib cut-lines <library-md-path> <start> <end>\n/lib replace-lines <library-md-path> <start> <end> <content>\n/lib find <library-md-path> <query> [limit]\n/lib cut-find <library-md-path> <query>\n/lib replace-find <library-md-path> <query> <content>\n/lib move <from> <to>\n/lib delete <path> --yes [--recursive]"
 }
 
-fn slash_root_path_args(args: &[String]) -> Result<(LibraryRoot, &str)> {
-    if args.len() < 3 {
-        anyhow::bail!("Usage: /{} <library|projects> <path>", args[0]);
+async fn execute_workspace_slash_command(
+    db: &Database,
+    config: &Config,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            workspace_slash_help(),
+            serde_json::json!({ "command": "work" }),
+        ));
     }
-    Ok((parse_library_root(&args[1])?, args[2].as_str()))
+
+    let command = args[0].to_ascii_lowercase();
+    let root = LibraryRoot::Projects;
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            workspace_slash_help(),
+            serde_json::json!({ "tool": "workspace", "command": command }),
+        ),
+        "tree" => {
+            let depth = args
+                .get(1)
+                .map(|value| value.parse::<usize>())
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("Invalid depth: {error}"))?
+                .unwrap_or(4);
+            let tree = library_tools::tree(config, root, depth)?;
+            slash_reply(
+                "Workspace tree loaded.",
+                serde_json::json!({ "tool": "workspace", "command": command, "root": root, "tree": tree }),
+            )
+        }
+        "mkdir" => {
+            let path = slash_single_path_arg(args, "/work mkdir <path>")?;
+            let tool_path = library_tools::create_folder(config, root, path)?;
+            log_workspace_event(
+                db,
+                "create_folder",
+                serde_json::json!({ "root": root, "path": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Created workspace folder: {}", tool_path.path),
+                serde_json::json!({ "tool": "workspace", "command": command, "root": root, "path": tool_path.path }),
+            )
+        }
+        "touch" => {
+            let path = slash_single_path_arg(args, "/work touch <path>")?;
+            let tool_path = library_tools::create_empty_file(config, root, path)?;
+            log_workspace_event(
+                db,
+                "create_empty_file",
+                serde_json::json!({ "root": root, "path": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Created workspace file: {}", tool_path.path),
+                serde_json::json!({ "tool": "workspace", "command": command, "root": root, "path": tool_path.path }),
+            )
+        }
+        "move" | "rename" => {
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /work move <from> <to>");
+            }
+            let tool_path = library_tools::move_path(config, root, &args[1], &args[2])?;
+            log_workspace_event(
+                db,
+                "move",
+                serde_json::json!({ "root": root, "from": args[1], "to": tool_path.path }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Moved workspace item to: {}", tool_path.path),
+                serde_json::json!({ "tool": "workspace", "command": command, "root": root, "from": args[1], "to": tool_path.path }),
+            )
+        }
+        "delete" => {
+            if args.len() < 3 || !args.iter().any(|arg| arg == "--yes") {
+                return Ok(slash_reply(
+                    "Delete is destructive. Use: /work delete <path> --yes [--recursive]",
+                    serde_json::json!({ "tool": "workspace", "command": command, "status": "needs_explicit_confirmation" }),
+                ));
+            }
+            let recursive = args.iter().any(|arg| arg == "--recursive");
+            let tool_path = library_tools::delete_path(config, root, &args[1], recursive)?;
+            log_workspace_event(
+                db,
+                "delete",
+                serde_json::json!({ "root": root, "path": tool_path.path, "recursive": recursive }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Deleted workspace item: {}", tool_path.path),
+                serde_json::json!({ "tool": "workspace", "command": command, "root": root, "path": tool_path.path, "recursive": recursive }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown workspace command. Try /work help.",
+            serde_json::json!({ "tool": "workspace", "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(result)
 }
 
-fn parse_library_root(value: &str) -> Result<LibraryRoot> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "library" | "lib" => Ok(LibraryRoot::Library),
-        "projects" | "project" => Ok(LibraryRoot::Projects),
-        _ => anyhow::bail!("Root must be `library` or `projects`"),
-    }
+fn workspace_slash_help() -> &'static str {
+    "Workspace commands live under /work and operate only inside Librarian/Projects:\n/work tree [depth]\n/work mkdir <path>\n/work touch <path>\n/work move <from> <to>\n/work delete <path> --yes [--recursive]\n\nUse this for default implementation/product folders, not for library knowledge."
+}
+
+fn slash_single_path_arg<'a>(args: &'a [String], usage: &str) -> Result<&'a str> {
+    args.get(1)
+        .map(String::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Usage: {usage}"))
 }
 
 fn parse_line_number(value: &str) -> Result<usize> {
@@ -2702,6 +2796,23 @@ async fn log_slash_library_event(
 ) -> Result<()> {
     db.add_system_event(
         "library_tool",
+        serde_json::json!({
+            "action": action,
+            "source": "slash-command",
+            "payload": payload,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn log_workspace_event(
+    db: &Database,
+    action: &str,
+    payload: serde_json::Value,
+) -> Result<()> {
+    db.add_system_event(
+        "workspace_tool",
         serde_json::json!({
             "action": action,
             "source": "slash-command",

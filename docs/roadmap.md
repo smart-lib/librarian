@@ -389,9 +389,10 @@ Tasks:
 ## Priority 1C: Tools, Permissions, and Slash Commands
 
 Status: First backend tool boundary started. Library filesystem tools now exist
-as narrow host-side operations for `Library` and `Projects`; direct slash
-commands can invoke them without an LLM call. Assistant-initiated tool
-invocation, permission prompts, richer command UX, and UI controls remain.
+as narrow host-side operations for `Library`; default working-folder tools for
+`Projects` are split into the separate `/work` namespace. Direct slash commands
+can invoke both without an LLM call. Assistant-initiated tool invocation,
+permission prompts, richer command UX, and UI controls remain.
 
 Goal: Librarian should be useful inside its own root without unrestricted host
 power. Tools must be explicit, logged, permissioned, and available both through
@@ -399,10 +400,13 @@ assistant decisions and direct slash commands that do not call the LLM.
 
 Tool groups:
 
-- Library/project filesystem tools within `Librarian/Library` and
-  `Librarian/Projects`: create empty folders/files, rename, move, and delete.
-  First API pass implemented with relative-path sandboxing and `library_tool`
-  system events.
+- Library filesystem tools within `Librarian/Library`: create empty
+  folders/files, rename, move, and delete. First API pass implemented with
+  relative-path sandboxing and `library_tool` system events.
+- Workspace filesystem tools within `Librarian/Projects`: create empty
+  folders/files, rename, move, and delete for default implementation/product
+  folders. These are semantically separate from library knowledge tools and use
+  the `/work` namespace plus `workspace_tool` system events.
 - Markdown content tools for user content under `Librarian/Library`: read,
   create, edit, append, summarize, and reorganize `.md` notes. First API pass
   supports whole-file read/write for `.md` under `Library`; second pass adds
@@ -434,8 +438,9 @@ Slash commands:
 - Add a command dispatcher before LLM invocation for commands such as
   `/remember`, `/project`, `/note`, `/move`, `/rename`, `/delete`, `/agent`,
   `/preflight`, `/settings`, and `/help`. First pass used root-level library
-  commands; second pass moves the primary surface under `/lib ...` and keeps old
-  root commands as deprecated compatibility shims.
+  commands; second pass moves the library surface under `/lib ...`, removes
+  project-folder operations from `/lib`, and adds `/work ...` for default
+  working folders.
 - Slash commands should execute without spending provider tokens when they are
   deterministic. First library-tool pass bypasses Codex inside `/api/chat`.
 - Slash-command results should still be added to the conversation/event history
