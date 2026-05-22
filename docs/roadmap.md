@@ -203,10 +203,11 @@ and the core flows can be tested manually and automatically.
 
 ## Priority 0: Working Librarian Chat
 
-Status: Not done. The UI is chat-first, but `/api/chat` currently uses a
-temporary local memory responder. It stores turns and retrieves memory, but it
-does not call an LLM and can echo its own placeholder responses back through
-memory retrieval.
+Status: First provider-backed pass implemented. `/api/chat` now builds a
+dedicated Librarian prompt from the user message and filtered memory context,
+then calls host `codex exec` with Librarian's configured portable `CODEX_HOME`.
+It no longer creates background jobs. Transcript/session structure, richer
+fallbacks, and tests remain.
 
 Goal: Librarian must be a real conversational assistant before agent automation
 is polished. A user must be able to talk without selecting a project, discuss
@@ -216,16 +217,15 @@ answering.
 Tasks:
 
 - Replace `local-memory-responder` with a provider-backed Librarian chat path.
-  First MVP target: Codex CLI using the already configured portable Codex
-  profile.
+  First MVP target, Codex CLI using the configured portable Codex profile, is
+  implemented.
 - Build a dedicated Librarian chat prompt, separate from coding-agent prompts.
   Inputs: identity/instructions, user message, recent conversation turns,
   global memory, selected project memory when explicit, and compact citations.
 - Keep `/api/chat` as conversation only. It must not create background jobs or
   wait for agent execution.
-- Remove current self-echo behavior: do not retrieve placeholder assistant
-  replies, and do not store local placeholder output as durable assistant
-  memory once real chat exists.
+- Remove current self-echo behavior: placeholder assistant replies are filtered
+  from the chat prompt, and new responses are stored as `mode=codex-chat`.
 - Save useful user and assistant turns into memory, but distinguish raw chat
   transcript from durable facts/decisions/instructions.
 - Add a small chat transcript model: session/thread id, ordered turns, selected
@@ -735,11 +735,11 @@ Findings and tasks:
 - `src/admin.rs` still contains old inactive HTML functions behind
   `#[allow(dead_code)]`. Delete or move them into archived design notes once
   the new chat-first UI has covered the needed controls.
-- `/api/chat` currently uses `build_librarian_local_reply`, a temporary
-  `local-memory-responder`. Replace it under Priority 0.
-- The temporary responder stores its own placeholder answers as
-  `AssistantMessage`, causing self-echo memory retrieval. Fix immediately or
-  remove with the real chat provider path.
+- `/api/chat` now has a first Codex-backed path, but it is still embedded in
+  `src/admin.rs`; move chat prompting/provider execution into dedicated modules.
+- Legacy `local-memory-responder` memories may remain in existing user
+  databases. Keep filtering them from chat context and add a cleanup/backfill
+  command later.
 - `looks_like_agent_request` contains mojibake Russian literals and should not
   exist as a hardcoded multilingual intent detector. Replace with slash
   commands and the tool/permission intent layer.

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
@@ -8,7 +8,8 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use tokio::sync::RwLock;
+use tokio::time::timeout;
+use tokio::{io::AsyncWriteExt, process::Command as TokioCommand, sync::RwLock};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
@@ -1956,7 +1957,8 @@ async fn librarian_chat(
         .await?;
     memory::embed_item(&state.db, &config, &user_memory).await?;
 
-    let reply = build_librarian_local_reply(&gated.content, project.as_ref(), &context_pack);
+    let prompt = build_librarian_chat_prompt(&gated.content, project.as_ref(), &context_pack);
+    let reply = run_librarian_codex_chat(&config, &prompt).await?;
     let assistant_memory = state
         .db
         .add_memory_item(
@@ -1969,7 +1971,7 @@ async fn librarian_chat(
             serde_json::json!({
                 "project": project.as_ref().map(|project| project.name.clone()),
                 "scope": if project.is_some() { "project" } else { "global" },
-                "mode": "local-memory-responder",
+                "mode": "codex-chat",
             }),
         )
         .await?;
@@ -1979,7 +1981,7 @@ async fn librarian_chat(
         "reply": reply,
         "project": project.as_ref().map(|project| project.name.clone()),
         "memory_hits": context_pack.hits,
-        "mode": "local-memory-responder",
+        "mode": "codex-chat",
     })))
 }
 
@@ -2062,47 +2064,140 @@ async fn create_job(
     Ok(Json(job))
 }
 
-fn build_librarian_local_reply(
+fn build_librarian_chat_prompt(
     message: &str,
     project: Option<&Project>,
     context_pack: &ContextPack,
 ) -> String {
     let scope = project
         .map(|project| format!("project `{}`", project.name))
-        .unwrap_or_else(|| "the global library".to_string());
-    let mut reply = String::new();
-    reply.push_str("I am here as Librarian, not as a background agent runner.\n\n");
-    reply.push_str(&format!(
-        "I saved this turn in {scope} memory and looked up related context before answering."
-    ));
+        .unwrap_or_else(|| "global conversation".to_string());
+    let mut prompt = String::new();
+    prompt.push_str("You are Librarian: a calm, practical assistant for organizing ideas, projects, memory, and work.\n");
+    prompt.push_str("You are speaking directly with the user in the admin chat.\n");
+    prompt.push_str("You are not a background coding agent in this conversation.\n");
+    prompt.push_str("Do not claim to have launched agents, edited files, changed settings, or used tools unless the provided context explicitly says so.\n");
+    prompt.push_str("Use the retrieved memory as context, but do not dump it back verbatim. Answer naturally and helpfully.\n");
+    prompt.push_str("If the user asks for work that should become an agent task, discuss the plan and say that launching a background agent should be an explicit separate action.\n");
+    prompt.push_str("Keep the answer concise unless the user asks for detail.\n\n");
 
-    if context_pack.hits.is_empty() {
-        reply.push_str("\n\nI do not have a relevant memory thread for this yet. We can think it through from here, and I will keep the useful decisions as memory.");
+    prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));
+    prompt.push_str("## Retrieved Memory\n\n");
+    let hits = context_pack
+        .hits
+        .iter()
+        .filter(|hit| !is_placeholder_memory(&hit.item))
+        .take(8)
+        .collect::<Vec<_>>();
+    if hits.is_empty() {
+        prompt.push_str("No relevant durable memory was found.\n\n");
     } else {
-        reply.push_str("\n\nRelevant memory I found:");
-        for hit in context_pack.hits.iter().take(3) {
-            let content = hit.item.content.trim();
-            let snippet = if content.chars().count() > 220 {
-                let mut shortened = content.chars().take(220).collect::<String>();
-                shortened.push_str("...");
-                shortened
-            } else {
-                content.to_string()
-            };
-            reply.push_str(&format!(
-                "\n- [{:?}, score {:.2}] {}",
-                hit.item.kind, hit.score, snippet
+        for (index, hit) in hits.iter().enumerate() {
+            prompt.push_str(&format!(
+                "{}. kind={:?}; score={:.3}; observed={}; id={}\n",
+                index + 1,
+                hit.item.kind,
+                hit.score,
+                hit.item.observed_at.to_rfc3339(),
+                hit.item.id
             ));
+            prompt.push_str(hit.item.content.trim());
+            prompt.push_str("\n\n");
         }
     }
 
-    if looks_like_agent_request(message) {
-        reply.push_str("\n\nThis sounds like it may eventually become agent work. I will keep it in the conversation for now; launching a background agent should be a separate explicit action tied to a project.");
-    }
-
-    reply
+    prompt.push_str("## User Message\n\n");
+    prompt.push_str(message.trim());
+    prompt.push_str("\n\n## Response\n\n");
+    prompt
 }
 
+async fn run_librarian_codex_chat(config: &Config, prompt: &str) -> Result<String> {
+    let Some(codex_home) = &config.codex.host_home else {
+        anyhow::bail!(
+            "Codex chat is not configured. Run `CODEX_HOME={} codex`, then `librarian auth codex --codex-home {}`.",
+            config.home.join(".cfg").join("codex-home").display(),
+            config.home.join(".cfg").join("codex-home").display()
+        );
+    };
+    if !codex_home.exists() {
+        anyhow::bail!(
+            "Codex profile is missing at {}. Run `CODEX_HOME={} codex` and complete sign-in.",
+            codex_home.display(),
+            codex_home.display()
+        );
+    }
+
+    let chat_dir = config.home.join(".app").join("chat");
+    std::fs::create_dir_all(&chat_dir)?;
+    let output_path = chat_dir.join(format!("{}-last-message.txt", Uuid::new_v4()));
+    let work_dir = if config.vault_path.exists() {
+        config.vault_path.clone()
+    } else {
+        config.home.clone()
+    };
+
+    let mut child = TokioCommand::new("codex")
+        .arg("exec")
+        .arg("--json")
+        .arg("--skip-git-repo-check")
+        .arg("--sandbox")
+        .arg("read-only")
+        .arg("--cd")
+        .arg(&work_dir)
+        .arg("--output-last-message")
+        .arg(&output_path)
+        .arg("-")
+        .env("CODEX_HOME", codex_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| anyhow::anyhow!("Failed to start Codex CLI for chat: {error}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(prompt.as_bytes()).await?;
+    }
+
+    let output = timeout(Duration::from_secs(180), child.wait_with_output())
+        .await
+        .map_err(|_| anyhow::anyhow!("Codex chat timed out after 180 seconds"))??;
+    let last_message = std::fs::read_to_string(&output_path).unwrap_or_default();
+    let _ = std::fs::remove_file(&output_path);
+    if output.status.success() {
+        let reply = last_message.trim();
+        if !reply.is_empty() {
+            return Ok(reply.to_string());
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let fallback = stdout.trim();
+        if !fallback.is_empty() {
+            return Ok(fallback.to_string());
+        }
+        anyhow::bail!("Codex chat completed but returned an empty response.");
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    anyhow::bail!(
+        "Codex chat failed with status {}.\n{}\n{}",
+        output.status,
+        stderr.trim(),
+        stdout.trim()
+    );
+}
+
+fn is_placeholder_memory(item: &crate::domain::MemoryItem) -> bool {
+    item.metadata
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .is_some_and(|mode| mode == "local-memory-responder")
+        || item
+            .content
+            .starts_with("I am here as Librarian, not as a background agent runner.")
+}
+
+#[allow(dead_code)]
 fn looks_like_agent_request(message: &str) -> bool {
     let lower = message.to_lowercase();
     [
