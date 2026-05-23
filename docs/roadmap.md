@@ -685,6 +685,10 @@ Tasks:
 - Add tests for platform-root resolution and setup persistence without touching
   the real user home. First portable-layout test verifies explicit root setup,
   hidden/public directories, relative config persistence, and reload behavior.
+- Add tests for the chat endpoint that prove it does not create jobs and that
+  placeholder/self-echo memories are excluded. First endpoint test now covers
+  slash-command chat turns: user/assistant memory is persisted and no job is
+  created.
 
 Dependencies:
 

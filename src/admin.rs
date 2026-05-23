@@ -6184,6 +6184,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{body, http::StatusCode};
 
     #[test]
     fn parses_internal_chat_directive_from_json_fence() {
@@ -6215,6 +6216,67 @@ mod tests {
     #[test]
     fn leaves_plain_chat_reply_as_final_text() {
         assert!(parse_librarian_chat_directive("Yes, I am here and I see the context.").is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_endpoint_handles_slash_command_without_creating_jobs() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-chat-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let state = AppState {
+                db: db.clone(),
+                config: Arc::new(RwLock::new(config)),
+            };
+
+            let response = librarian_chat(
+                State(state),
+                Json(LibrarianChatRequest {
+                    message: "/help".to_string(),
+                    project: None,
+                }),
+            )
+            .await
+            .expect("chat response")
+            .into_response();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            assert_eq!(payload["mode"], "slash-command");
+            assert_eq!(payload["iterations"], 0);
+            assert!(payload["reply"]
+                .as_str()
+                .expect("reply")
+                .contains("Available command groups"));
+
+            assert!(db.list_jobs().await.expect("jobs").is_empty());
+            assert_eq!(db.count_memory_items().await.expect("memory count"), 2);
+            let recent_memory = db
+                .recent_memory_for_project(None, 10)
+                .await
+                .expect("recent memory");
+            assert!(recent_memory.iter().any(
+                |item| matches!(item.kind, MemoryKind::UserMessage) && item.content == "/help"
+            ));
+            assert!(recent_memory.iter().any(|item| {
+                matches!(item.kind, MemoryKind::AssistantMessage)
+                    && item
+                        .metadata
+                        .get("mode")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("slash-command")
+            }));
+        }
+
+        std::fs::remove_dir_all(home).ok();
     }
 
     #[test]
