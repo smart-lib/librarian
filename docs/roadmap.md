@@ -498,7 +498,9 @@ Tasks:
   toggles, add/delete actions, and per-block controls. First backend pass adds
   persisted `prompt_blocks` with target, name, content, enabled state, order,
   and markdown mode, plus `/prompt blocks`, `/prompt add-block`,
-  `/prompt enable`, `/prompt disable`, and `/prompt render`.
+  `/prompt enable`, `/prompt disable`, and `/prompt render`. First UI pass adds
+  a Prompt tab in settings for adding blocks, enabling/disabling blocks, and
+  rendering target previews.
 - Support presets for Librarian identity, operating principles, memory policy,
   tool permissions, git policy, Obsidian/vault behavior, task planning style,
   project goals, and provider caveats.

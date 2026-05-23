@@ -489,12 +489,14 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         <button class="tab-button active" type="button" data-tab="overview">Overview</button>
         <button class="tab-button" type="button" data-tab="providers">Providers</button>
         <button class="tab-button" type="button" data-tab="jobs">Jobs</button>
+        <button class="tab-button" type="button" data-tab="prompt">Prompt</button>
         <button class="tab-button" type="button" data-tab="system">System</button>
       </nav>
       <div class="tab-content">
         <section class="tab-pane active" data-pane="overview"><h2>Overview</h2><div id="overview" class="grid"></div></section>
         <section class="tab-pane" data-pane="providers"><h2>Providers</h2><div id="providers" class="grid"></div></section>
         <section class="tab-pane" data-pane="jobs"><h2>Jobs</h2><div id="jobs" class="stack"></div></section>
+        <section class="tab-pane" data-pane="prompt"><h2>Prompt Blocks</h2><div id="prompt-builder" class="stack"></div></section>
         <section class="tab-pane" data-pane="system"><h2>System</h2><div id="system-events" class="stack"></div></section>
       </div>
     </div>
@@ -514,6 +516,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       const state = {
         projects: [],
         projectMap: null,
+        promptBlocks: [],
         jobs: [],
         providers: { catalog: [], states: [] },
         health: null,
@@ -566,10 +569,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
       }
       async function refresh() {
-        const [health, projects, projectMap, jobs, providers, events] = await Promise.all([
+        const [health, projects, projectMap, promptBlocks, jobs, providers, events] = await Promise.all([
           loadJson('/api/health', null),
           loadJson('/api/projects', []),
           loadJson('/api/project-map', null),
+          loadJson('/api/prompt-blocks', []),
           loadJson('/api/jobs', []),
           loadJson('/api/providers', { catalog: [], states: [] }),
           loadJson('/api/system-events', [])
@@ -577,6 +581,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         state.health = health;
         state.projects = Array.isArray(projects) ? projects : [];
         state.projectMap = projectMap;
+        state.promptBlocks = Array.isArray(promptBlocks) ? promptBlocks : [];
         state.jobs = Array.isArray(jobs) ? jobs : [];
         state.providers = providers || { catalog: [], states: [] };
         if (!state.projects.some(project => project.name === state.activeProject)) {
@@ -585,6 +590,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         renderOverview();
         renderProviders();
         renderJobs();
+        renderPromptBuilder();
         renderSystemEvents(events);
         renderProjects();
         renderContext();
@@ -618,6 +624,45 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         el('jobs').innerHTML = state.jobs.length ? state.jobs.slice(0, 12).map(job => {
           return `<div class="card"><b>${htmlEscape(job.status)}</b> <span class="muted">${htmlEscape(job.provider)} ${shortId(job.id)}</span><br>${htmlEscape(job.goal)}<br><span class="muted tiny">${htmlEscape(job.created_at || '')}</span></div>`;
         }).join('') : '<div class="card muted">No jobs yet.</div>';
+      }
+      function renderPromptBuilder() {
+        const blocks = state.promptBlocks;
+        const targets = Array.from(new Set(blocks.map(block => block.target))).sort();
+        const targetOptions = targets.length ? targets.map(target => `<option value="${htmlEscape(target)}">${htmlEscape(target)}</option>`).join('') : '<option value="librarian">librarian</option><option value="agents">agents</option><option value="AGENTS.md">AGENTS.md</option><option value="CLAUDE.md">CLAUDE.md</option>';
+        const form = `<form id="prompt-block-form" class="card stack">
+          <h3>Add block</h3>
+          <div class="form-grid">
+            <div><label for="prompt-target">Target</label><input id="prompt-target" list="prompt-targets" value="librarian"><datalist id="prompt-targets">${targetOptions}</datalist></div>
+            <div><label for="prompt-name">Name</label><input id="prompt-name" required placeholder="identity"></div>
+            <div class="wide"><label for="prompt-content">Content</label><input id="prompt-content" required placeholder="You are Librarian..."></div>
+            <button type="submit">Add</button>
+          </div>
+        </form>`;
+        const list = blocks.length ? blocks.map(block => `<div class="card">
+          <h3>${htmlEscape(block.name)} <span class="muted tiny">[${htmlEscape(block.target)} #${block.position}]</span></h3>
+          <div class="muted tiny">${htmlEscape(block.content)}</div>
+          <div class="row"><button type="button" class="secondary" data-render-prompt="${htmlEscape(block.target)}">Preview target</button><button type="button" data-toggle-prompt="${htmlEscape(block.id)}" data-enabled="${block.enabled ? 'false' : 'true'}">${block.enabled ? 'Disable' : 'Enable'}</button></div>
+        </div>`).join('') : '<div class="card muted">No prompt blocks yet.</div>';
+        el('prompt-builder').innerHTML = `${form}<div id="prompt-preview" class="card muted">Choose preview target from any block.</div>${list}`;
+        el('prompt-block-form').addEventListener('submit', createPromptBlockFromUi);
+        qsa('[data-toggle-prompt]').forEach(button => button.addEventListener('click', async () => {
+          await fetch(`/api/prompt-blocks/${button.dataset.togglePrompt}/${button.dataset.enabled === 'true' ? 'enable' : 'disable'}`, { method: 'POST' });
+          await refresh();
+        }));
+        qsa('[data-render-prompt]').forEach(button => button.addEventListener('click', () => renderPromptPreview(button.dataset.renderPrompt)));
+      }
+      async function createPromptBlockFromUi(event) {
+        event.preventDefault();
+        await postJson('/api/prompt-blocks', {
+          target: el('prompt-target').value,
+          name: el('prompt-name').value,
+          content: el('prompt-content').value,
+          markdown: true
+        });
+      }
+      async function renderPromptPreview(target) {
+        const data = await loadJson(`/api/prompt-blocks/render?target=${encodeURIComponent(target)}`, null);
+        el('prompt-preview').innerHTML = data ? `<h3>${htmlEscape(target)}</h3><pre>${htmlEscape(data.rendered || '')}</pre>` : 'Could not render prompt.';
       }
       function renderSystemEvents(events) {
         el('system-events').innerHTML = Array.isArray(events) && events.length ? events.slice(0, 20).map(event => {
@@ -1425,6 +1470,19 @@ struct AttachWorkspaceRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct PromptBlocksQuery {
+    target: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatePromptBlockRequest {
+    target: String,
+    name: String,
+    content: String,
+    markdown: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 struct LibraryTreeQuery {
     root: Option<LibraryRoot>,
     max_depth: Option<usize>,
@@ -1524,6 +1582,13 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/health", get(health))
         .route("/api/projects", get(projects).post(create_project))
         .route("/api/project-map", get(project_map))
+        .route(
+            "/api/prompt-blocks",
+            get(prompt_blocks).post(create_prompt_block),
+        )
+        .route("/api/prompt-blocks/render", get(render_prompt_target))
+        .route("/api/prompt-blocks/:id/enable", post(enable_prompt_block))
+        .route("/api/prompt-blocks/:id/disable", post(disable_prompt_block))
         .route(
             "/api/projects/:id/attach-library",
             post(attach_project_library),
@@ -1778,6 +1843,110 @@ async fn project_map(State(state): State<AppState>) -> Result<impl IntoResponse,
     let config = state.config.read().await.clone();
     let projects = state.db.list_projects().await?;
     Ok(Json(build_project_map(&config, projects)?))
+}
+
+async fn prompt_blocks(
+    State(state): State<AppState>,
+    Query(query): Query<PromptBlocksQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        state.db.list_prompt_blocks(query.target.as_deref()).await?,
+    ))
+}
+
+async fn create_prompt_block(
+    State(state): State<AppState>,
+    Json(input): Json<CreatePromptBlockRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "settings.change",
+        config.tool_permissions.settings_change,
+    )
+    .await?;
+    let block = state
+        .db
+        .create_prompt_block(
+            &input.target,
+            &input.name,
+            &input.content,
+            input.markdown.unwrap_or(true),
+        )
+        .await?;
+    state
+        .db
+        .add_system_event(
+            "prompt_tool",
+            serde_json::json!({
+                "action": "add_block",
+                "source": "admin-api",
+                "block_id": block.id,
+                "target": block.target,
+            }),
+        )
+        .await?;
+    Ok(Json(block))
+}
+
+async fn enable_prompt_block(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    set_prompt_block_enabled_api(state, id, true).await
+}
+
+async fn disable_prompt_block(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    set_prompt_block_enabled_api(state, id, false).await
+}
+
+async fn set_prompt_block_enabled_api(
+    state: AppState,
+    id: Uuid,
+    enabled: bool,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "settings.change",
+        config.tool_permissions.settings_change,
+    )
+    .await?;
+    let block = state.db.set_prompt_block_enabled(id, enabled).await?;
+    state
+        .db
+        .add_system_event(
+            "prompt_tool",
+            serde_json::json!({
+                "action": if enabled { "enable_block" } else { "disable_block" },
+                "source": "admin-api",
+                "block_id": block.id,
+                "target": block.target,
+            }),
+        )
+        .await?;
+    Ok(Json(block))
+}
+
+async fn render_prompt_target(
+    State(state): State<AppState>,
+    Query(query): Query<PromptBlocksQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let Some(target) = query.target.as_deref() else {
+        return Err(anyhow::anyhow!("target is required").into());
+    };
+    let blocks = state.db.list_prompt_blocks(Some(target)).await?;
+    let rendered = render_prompt_blocks(&blocks);
+    Ok(Json(serde_json::json!({
+        "target": target,
+        "rendered": rendered,
+        "blocks": blocks,
+    })))
 }
 
 async fn library_tree(
