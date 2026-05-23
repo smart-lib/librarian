@@ -679,6 +679,9 @@ Tasks:
   First pass done.
 - Add tests around provider diagnostic parsing. First pass done.
 - Add a no-container integration path for job preflight once Priority 4 exists.
+  First pass now covers `worker::preflight_job`: it builds the command, includes
+  prompt blocks, writes a preflight event, and leaves the job queued without
+  launching a container.
 - Add tests for platform-root resolution and setup persistence without touching
   the real user home.
 

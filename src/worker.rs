@@ -663,6 +663,19 @@ fn output_failure_category(text: &str) -> Option<FailureCategory> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{MountMode, NetworkMode, ProviderKind};
+    use uuid::Uuid;
+
+    async fn test_config_and_db(name: &str) -> (Config, Database, std::path::PathBuf) {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-worker-{name}-{}", Uuid::new_v4()));
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        (config, db, home)
+    }
 
     #[test]
     fn categorizes_runtime_output_failure() {
@@ -684,5 +697,56 @@ mod tests {
     #[test]
     fn categorizes_cancelled_exit() {
         assert_eq!(exit_failure_category(1, true).code, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn preflight_builds_command_without_launching_container() {
+        let (config, db, home) = test_config_and_db("preflight").await;
+        let project_path = home.join("Projects").join("Smoke");
+        std::fs::create_dir_all(&project_path).expect("project dir");
+        let project = db
+            .add_project("Smoke", &project_path)
+            .await
+            .expect("project");
+        db.create_prompt_block(
+            "agents",
+            "test-instruction",
+            "Always mention the smoke test.",
+            true,
+        )
+        .await
+        .expect("prompt block");
+        let job = db
+            .create_job(
+                project.id,
+                ProviderKind::Codex,
+                "Summarize the smoke test",
+                MountMode::ReadOnly,
+                NetworkMode::None,
+                None,
+            )
+            .await
+            .expect("job");
+
+        let report = preflight_job(config.clone(), db.clone(), job.id)
+            .await
+            .expect("preflight");
+
+        assert_eq!(report.job_id, job.id);
+        assert_eq!(report.project_name, "Smoke");
+        assert_eq!(report.selected_provider, "codex");
+        assert!(report.prompt_chars > "Summarize the smoke test".len());
+        assert!(report
+            .command
+            .iter()
+            .any(|part| part.contains("librarian-agent")));
+        assert!(matches!(
+            db.get_job(job.id).await.expect("job status").status,
+            JobStatus::Queued
+        ));
+        let events = db.list_job_events(job.id).await.expect("events");
+        assert!(events.iter().any(|event| event.kind == "preflight"));
+
+        std::fs::remove_dir_all(home).ok();
     }
 }
