@@ -49,6 +49,21 @@ pub struct CreatePromptBlockRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdatePromptBlockRequest {
+    pub name: Option<String>,
+    pub content: Option<String>,
+    pub enabled: Option<bool>,
+    pub position: Option<i64>,
+    pub markdown: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExportPromptRequest {
+    pub target: String,
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LibraryTreeQuery {
     pub root: Option<LibraryRoot>,
     pub max_depth: Option<usize>,

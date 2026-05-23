@@ -649,6 +649,43 @@ impl Database {
         self.get_prompt_block(id).await
     }
 
+    pub async fn update_prompt_block(
+        &self,
+        id: Uuid,
+        name: Option<&str>,
+        content: Option<&str>,
+        enabled: Option<bool>,
+        position: Option<i64>,
+        markdown: Option<bool>,
+    ) -> Result<PromptBlock> {
+        let current = self.get_prompt_block(id).await?;
+        sqlx::query(
+            r#"
+            UPDATE prompt_blocks
+            SET name = ?, content = ?, enabled = ?, position = ?, markdown = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(name.unwrap_or(&current.name))
+        .bind(content.unwrap_or(&current.content))
+        .bind(enabled.unwrap_or(current.enabled))
+        .bind(position.unwrap_or(current.position))
+        .bind(markdown.unwrap_or(current.markdown))
+        .bind(Utc::now().to_rfc3339())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        self.get_prompt_block(id).await
+    }
+
+    pub async fn delete_prompt_block(&self, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM prompt_blocks WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_prompt_block(&self, id: Uuid) -> Result<PromptBlock> {
         let row = sqlx::query(
             r#"

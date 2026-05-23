@@ -642,7 +642,15 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const list = blocks.length ? blocks.map(block => `<div class="card">
           <h3>${htmlEscape(block.name)} <span class="muted tiny">[${htmlEscape(block.target)} #${block.position}]</span></h3>
           <div class="muted tiny">${htmlEscape(block.content)}</div>
-          <div class="row"><button type="button" class="secondary" data-render-prompt="${htmlEscape(block.target)}">Preview target</button><button type="button" data-toggle-prompt="${htmlEscape(block.id)}" data-enabled="${block.enabled ? 'false' : 'true'}">${block.enabled ? 'Disable' : 'Enable'}</button></div>
+          <div class="row">
+            <button type="button" class="secondary" data-render-prompt="${htmlEscape(block.target)}">Preview target</button>
+            <button type="button" data-toggle-prompt="${htmlEscape(block.id)}" data-enabled="${block.enabled ? 'false' : 'true'}">${block.enabled ? 'Disable' : 'Enable'}</button>
+            <button type="button" class="secondary" data-edit-prompt="${htmlEscape(block.id)}">Edit</button>
+            <button type="button" class="secondary" data-move-prompt="${htmlEscape(block.id)}" data-position="${block.position - 1}">Up</button>
+            <button type="button" class="secondary" data-move-prompt="${htmlEscape(block.id)}" data-position="${block.position + 1}">Down</button>
+            <button type="button" class="danger" data-delete-prompt="${htmlEscape(block.id)}">Delete</button>
+            <button type="button" class="secondary" data-export-prompt="${htmlEscape(block.target)}">Export proposal</button>
+          </div>
         </div>`).join('') : '<div class="card muted">No prompt blocks yet.</div>';
         el('prompt-builder').innerHTML = `${form}<div id="prompt-preview" class="card muted">Choose preview target from any block.</div>${list}`;
         el('prompt-block-form').addEventListener('submit', createPromptBlockFromUi);
@@ -651,6 +659,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           await refresh();
         }));
         qsa('[data-render-prompt]').forEach(button => button.addEventListener('click', () => renderPromptPreview(button.dataset.renderPrompt)));
+        qsa('[data-edit-prompt]').forEach(button => button.addEventListener('click', () => editPromptBlock(button.dataset.editPrompt)));
+        qsa('[data-move-prompt]').forEach(button => button.addEventListener('click', () => updatePromptBlock(button.dataset.movePrompt, { position: Number(button.dataset.position) })));
+        qsa('[data-delete-prompt]').forEach(button => button.addEventListener('click', () => deletePromptBlock(button.dataset.deletePrompt)));
+        qsa('[data-export-prompt]').forEach(button => button.addEventListener('click', () => proposePromptExport(button.dataset.exportPrompt)));
       }
       async function createPromptBlockFromUi(event) {
         event.preventDefault();
@@ -664,6 +676,32 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       async function renderPromptPreview(target) {
         const data = await loadJson(`/api/prompt-blocks/render?target=${encodeURIComponent(target)}`, null);
         el('prompt-preview').innerHTML = data ? `<h3>${htmlEscape(target)}</h3><pre>${htmlEscape(data.rendered || '')}</pre>` : 'Could not render prompt.';
+      }
+      async function editPromptBlock(id) {
+        const block = state.promptBlocks.find(item => item.id === id);
+        if (!block) return;
+        const name = prompt('Block name', block.name);
+        if (name === null) return;
+        const content = prompt('Block content', block.content);
+        if (content === null) return;
+        await updatePromptBlock(id, { name, content });
+      }
+      async function updatePromptBlock(id, body) {
+        const response = await fetch(`/api/prompt-blocks/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        if (!response.ok) appendMessage('system', `Prompt update failed: ${response.status}`);
+        await refresh();
+      }
+      async function deletePromptBlock(id) {
+        if (!confirm('Delete this prompt block?')) return;
+        const response = await fetch(`/api/prompt-blocks/${id}`, { method: 'DELETE' });
+        if (!response.ok) appendMessage('system', `Prompt delete failed: ${response.status}`);
+        await refresh();
+      }
+      async function proposePromptExport(target) {
+        const path = prompt('Library Markdown export path', `prompts/${target}.md`);
+        if (!path) return;
+        await postJson('/api/prompt-blocks/export-proposal', { target, path });
+        appendMessage('system', `Created export approval proposal for ${target}.`);
       }
       function renderSystemEvents(events) {
         el('system-events').innerHTML = Array.isArray(events) && events.length ? events.slice(0, 20).map(event => {
@@ -1482,6 +1520,14 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
             get(prompt_blocks).post(create_prompt_block),
         )
         .route("/api/prompt-blocks/render", get(render_prompt_target))
+        .route(
+            "/api/prompt-blocks/export-proposal",
+            post(propose_prompt_export),
+        )
+        .route(
+            "/api/prompt-blocks/:id",
+            patch(update_prompt_block).delete(delete_prompt_block),
+        )
         .route("/api/prompt-blocks/:id/enable", post(enable_prompt_block))
         .route("/api/prompt-blocks/:id/disable", post(disable_prompt_block))
         .route(
@@ -1783,6 +1829,104 @@ async fn create_prompt_block(
         )
         .await?;
     Ok(Json(block))
+}
+
+async fn update_prompt_block(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    Json(input): Json<UpdatePromptBlockRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "settings.change",
+        config.tool_permissions.settings_change,
+    )
+    .await?;
+    let block = state
+        .db
+        .update_prompt_block(
+            id,
+            input.name.as_deref(),
+            input.content.as_deref(),
+            input.enabled,
+            input.position,
+            input.markdown,
+        )
+        .await?;
+    state
+        .db
+        .add_system_event(
+            "prompt_tool",
+            serde_json::json!({
+                "action": "update_block",
+                "source": "admin-api",
+                "block_id": block.id,
+                "target": block.target,
+            }),
+        )
+        .await?;
+    Ok(Json(block))
+}
+
+async fn delete_prompt_block(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "settings.change",
+        config.tool_permissions.settings_change,
+    )
+    .await?;
+    state.db.delete_prompt_block(id).await?;
+    state
+        .db
+        .add_system_event(
+            "prompt_tool",
+            serde_json::json!({
+                "action": "delete_block",
+                "source": "admin-api",
+                "block_id": id,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true, "block_id": id })))
+}
+
+async fn propose_prompt_export(
+    State(state): State<AppState>,
+    Json(input): Json<ExportPromptRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let blocks = state.db.list_prompt_blocks(Some(&input.target)).await?;
+    let rendered = render_prompt_blocks(&blocks);
+    let approval = state
+        .db
+        .create_tool_approval(
+            "library",
+            "write_markdown",
+            serde_json::json!({
+                "path": input.path,
+                "content": rendered,
+                "target": input.target,
+            }),
+        )
+        .await?;
+    state
+        .db
+        .add_system_event(
+            "tool_approval",
+            serde_json::json!({
+                "action": "propose_prompt_export",
+                "approval_id": approval.id,
+                "target": input.target,
+            }),
+        )
+        .await?;
+    Ok(Json(approval))
 }
 
 async fn enable_prompt_block(

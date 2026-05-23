@@ -503,7 +503,9 @@ Tasks:
   and markdown mode, plus `/prompt blocks`, `/prompt add-block`,
   `/prompt enable`, `/prompt disable`, and `/prompt render`. First UI pass adds
   a Prompt tab in settings for adding blocks, enabling/disabling blocks, and
-  rendering target previews.
+  rendering target previews. Second UI/API pass adds edit, delete, position
+  moves, and export proposals that create approvals instead of writing files
+  directly.
 - Support presets for Librarian identity, operating principles, memory policy,
   tool permissions, git policy, Obsidian/vault behavior, task planning style,
   project goals, and provider caveats.
