@@ -361,6 +361,8 @@ Tasks:
   tree. First pass done against the project registry; backend map data is now
   available through `/api/project-map` and `/project map`, annotated with
   library visual kinds (`book`, `shelf`, `rack`, `artifact`) for the richer UI.
+  Chat-first project overlay now renders the annotated library tree with a
+  legend and linked/detached counts.
 - Keep low-level dispatch fields such as provider, project id, secret grant
   token, and network mode out of the main chat composer. First pass done with
   Codex as the default MVP provider and the selected/first project as context.

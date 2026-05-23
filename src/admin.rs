@@ -382,11 +382,33 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       background: #0f1417;
       padding: 24px;
     }
+    .map-legend {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .legend-chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
     .tree {
       min-width: 640px;
       display: flex;
       align-items: flex-start;
       gap: 28px;
+      position: relative;
+    }
+    .tree::before {
+      content: "";
+      position: absolute;
+      left: 252px;
+      top: 24px;
+      width: 28px;
+      border-top: 1px solid rgba(98, 199, 168, .45);
     }
     .node-column {
       display: flex;
@@ -412,6 +434,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .node.root {
       background: #1d2529;
       text-align: center;
+    }
+    .node .badge {
+      display: inline-block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
     }
     .node button { width: 100%; margin-top: 10px; }
     .empty {
@@ -606,7 +635,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           </div>
         </form>`;
         if (!state.projects.length) {
-          el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}<div class="card muted">No projects yet. Create one here or use <code>/project create</code> in chat.</div></div><div class="project-map">${renderProjectMapTree(state.projectMap?.root)}</div></div>`;
+          el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}<div class="card muted">No projects yet. Create one here or use <code>/project create</code> in chat.</div></div><div class="project-map">${renderProjectMapSurface()}</div></div>`;
           wireProjectForms();
           return;
         }
@@ -623,7 +652,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             </div>
           </div>`;
         }).join('');
-        el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}${cards}</div><div class="project-map">${renderProjectMapTree(state.projectMap?.root)}</div></div>`;
+        el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}${cards}</div><div class="project-map">${renderProjectMapSurface()}</div></div>`;
         wireProjectForms();
         qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
           state.activeProject = button.dataset.project || '';
@@ -640,7 +669,17 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const children = Array.isArray(node.children) && node.children.length
           ? `<div class="node-column">${node.children.map(renderProjectMapTree).join('')}</div>`
           : '';
-        return `<div class="tree"><div class="node ${htmlEscape(node.visual_kind || '')}"><h3>${htmlEscape(node.name || 'Library')}</h3><div class="muted tiny">${htmlEscape(node.path || '.')}</div>${projects}</div>${children}</div>`;
+        return `<div class="tree"><div class="node ${htmlEscape(node.visual_kind || '')}"><span class="badge">${htmlEscape(node.visual_kind || 'node')}</span><h3>${htmlEscape(node.name || 'Library')}</h3><div class="muted tiny">${htmlEscape(node.path || '.')}</div>${projects}</div>${children}</div>`;
+      }
+      function renderProjectMapSurface() {
+        const count = state.projectMap?.linked_project_count ?? 0;
+        const detached = Array.isArray(state.projectMap?.detached_projects) ? state.projectMap.detached_projects.length : 0;
+        return `<div class="map-legend">
+          <span class="legend-chip">Books: Markdown notes</span>
+          <span class="legend-chip">Shelves: folders with files</span>
+          <span class="legend-chip">Racks: nested folders</span>
+          <span class="legend-chip">${count} linked · ${detached} detached</span>
+        </div>${renderProjectMapTree(state.projectMap?.root)}`;
       }
       function wireProjectForms() {
         const form = el('project-create-form');
