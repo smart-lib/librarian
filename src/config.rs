@@ -532,4 +532,71 @@ mod tests {
         );
         std::fs::remove_dir_all(home).ok();
     }
+
+    #[test]
+    fn creates_single_root_portable_layout() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-layout-{}", Uuid::new_v4()));
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        config.save().expect("save");
+
+        for relative in [
+            ".app",
+            ".app/bin",
+            ".cfg",
+            ".cfg/codex-home",
+            ".mdb",
+            "Library",
+            "Library/projects",
+            "Library/runs",
+            "Library/decisions",
+            "Projects",
+        ] {
+            assert!(
+                home.join(relative).is_dir(),
+                "expected {} to exist",
+                relative
+            );
+        }
+        assert!(home.join(".cfg").join("config.toml").is_file());
+
+        let stored =
+            std::fs::read_to_string(home.join(".cfg").join("config.toml")).expect("stored config");
+        let stored_value: toml::Value = toml::from_str(&stored).expect("stored config toml");
+        let stored_database_path = stored_value
+            .get("database_path")
+            .and_then(toml::Value::as_str)
+            .expect("stored database_path");
+        assert!(PathBuf::from(stored_database_path).is_relative());
+        assert!(stored_database_path.contains(".mdb"));
+        assert!(stored_database_path.contains("librarian.db"));
+        assert_eq!(
+            stored_value.get("vault_path").and_then(toml::Value::as_str),
+            Some("Library")
+        );
+        let stored_codex_home = stored_value
+            .get("codex")
+            .and_then(|codex| codex.get("host_home"))
+            .and_then(toml::Value::as_str)
+            .expect("stored codex host_home");
+        assert!(PathBuf::from(stored_codex_home).is_relative());
+        assert!(stored_codex_home.contains(".cfg"));
+        assert!(stored_codex_home.contains("codex-home"));
+
+        let reloaded = Config::load_or_default(Some(home.clone())).expect("reload");
+        assert_eq!(reloaded.home, home);
+        assert_eq!(
+            reloaded.database_path,
+            reloaded.home.join(".mdb").join("librarian.db")
+        );
+        assert_eq!(reloaded.vault_path, reloaded.home.join("Library"));
+        assert_eq!(
+            reloaded.codex.host_home,
+            Some(reloaded.home.join(".cfg").join("codex-home"))
+        );
+
+        std::fs::remove_dir_all(home).ok();
+    }
 }

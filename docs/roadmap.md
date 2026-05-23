@@ -683,7 +683,8 @@ Tasks:
   prompt blocks, writes a preflight event, and leaves the job queued without
   launching a container.
 - Add tests for platform-root resolution and setup persistence without touching
-  the real user home.
+  the real user home. First portable-layout test verifies explicit root setup,
+  hidden/public directories, relative config persistence, and reload behavior.
 
 Dependencies:
 
