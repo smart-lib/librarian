@@ -193,6 +193,10 @@ notes are books, folders with files are shelves, folders with nested folders are
 racks/rows, and other files are artifacts. `/project map` exposes the same data
 to chat without spending provider tokens.
 
+The chat-first admin project overlay consumes the same project APIs. It can
+create the default Library/Projects pair, attach a sandbox-relative library
+path, and attach an existing workspace directory without dropping to the CLI.
+
 Background agent jobs use an explicit `/agent` namespace in chat. Listing,
 status, event history, and preflight are read/diagnostic commands. Launch,
 cancel, and retry mutate job state, pass through `tool_permissions.agent_launch`,

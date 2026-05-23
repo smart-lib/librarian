@@ -384,7 +384,9 @@ Tasks:
   optionally create the working directory under the default projects root, or
   attach an existing directory. First slash-command pass adds `/project list`,
   `/project status`, `/project create`, `/project attach-library`,
-  `/project detach-library`, and `/project attach-workspace`.
+  `/project detach-library`, and `/project attach-workspace`. First UI pass adds
+  admin project creation plus attach-library/attach-workspace controls backed by
+  `/api/projects` mutation routes.
 - When Librarian is launched from a directory that is not already known as a
   root or project, ask whether to register that directory as a working project
   and create/link the corresponding library folder.

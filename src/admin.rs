@@ -355,17 +355,38 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .tiny { font-size: 12px; }
     .stack { display: grid; gap: 12px; }
     .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    .form-grid .wide { grid-column: span 2; }
     .project-stage {
       min-height: 0;
       overflow: auto;
       padding: 28px clamp(20px, 5vw, 70px);
     }
-    .tree {
+    .project-layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+      gap: 18px;
       min-height: 100%;
+    }
+    .project-map {
+      min-height: 420px;
+      position: relative;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f1417;
+      padding: 24px;
+    }
+    .tree {
+      min-width: 640px;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 34px;
+      align-items: flex-start;
+      gap: 28px;
     }
     .node-column {
       display: flex;
@@ -384,6 +405,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       text-align: left;
     }
     .node.active { border-color: var(--accent); }
+    .node.book { border-color: #8fb7ff; }
+    .node.shelf { border-color: #62c7a8; }
+    .node.rack { border-color: #e4c16f; }
+    .node.artifact { border-color: #99a6b2; }
     .node.root {
       background: #1d2529;
       text-align: center;
@@ -459,6 +484,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     (() => {
       const state = {
         projects: [],
+        projectMap: null,
         jobs: [],
         providers: { catalog: [], states: [] },
         health: null,
@@ -511,15 +537,17 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
       }
       async function refresh() {
-        const [health, projects, jobs, providers, events] = await Promise.all([
+        const [health, projects, projectMap, jobs, providers, events] = await Promise.all([
           loadJson('/api/health', null),
           loadJson('/api/projects', []),
+          loadJson('/api/project-map', null),
           loadJson('/api/jobs', []),
           loadJson('/api/providers', { catalog: [], states: [] }),
           loadJson('/api/system-events', [])
         ]);
         state.health = health;
         state.projects = Array.isArray(projects) ? projects : [];
+        state.projectMap = projectMap;
         state.jobs = Array.isArray(jobs) ? jobs : [];
         state.providers = providers || { catalog: [], states: [] };
         if (!state.projects.some(project => project.name === state.activeProject)) {
@@ -568,21 +596,82 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }).join('') : '<div class="card muted">No system events.</div>';
       }
       function renderProjects() {
+        const createForm = `<form id="project-create-form" class="card stack">
+          <h3>Create project</h3>
+          <div class="form-grid">
+            <div><label for="project-name">Name</label><input id="project-name" required placeholder="My Project"></div>
+            <div><label for="project-library-path">Library path</label><input id="project-library-path" placeholder="projects/my-project"></div>
+            <div class="wide"><label for="project-workspace-path">Existing workspace path</label><input id="project-workspace-path" placeholder="optional external directory"></div>
+            <button type="submit">Create</button>
+          </div>
+        </form>`;
         if (!state.projects.length) {
-          el('project-stage').innerHTML = `<div class="empty"><h2>No projects yet</h2><div class="card muted">Add a project from the terminal for this build:<br><br><code>librarian --home ~/Librarian project add &lt;path&gt;</code></div></div>`;
+          el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}<div class="card muted">No projects yet. Create one here or use <code>/project create</code> in chat.</div></div><div class="project-map">${renderProjectMapTree(state.projectMap?.root)}</div></div>`;
+          wireProjectForms();
           return;
         }
-        const nodes = state.projects.map(project => {
+        const cards = state.projects.map(project => {
           const active = project.name === state.activeProject ? ' active' : '';
-          return `<div class="node${active}"><h3>${htmlEscape(project.name)}</h3><div class="muted tiny">${htmlEscape(project.path)}</div><button type="button" data-project="${htmlEscape(project.name)}">Use</button></div>`;
+          return `<div class="card${active}">
+            <h3>${htmlEscape(project.name)}</h3>
+            <div class="muted tiny">Library: ${htmlEscape(project.library_path || '-')}</div>
+            <div class="muted tiny">Workspace: ${htmlEscape(project.path)}</div>
+            <div class="row">
+              <button type="button" data-project="${htmlEscape(project.name)}">Use</button>
+              <button class="secondary" type="button" data-attach-library="${htmlEscape(project.id)}">Library</button>
+              <button class="secondary" type="button" data-attach-workspace="${htmlEscape(project.id)}">Workspace</button>
+            </div>
+          </div>`;
         }).join('');
-        el('project-stage').innerHTML = `<div class="tree"><div class="node root"><h3>Librarian</h3><div class="muted tiny">Library and working projects</div></div><div class="node-column">${nodes}</div></div>`;
+        el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}${cards}</div><div class="project-map">${renderProjectMapTree(state.projectMap?.root)}</div></div>`;
+        wireProjectForms();
         qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
           state.activeProject = button.dataset.project || '';
           renderProjects();
           renderContext();
           closeOverlay('projects-overlay');
         }));
+      }
+      function renderProjectMapTree(node) {
+        if (!node) return '<div class="node root"><h3>Librarian</h3><div class="muted tiny">Library is empty.</div></div>';
+        const projects = Array.isArray(node.projects) && node.projects.length
+          ? `<div class="muted tiny">${node.projects.map(project => htmlEscape(project.name)).join(', ')}</div>`
+          : '';
+        const children = Array.isArray(node.children) && node.children.length
+          ? `<div class="node-column">${node.children.map(renderProjectMapTree).join('')}</div>`
+          : '';
+        return `<div class="tree"><div class="node ${htmlEscape(node.visual_kind || '')}"><h3>${htmlEscape(node.name || 'Library')}</h3><div class="muted tiny">${htmlEscape(node.path || '.')}</div>${projects}</div>${children}</div>`;
+      }
+      function wireProjectForms() {
+        const form = el('project-create-form');
+        if (form) form.addEventListener('submit', createProjectFromUi);
+        qsa('[data-attach-library]').forEach(button => button.addEventListener('click', async () => {
+          const value = prompt('Library path inside Librarian/Library');
+          if (!value) return;
+          await postJson(`/api/projects/${button.dataset.attachLibrary}/attach-library`, { library_path: value });
+        }));
+        qsa('[data-attach-workspace]').forEach(button => button.addEventListener('click', async () => {
+          const value = prompt('Existing workspace directory path');
+          if (!value) return;
+          await postJson(`/api/projects/${button.dataset.attachWorkspace}/attach-workspace`, { workspace_path: value });
+        }));
+      }
+      async function createProjectFromUi(event) {
+        event.preventDefault();
+        await postJson('/api/projects', {
+          name: el('project-name').value,
+          library_path: el('project-library-path').value || null,
+          workspace_path: el('project-workspace-path').value || null
+        });
+      }
+      async function postJson(url, body) {
+        const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await response.json();
+        if (!response.ok) {
+          appendMessage('system', data.error || `Request failed: ${response.status}`);
+          return;
+        }
+        await refresh();
       }
       function card(title, body) {
         return `<div class="card"><h3>${htmlEscape(title)}</h3><div>${body}</div></div>`;
@@ -1280,6 +1369,23 @@ struct LibrarianChatRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateProjectRequest {
+    name: String,
+    library_path: Option<String>,
+    workspace_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AttachLibraryRequest {
+    library_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AttachWorkspaceRequest {
+    workspace_path: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct LibraryTreeQuery {
     root: Option<LibraryRoot>,
     max_depth: Option<usize>,
@@ -1377,8 +1483,16 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/api/health", get(health))
-        .route("/api/projects", get(projects))
+        .route("/api/projects", get(projects).post(create_project))
         .route("/api/project-map", get(project_map))
+        .route(
+            "/api/projects/:id/attach-library",
+            post(attach_project_library),
+        )
+        .route(
+            "/api/projects/:id/attach-workspace",
+            post(attach_project_workspace),
+        )
         .route("/api/jobs", get(jobs).post(create_job))
         .route("/api/schedules", get(schedules).post(create_schedule))
         .route("/api/settings/worker", post(update_worker_settings))
@@ -1502,6 +1616,123 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn projects(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.db.list_projects().await?))
+}
+
+async fn create_project(
+    State(state): State<AppState>,
+    Json(input): Json<CreateProjectRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "library.create",
+        config.tool_permissions.library_create,
+    )
+    .await?;
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "workspace.create",
+        config.tool_permissions.workspace_create,
+    )
+    .await?;
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("Project name must not be empty").into());
+    }
+    let library_path = input
+        .library_path
+        .unwrap_or_else(|| format!("projects/{}", project_folder_name(name)));
+    let library_path = library_tools::normalize_tool_relative_path(&library_path)?;
+    library_tools::create_folder(&config, LibraryRoot::Library, &library_path)?;
+    let workspace_path = if let Some(path) = input.workspace_path {
+        canonical_existing_dir(&path)?
+    } else {
+        let relative = project_folder_name(name);
+        library_tools::create_folder(&config, LibraryRoot::Projects, &relative)?;
+        config.home.join("Projects").join(relative).canonicalize()?
+    };
+    let project = state.db.add_project(name, &workspace_path).await?;
+    let project = state
+        .db
+        .attach_project_library_path(project.id, PathBuf::from(&library_path).as_path())
+        .await?;
+    log_project_event(
+        &state.db,
+        "create",
+        serde_json::json!({
+            "project_id": project.id,
+            "name": project.name.clone(),
+            "library_path": project.library_path.clone(),
+            "workspace_path": project.path.clone(),
+            "source": "admin-api",
+        }),
+    )
+    .await?;
+    Ok(Json(project))
+}
+
+async fn attach_project_library(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    Json(input): Json<AttachLibraryRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "library.move",
+        config.tool_permissions.library_move,
+    )
+    .await?;
+    let library_path = library_tools::normalize_tool_relative_path(&input.library_path)?;
+    let project = state
+        .db
+        .attach_project_library_path(id, PathBuf::from(&library_path).as_path())
+        .await?;
+    log_project_event(
+        &state.db,
+        "attach_library",
+        serde_json::json!({
+            "project_id": project.id,
+            "library_path": project.library_path.clone(),
+            "source": "admin-api",
+        }),
+    )
+    .await?;
+    Ok(Json(project))
+}
+
+async fn attach_project_workspace(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    Json(input): Json<AttachWorkspaceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "workspace.move",
+        config.tool_permissions.workspace_move,
+    )
+    .await?;
+    let workspace_path = canonical_existing_dir(&input.workspace_path)?;
+    let project = state
+        .db
+        .update_project_workspace_path(id, &workspace_path)
+        .await?;
+    log_project_event(
+        &state.db,
+        "attach_workspace",
+        serde_json::json!({
+            "project_id": project.id,
+            "workspace_path": project.path.clone(),
+            "source": "admin-api",
+        }),
+    )
+    .await?;
+    Ok(Json(project))
 }
 
 async fn project_map(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
