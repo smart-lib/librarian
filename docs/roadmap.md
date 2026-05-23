@@ -689,6 +689,9 @@ Tasks:
   placeholder/self-echo memories are excluded. First pass done: endpoint test
   covers slash-command chat turns with user/assistant memory and no job creation;
   context filtering test excludes the old local-memory responder echoes.
+- Add tests for the explicit chat-to-agent boundary. First pass done: `/agent
+  launch ... --yes` through `/api/chat` creates exactly one queued job and a
+  `queued_from_chat` event.
 
 Dependencies:
 

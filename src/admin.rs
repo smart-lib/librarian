@@ -6279,6 +6279,65 @@ mod tests {
         std::fs::remove_dir_all(home).ok();
     }
 
+    #[tokio::test]
+    async fn explicit_agent_slash_command_creates_one_queued_job() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-agent-chat-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let workspace_path = config.home.join("Projects").join("launch-test");
+            std::fs::create_dir_all(&workspace_path).expect("workspace");
+            let project = db
+                .add_project("Launch Test", &workspace_path)
+                .await
+                .expect("project");
+            let state = AppState {
+                db: db.clone(),
+                config: Arc::new(RwLock::new(config)),
+            };
+
+            let response = librarian_chat(
+                State(state),
+                Json(LibrarianChatRequest {
+                    message: r#"/agent launch "Launch Test" "summarize state" --provider codex --read-only --yes"#
+                        .to_string(),
+                    project: None,
+                }),
+            )
+            .await
+            .expect("chat response")
+            .into_response();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            assert_eq!(payload["mode"], "slash-command");
+            assert!(payload["reply"]
+                .as_str()
+                .expect("reply")
+                .contains("Queued background agent job"));
+
+            let jobs = db.list_jobs().await.expect("jobs");
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(jobs[0].project_id, project.id);
+            assert!(matches!(jobs[0].status, JobStatus::Queued));
+            assert!(matches!(jobs[0].mount_mode, MountMode::ReadOnly));
+            assert!(matches!(jobs[0].network_mode, NetworkMode::None));
+            assert_eq!(jobs[0].goal, "summarize state");
+            let events = db.list_job_events(jobs[0].id).await.expect("events");
+            assert!(events.iter().any(|event| event.kind == "queued_from_chat"));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
     #[test]
     fn filters_placeholder_chat_memory_from_context_hits() {
         let pack = ContextPack {
