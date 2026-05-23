@@ -2323,6 +2323,8 @@ async fn execute_slash_command(
         execute_memory_slash_command(&state.db, config, project, &args[1..]).await?
     } else if matches!(command.as_str(), "settings" | "config") {
         execute_settings_slash_command(state, config, &args[1..]).await?
+    } else if matches!(command.as_str(), "agent" | "agents" | "job" | "jobs") {
+        execute_agent_slash_command(state, config, &args[1..]).await?
     } else if command == "remember" {
         let mut memory_args = vec!["remember".to_string(), "fact".to_string()];
         memory_args.extend(args.iter().skip(1).cloned());
@@ -2337,7 +2339,7 @@ async fn execute_slash_command(
                 execute_library_slash_command(&state.db, config, &["tree".to_string()]).await?
             }
             _ => slash_reply(
-                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; settings commands live under /settings.",
+                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; settings commands live under /settings; background agent jobs live under /agent.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -2752,7 +2754,7 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
 }
 
 fn slash_help() -> &'static str {
-    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/mem help - durable memory tools\n/settings help - inspect and change guarded settings\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/mem help - durable memory tools\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
 }
 
 fn library_slash_help() -> &'static str {
@@ -3174,6 +3176,341 @@ fn policy_label(policy: ToolPermissionPolicy) -> &'static str {
         ToolPermissionPolicy::Ask => "ask",
         ToolPermissionPolicy::Deny => "deny",
     }
+}
+
+async fn execute_agent_slash_command(
+    state: &AppState,
+    config: &Config,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            agent_slash_help(),
+            serde_json::json!({ "command": "agent" }),
+        ));
+    }
+
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            agent_slash_help(),
+            serde_json::json!({ "tool": "agent", "command": command }),
+        ),
+        "list" => {
+            let limit = args
+                .get(1)
+                .map(|value| value.parse::<usize>())
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("Invalid limit: {error}"))?
+                .unwrap_or(10)
+                .clamp(1, 50);
+            let jobs = state.db.list_jobs().await?;
+            let mut reply = format!(
+                "Agent jobs: showing {} of {}.",
+                jobs.len().min(limit),
+                jobs.len()
+            );
+            for job in jobs.iter().take(limit) {
+                reply.push_str(&format!("\n{}", format_job_summary(job)));
+            }
+            slash_reply(
+                &reply,
+                serde_json::json!({
+                    "tool": "agent",
+                    "command": command,
+                    "jobs": jobs.into_iter().take(limit).collect::<Vec<_>>(),
+                }),
+            )
+        }
+        "status" => {
+            let job_id = slash_job_id_arg(args, "/agent status <job-id>")?;
+            let job = state.db.get_job(job_id).await?;
+            slash_reply(
+                &format_job_summary(&job),
+                serde_json::json!({ "tool": "agent", "command": command, "job": job }),
+            )
+        }
+        "events" => {
+            let job_id = slash_job_id_arg(args, "/agent events <job-id>")?;
+            let events = state.db.list_job_events(job_id).await?;
+            let mut reply = format!("Job events: {} event(s).", events.len());
+            for event in events.iter().take(30) {
+                reply.push_str(&format!(
+                    "\n{} {}: {}",
+                    event.created_at.format("%Y-%m-%d %H:%M:%S"),
+                    event.kind,
+                    event.payload
+                ));
+            }
+            slash_reply(
+                &reply,
+                serde_json::json!({
+                    "tool": "agent",
+                    "command": command,
+                    "job_id": job_id,
+                    "events": events,
+                }),
+            )
+        }
+        "preflight" => {
+            let job_id = slash_job_id_arg(args, "/agent preflight <job-id>")?;
+            let report = worker::preflight_job(config.clone(), state.db.clone(), job_id).await?;
+            slash_reply(
+                &format!(
+                    "Preflight for job {job_id}:\n\n{}",
+                    serde_json::to_string_pretty(&report)?
+                ),
+                serde_json::json!({
+                    "tool": "agent",
+                    "command": command,
+                    "job_id": job_id,
+                    "report": report,
+                }),
+            )
+        }
+        "launch" | "queue" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "agent.launch",
+                config.tool_permissions.agent_launch,
+            )
+            .await?;
+            let request = parse_agent_launch_args(&args[1..])?;
+            if !request.confirmed {
+                return Ok(slash_reply(
+                    "Agent launch requires explicit confirmation. Use: /agent launch <project> <goal> --yes",
+                    serde_json::json!({
+                        "tool": "agent",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                    }),
+                ));
+            }
+            let project = state.db.get_project_by_name_or_id(&request.project).await?;
+            let network_mode = if request.allow_network || request.secret_grant_token.is_some() {
+                NetworkMode::Open
+            } else {
+                NetworkMode::None
+            };
+            let mount_mode = if request.read_only {
+                MountMode::ReadOnly
+            } else {
+                MountMode::ReadWrite
+            };
+            let job = state
+                .db
+                .create_job(
+                    project.id,
+                    request.provider,
+                    &request.goal,
+                    mount_mode,
+                    network_mode,
+                    request.secret_grant_token.as_deref(),
+                )
+                .await?;
+            let context_pack = memory::retrieve_context_with_config(
+                &state.db,
+                Some(config),
+                memory::RetrievalRequest {
+                    query: request.goal.clone(),
+                    project_id: Some(project.id),
+                    activity_id: None,
+                    limit: config.chat.memory_hit_limit,
+                },
+            )
+            .await?;
+            state
+                .db
+                .add_job_event(
+                    job.id,
+                    "context_pack",
+                    serde_json::json!({
+                        "query": context_pack.query,
+                        "generated_at": context_pack.generated_at,
+                        "hits": context_pack.hits,
+                    }),
+                )
+                .await?;
+            state
+                .db
+                .add_job_event(
+                    job.id,
+                    "queued_from_chat",
+                    serde_json::json!({
+                        "source": "slash-command",
+                        "project": project.name,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!(
+                    "Queued background agent job.\n{}\n\nRun `librarian worker --once` or keep a worker running to execute it.",
+                    format_job_summary(&job)
+                ),
+                serde_json::json!({
+                    "tool": "agent",
+                    "command": command,
+                    "job": job,
+                    "project": project.name,
+                }),
+            )
+        }
+        "cancel" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "agent.cancel",
+                config.tool_permissions.agent_launch,
+            )
+            .await?;
+            let job_id = slash_job_id_arg(args, "/agent cancel <job-id> --yes")?;
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                return Ok(slash_reply(
+                    "Cancel changes job state. Use: /agent cancel <job-id> --yes",
+                    serde_json::json!({
+                        "tool": "agent",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                        "job_id": job_id,
+                    }),
+                ));
+            }
+            state.db.request_cancel_job(job_id).await?;
+            slash_reply(
+                &format!("Cancel requested for job {job_id}."),
+                serde_json::json!({ "tool": "agent", "command": command, "job_id": job_id }),
+            )
+        }
+        "retry" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "agent.retry",
+                config.tool_permissions.agent_launch,
+            )
+            .await?;
+            let job_id = slash_job_id_arg(args, "/agent retry <job-id> --yes")?;
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                return Ok(slash_reply(
+                    "Retry creates a new queued job. Use: /agent retry <job-id> --yes",
+                    serde_json::json!({
+                        "tool": "agent",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                        "job_id": job_id,
+                    }),
+                ));
+            }
+            let retry = state.db.retry_job(job_id).await?;
+            slash_reply(
+                &format!("Queued retry job.\n{}", format_job_summary(&retry)),
+                serde_json::json!({
+                    "tool": "agent",
+                    "command": command,
+                    "source_job_id": job_id,
+                    "job": retry,
+                }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown agent command. Try /agent help.",
+            serde_json::json!({ "tool": "agent", "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(result)
+}
+
+struct AgentLaunchSlashRequest {
+    project: String,
+    goal: String,
+    provider: crate::domain::ProviderKind,
+    secret_grant_token: Option<String>,
+    allow_network: bool,
+    read_only: bool,
+    confirmed: bool,
+}
+
+fn parse_agent_launch_args(args: &[String]) -> Result<AgentLaunchSlashRequest> {
+    let project = args
+        .first()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Usage: /agent launch <project> <goal> [--provider codex] [--read-only] [--allow-network] [--secret-grant-token token] --yes"))?
+        .clone();
+    let mut provider = crate::domain::ProviderKind::Codex;
+    let mut secret_grant_token = None;
+    let mut allow_network = false;
+    let mut read_only = false;
+    let mut confirmed = false;
+    let mut goal_parts = Vec::new();
+    let mut index = 1;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--provider" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("--provider requires a value"))?;
+                provider = router::parse_provider_kind(value)?;
+            }
+            "--secret-grant-token" | "--secret" => {
+                index += 1;
+                secret_grant_token = Some(
+                    args.get(index)
+                        .ok_or_else(|| anyhow::anyhow!("--secret-grant-token requires a value"))?
+                        .clone(),
+                );
+            }
+            "--allow-network" | "--network" => allow_network = true,
+            "--read-only" => read_only = true,
+            "--yes" | "--approve" => confirmed = true,
+            value if value.starts_with("--") => {
+                anyhow::bail!("Unknown /agent launch flag `{value}`")
+            }
+            value => goal_parts.push(value.to_string()),
+        }
+        index += 1;
+    }
+
+    let goal = goal_parts.join(" ").trim().to_string();
+    if goal.is_empty() {
+        anyhow::bail!("Usage: /agent launch <project> <goal> [--provider codex] [--read-only] [--allow-network] [--secret-grant-token token] --yes");
+    }
+
+    Ok(AgentLaunchSlashRequest {
+        project,
+        goal,
+        provider,
+        secret_grant_token,
+        allow_network,
+        read_only,
+        confirmed,
+    })
+}
+
+fn slash_job_id_arg(args: &[String], usage: &str) -> Result<Uuid> {
+    args.get(1)
+        .ok_or_else(|| anyhow::anyhow!("Usage: {usage}"))?
+        .parse::<Uuid>()
+        .map_err(|error| anyhow::anyhow!("Invalid job id: {error}"))
+}
+
+fn format_job_summary(job: &crate::domain::Job) -> String {
+    format!(
+        "{} {:?} {:?} provider={} project={} goal={}",
+        job.id,
+        job.status,
+        job.mount_mode,
+        router::provider_name(&job.provider),
+        job.project_id,
+        job.goal
+    )
+}
+
+fn agent_slash_help() -> &'static str {
+    "Agent commands live under /agent and only run when called explicitly:\n/agent list [limit]\n/agent status <job-id>\n/agent events <job-id>\n/agent preflight <job-id>\n/agent launch <project> <goal> [--provider codex|openrouter|claude-code] [--read-only] [--allow-network] [--secret-grant-token token] --yes\n/agent cancel <job-id> --yes\n/agent retry <job-id> --yes\n\nUse /agent launch for background work. Normal chat never creates jobs."
 }
 
 fn parse_memory_kind_token(value: &str) -> Result<MemoryKind> {
@@ -4505,5 +4842,27 @@ mod tests {
             ToolPermissionPolicy::Deny,
         )
         .is_err());
+    }
+
+    #[test]
+    fn parses_agent_launch_slash_args() {
+        let args = split_slash_args(
+            r#"launch "Library Project" "inspect current state" --provider codex --read-only --allow-network --yes"#,
+        )
+        .expect("split args");
+        let request = parse_agent_launch_args(&args[1..]).expect("launch args");
+
+        assert_eq!(request.project, "Library Project");
+        assert_eq!(request.goal, "inspect current state");
+        assert_eq!(request.provider, crate::domain::ProviderKind::Codex);
+        assert!(request.read_only);
+        assert!(request.allow_network);
+        assert!(request.confirmed);
+    }
+
+    #[test]
+    fn rejects_agent_launch_without_goal() {
+        let args = vec!["Project".to_string(), "--yes".to_string()];
+        assert!(parse_agent_launch_args(&args).is_err());
     }
 }

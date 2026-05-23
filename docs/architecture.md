@@ -178,6 +178,12 @@ namespace. `/settings tool-permissions` reports the current policy matrix, while
 `tool_permissions.settings_change`, persists `.cfg/config.toml`, and records a
 `settings_tool` event.
 
+Background agent jobs use an explicit `/agent` namespace in chat. Listing,
+status, event history, and preflight are read/diagnostic commands. Launch,
+cancel, and retry mutate job state, pass through `tool_permissions.agent_launch`,
+and require an explicit confirmation flag. Plain chat requests remain
+conversation-only and do not create jobs.
+
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
 `~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired

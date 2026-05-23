@@ -425,7 +425,10 @@ Tool groups:
   `/settings set-tool-permission <key> <auto|ask|deny> --yes`.
 - Background agent tools: create project-scoped agent jobs, preflight them, run
   worker actions, cancel/retry, and report results back into chat without
-  blocking the conversation.
+  blocking the conversation. First explicit slash pass adds `/agent list`,
+  `/agent status`, `/agent events`, `/agent preflight`, guarded
+  `/agent launch ... --yes`, `/agent cancel ... --yes`, and
+  `/agent retry ... --yes`.
 
 Permission model:
 
@@ -440,6 +443,8 @@ Permission model:
 - Settings, prompt changes, auth, provider config, and background agent launch
   default to `ask`. Tool-permission changes require both the `settings_change`
   gate and an explicit slash confirmation flag.
+- Background agent launch, retry, and cancel pass through the `agent_launch`
+  gate. Normal chat still never creates jobs.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
   First pass logs `tool_permission` decisions and mutating library/workspace
@@ -454,7 +459,7 @@ Slash commands:
   project-folder operations from `/lib`, and adds `/work ...` for default
   working folders. Memory commands now live under `/mem ...` with `/remember`
   as a shortcut. Settings inspection and tool-permission updates now live under
-  `/settings ...`.
+  `/settings ...`. Background job operations now live under `/agent ...`.
 - Slash commands should execute without spending provider tokens when they are
   deterministic. First library-tool pass bypasses Codex inside `/api/chat`.
 - Slash-command results should still be added to the conversation/event history

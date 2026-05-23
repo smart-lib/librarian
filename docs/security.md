@@ -125,3 +125,6 @@ via `tool_permissions.memory_write` and are logged as `memory_tool` events.
 Tool-permission changes are exposed through `/settings`, pass through
 `tool_permissions.settings_change`, require an explicit `--yes` confirmation,
 persist back to `.cfg/config.toml`, and are logged as `settings_tool` events.
+Background agent launch, cancel, and retry are exposed only through explicit
+`/agent` slash commands, pass through `tool_permissions.agent_launch`, and
+require `--yes` for state-changing operations.
