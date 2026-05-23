@@ -71,6 +71,12 @@ pub fn tree(config: &Config, root: LibraryRoot, max_depth: usize) -> Result<Libr
     read_entry(root, &root_path, &root_path, max_depth.min(12))
 }
 
+pub fn normalize_tool_relative_path(relative_path: &str) -> Result<String> {
+    Ok(normalize_relative_path(relative_path)?
+        .to_string_lossy()
+        .replace('\\', "/"))
+}
+
 pub fn create_folder(config: &Config, root: LibraryRoot, relative_path: &str) -> Result<ToolPath> {
     let path = resolve_new_path(config, root, relative_path)?;
     fs::create_dir_all(&path)

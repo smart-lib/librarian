@@ -86,6 +86,7 @@ impl Default for GitPolicy {
 pub struct Project {
     pub id: Uuid,
     pub name: String,
+    pub library_path: Option<PathBuf>,
     pub path: PathBuf,
     pub autonomy_mode: AutonomyMode,
     pub git_policy: GitPolicy,

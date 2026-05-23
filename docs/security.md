@@ -128,3 +128,6 @@ persist back to `.cfg/config.toml`, and are logged as `settings_tool` events.
 Background agent launch, cancel, and retry are exposed only through explicit
 `/agent` slash commands, pass through `tool_permissions.agent_launch`, and
 require `--yes` for state-changing operations.
+Project library attachments store only sandbox-relative `Library` paths; parent
+traversal and absolute paths are rejected by the same path normalizer used by
+library/workspace tools.

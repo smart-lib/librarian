@@ -178,6 +178,12 @@ namespace. `/settings tool-permissions` reports the current policy matrix, while
 `tool_permissions.settings_change`, persists `.cfg/config.toml`, and records a
 `settings_tool` event.
 
+Projects now carry two separate path concepts. `Project.path` remains the
+implementation/workspace path mounted for worker jobs. `Project.library_path`
+is optional and points to the documentation/memory project inside `Library`,
+stored as a sandbox-relative path. Existing project records continue to work
+with no library attachment until the user links one.
+
 Background agent jobs use an explicit `/agent` namespace in chat. Listing,
 status, event history, and preflight are read/diagnostic commands. Launch,
 cancel, and retry mutate job state, pass through `tool_permissions.agent_launch`,

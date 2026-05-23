@@ -19,7 +19,7 @@ mod worker;
 use std::{
     fs,
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::Result;
@@ -196,6 +196,13 @@ enum ProjectCommand {
         path: PathBuf,
         #[arg(long)]
         name: Option<String>,
+    },
+    AttachLibrary {
+        project: String,
+        library_path: String,
+    },
+    DetachLibrary {
+        project: String,
     },
     List,
 }
@@ -793,13 +800,43 @@ async fn main() -> Result<()> {
                 }
                 ProjectCommand::List => {
                     for project in db.list_projects().await? {
+                        let library_path = project
+                            .library_path
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "-".to_string());
                         println!(
-                            "{}  {}  {}",
+                            "{}  {}  library={}  workspace={}",
                             project.id,
                             project.name,
+                            library_path,
                             project.path.display()
                         );
                     }
+                }
+                ProjectCommand::AttachLibrary {
+                    project,
+                    library_path,
+                } => {
+                    let project = db.get_project_by_name_or_id(&project).await?;
+                    let library_path = library_tools::normalize_tool_relative_path(&library_path)?;
+                    let project = db
+                        .attach_project_library_path(project.id, Path::new(&library_path))
+                        .await?;
+                    println!(
+                        "Attached library path `{}` to project `{}`",
+                        project
+                            .library_path
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                        project.name
+                    );
+                }
+                ProjectCommand::DetachLibrary { project } => {
+                    let project = db.get_project_by_name_or_id(&project).await?;
+                    let project = db.detach_project_library_path(project.id).await?;
+                    println!("Detached library path from project `{}`", project.name);
                 }
             }
         }

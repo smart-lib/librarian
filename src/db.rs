@@ -41,6 +41,7 @@ impl Database {
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
+                library_path TEXT,
                 path TEXT NOT NULL UNIQUE,
                 autonomy_mode TEXT NOT NULL DEFAULT 'ProjectFull',
                 git_policy TEXT NOT NULL DEFAULT '{"allow_commit":true,"allow_push":true,"protected_branches":["main","master"],"require_branch_pattern":null}',
@@ -321,6 +322,15 @@ impl Database {
         .execute(&self.pool)
         .await
         .ok();
+        sqlx::query("ALTER TABLE projects ADD COLUMN library_path TEXT")
+            .execute(&self.pool)
+            .await
+            .ok();
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_library_path ON projects(library_path) WHERE library_path IS NOT NULL",
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query(
             r#"ALTER TABLE projects ADD COLUMN git_policy TEXT NOT NULL DEFAULT '{"allow_commit":true,"allow_push":true,"protected_branches":["main","master"],"require_branch_pattern":null}'"#,
         )
@@ -408,15 +418,17 @@ impl Database {
         let project = Project {
             id: Uuid::new_v4(),
             name: name.to_string(),
+            library_path: None,
             path: path.to_path_buf(),
             autonomy_mode: AutonomyMode::ProjectFull,
             git_policy: GitPolicy::default(),
             created_at: Utc::now(),
         };
 
-        sqlx::query("INSERT INTO projects (id, name, path, autonomy_mode, git_policy, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO projects (id, name, library_path, path, autonomy_mode, git_policy, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
             .bind(project.id.to_string())
             .bind(&project.name)
+            .bind(project.library_path.as_ref().map(|path| path.to_string_lossy().to_string()))
             .bind(project.path.to_string_lossy().to_string())
             .bind(format!("{:?}", project.autonomy_mode))
             .bind(serde_json::to_string(&project.git_policy)?)
@@ -428,7 +440,7 @@ impl Database {
     }
 
     pub async fn list_projects(&self) -> Result<Vec<Project>> {
-        let rows = sqlx::query("SELECT id, name, path, autonomy_mode, git_policy, created_at FROM projects ORDER BY name")
+        let rows = sqlx::query("SELECT id, name, library_path, path, autonomy_mode, git_policy, created_at FROM projects ORDER BY name")
             .fetch_all(&self.pool)
             .await?;
         rows.into_iter().map(row_to_project).collect()
@@ -436,8 +448,9 @@ impl Database {
 
     pub async fn get_project_by_name_or_id(&self, value: &str) -> Result<Project> {
         let row = sqlx::query(
-            "SELECT id, name, path, autonomy_mode, git_policy, created_at FROM projects WHERE id = ? OR name = ? LIMIT 1",
+            "SELECT id, name, library_path, path, autonomy_mode, git_policy, created_at FROM projects WHERE id = ? OR name = ? OR library_path = ? LIMIT 1",
         )
+        .bind(value)
         .bind(value)
         .bind(value)
         .fetch_optional(&self.pool)
@@ -451,7 +464,7 @@ impl Database {
 
     pub async fn get_project_by_id(&self, id: Uuid) -> Result<Project> {
         let row = sqlx::query(
-            "SELECT id, name, path, autonomy_mode, git_policy, created_at FROM projects WHERE id = ? LIMIT 1",
+            "SELECT id, name, library_path, path, autonomy_mode, git_policy, created_at FROM projects WHERE id = ? LIMIT 1",
         )
         .bind(id.to_string())
         .fetch_optional(&self.pool)
@@ -461,6 +474,27 @@ impl Database {
             Some(row) => row_to_project(row),
             None => bail!("Project `{id}` was not found"),
         }
+    }
+
+    pub async fn attach_project_library_path(
+        &self,
+        project_id: Uuid,
+        library_path: &Path,
+    ) -> Result<Project> {
+        sqlx::query("UPDATE projects SET library_path = ? WHERE id = ?")
+            .bind(library_path.to_string_lossy().to_string())
+            .bind(project_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        self.get_project_by_id(project_id).await
+    }
+
+    pub async fn detach_project_library_path(&self, project_id: Uuid) -> Result<Project> {
+        sqlx::query("UPDATE projects SET library_path = NULL WHERE id = ?")
+            .bind(project_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        self.get_project_by_id(project_id).await
     }
 
     pub async fn create_job(
@@ -1800,6 +1834,9 @@ fn row_to_project(row: sqlx::sqlite::SqliteRow) -> Result<Project> {
     Ok(Project {
         id: Uuid::parse_str(row.get::<String, _>("id").as_str())?,
         name: row.get("name"),
+        library_path: row
+            .get::<Option<String>, _>("library_path")
+            .map(PathBuf::from),
         path: PathBuf::from(row.get::<String, _>("path")),
         autonomy_mode: parse_autonomy_mode(row.get::<String, _>("autonomy_mode").as_str())?,
         git_policy: serde_json::from_str(row.get::<String, _>("git_policy").as_str())?,

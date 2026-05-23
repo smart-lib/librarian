@@ -39,7 +39,8 @@ created_at: {}
 
 # {}
 
-Path: `{}`
+Library path: `{}`
+Workspace path: `{}`
 
 ## Notes
 
@@ -48,6 +49,11 @@ Path: `{}`
             yaml_string(&project.name)?,
             project.created_at.to_rfc3339(),
             project.name,
+            project
+                .library_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
             project.path.display()
         );
         write_text(path, content)

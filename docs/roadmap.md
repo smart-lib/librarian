@@ -376,7 +376,9 @@ Tasks:
   external working directory mounted into agent containers. Refined model:
   any folder or Markdown note in `Library` can behave as a project-like library
   item (book/shelf/rack/row metaphor), while implementation/product folders stay
-  separate attached working directories.
+  separate attached working directories. First DB pass adds optional
+  `library_path` to project records while keeping existing `path` as the
+  worker-mounted implementation/workspace path.
 - Add project creation/linking from the admin UI: create the memory folder,
   optionally create the working directory under the default projects root, or
   attach an existing directory.
