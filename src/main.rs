@@ -13,6 +13,7 @@ mod providers;
 mod router;
 mod scheduler;
 mod secrets;
+mod slash_utils;
 mod third_eye;
 mod vault;
 mod worker;

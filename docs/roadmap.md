@@ -818,7 +818,8 @@ Findings and tasks:
   helper logic. Split into modules: routes/API, active chat UI, settings UI,
   project map UI, and legacy removal. First small split moves request/query
   DTOs into `src/admin_models.rs`; route handlers and HTML still need further
-  extraction.
+  extraction. Second small split moves slash argument tokenization into
+  `src/slash_utils.rs`.
 - `src/admin.rs` still contains old inactive HTML functions behind
   `#[allow(dead_code)]`. Delete or move them into archived design notes once
   the new chat-first UI has covered the needed controls.
