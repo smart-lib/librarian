@@ -6280,6 +6280,77 @@ mod tests {
     }
 
     #[test]
+    fn filters_placeholder_chat_memory_from_context_hits() {
+        let pack = ContextPack {
+            query: "plain memory".to_string(),
+            project_id: None,
+            activity_id: None,
+            generated_at: chrono::Utc::now(),
+            hits: vec![
+                test_memory_hit(
+                    "I am here as Librarian, not as a background agent runner.",
+                    serde_json::json!({}),
+                    0.9,
+                ),
+                test_memory_hit(
+                    "old local responder echo",
+                    serde_json::json!({ "mode": "local-memory-responder" }),
+                    0.8,
+                ),
+                test_memory_hit(
+                    "Useful project context that should survive filtering.",
+                    serde_json::json!({ "mode": "librarian-chat" }),
+                    0.7,
+                ),
+            ],
+        };
+
+        let packs = [pack];
+        let hits = filtered_memory_hits(&packs);
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].item.content,
+            "Useful project context that should survive filtering."
+        );
+    }
+
+    fn test_memory_hit(
+        content: &str,
+        metadata: serde_json::Value,
+        score: f64,
+    ) -> crate::domain::MemoryHit {
+        let now = chrono::Utc::now();
+        crate::domain::MemoryHit {
+            item: crate::domain::MemoryItem {
+                id: Uuid::new_v4(),
+                project_id: None,
+                activity_id: None,
+                kind: MemoryKind::AssistantMessage,
+                topic: Some("test".to_string()),
+                content: content.to_string(),
+                source: Some("test".to_string()),
+                observed_at: now,
+                valid_from: None,
+                valid_until: None,
+                confidence: 1.0,
+                salience: 1.0,
+                supersedes_id: None,
+                contradicts_id: None,
+                metadata,
+                created_at: now,
+                updated_at: now,
+            },
+            score,
+            semantic_score: score,
+            lexical_score: 0.0,
+            recency_score: 0.0,
+            scope_score: 0.0,
+            reason: "test".to_string(),
+        }
+    }
+
+    #[test]
     fn splits_quoted_slash_command_arguments() {
         let args = split_slash_args(r#"mkdir library "Project Shelf/Book Notes""#).expect("args");
         assert_eq!(

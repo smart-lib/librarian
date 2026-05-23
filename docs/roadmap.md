@@ -686,9 +686,9 @@ Tasks:
   the real user home. First portable-layout test verifies explicit root setup,
   hidden/public directories, relative config persistence, and reload behavior.
 - Add tests for the chat endpoint that prove it does not create jobs and that
-  placeholder/self-echo memories are excluded. First endpoint test now covers
-  slash-command chat turns: user/assistant memory is persisted and no job is
-  created.
+  placeholder/self-echo memories are excluded. First pass done: endpoint test
+  covers slash-command chat turns with user/assistant memory and no job creation;
+  context filtering test excludes the old local-memory responder echoes.
 
 Dependencies:
 
