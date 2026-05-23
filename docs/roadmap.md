@@ -529,7 +529,8 @@ normal Librarian chat.
 Tasks:
 
 - Register a test project and run a real containerized Codex job with the
-  mounted portable Codex profile.
+  mounted portable Codex profile. `librarian runtime smoke-plan` now prints the
+  exact WSL/Ubuntu command sequence for this disposable smoke flow.
 - Verify `codex exec` works in the agent image and diagnose auth/profile issues
   without inspecting undocumented auth files.
 - Keep background runs non-blocking from the chat perspective: chat records

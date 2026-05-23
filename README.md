@@ -103,6 +103,16 @@ From Windows with WSL2, open:
 http://127.0.0.1:17377
 ```
 
+Print the current WSL/Ubuntu smoke-test sequence with:
+
+```bash
+librarian --home "$HOME/Librarian" runtime smoke-plan
+```
+
+That command does not modify state; it prints the doctor, image build, project
+creation, agent queue, worker, and inspection commands for a disposable smoke
+project.
+
 If `doctor` reports a missing Codex profile, sign in once with Librarian's
 portable profile:
 

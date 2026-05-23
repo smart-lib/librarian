@@ -188,6 +188,10 @@ enum RuntimeCommand {
         #[arg(long)]
         no_codex: bool,
     },
+    SmokePlan {
+        #[arg(long, default_value = "LibrarianSmoke")]
+        project: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -744,6 +748,9 @@ async fn main() -> Result<()> {
             }
             RuntimeCommand::BuildAgentImage { no_codex } => {
                 build_agent_image_with_config(&config, no_codex).await?;
+            }
+            RuntimeCommand::SmokePlan { project } => {
+                print_runtime_smoke_plan(&config, &project);
             }
         },
         Command::Auth { command } => match command {
@@ -1672,6 +1679,46 @@ fn default_runtime_command_arg() -> String {
     } else {
         "docker".to_string()
     }
+}
+
+fn print_runtime_smoke_plan(config: &Config, project: &str) {
+    let binary = "librarian";
+    let home = config.home.display();
+    let project_slug = project
+        .trim()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let project_slug = if project_slug.is_empty() {
+        "LibrarianSmoke".to_string()
+    } else {
+        project_slug
+    };
+    println!("Librarian runtime smoke plan");
+    println!();
+    println!("1. Verify setup:");
+    println!("   {binary} --home \"{home}\" doctor");
+    println!("   {binary} --home \"{home}\" runtime build-agent-image");
+    println!();
+    println!("2. Create a disposable project:");
+    println!("   mkdir -p \"{home}/Projects/{project_slug}\"");
+    println!("   {binary} --home \"{home}\" project add \"{home}/Projects/{project_slug}\" --name \"{project}\"");
+    println!("   {binary} --home \"{home}\" project attach-library \"{project}\" \"projects/{project_slug}\"");
+    println!();
+    println!("3. Queue and run one explicit background agent job:");
+    println!("   {binary} --home \"{home}\" run --project \"{project}\" --goal \"Reply with a one paragraph smoke-test summary and do not edit files\" --read-only");
+    println!("   {binary} --home \"{home}\" worker --once");
+    println!();
+    println!("4. Inspect results:");
+    println!("   {binary} --home \"{home}\" jobs list");
+    println!(
+        "   {binary} --home \"{home}\" context \"smoke-test summary\" --project \"{project}\""
+    );
+    println!();
+    println!("Admin UI during the smoke:");
+    println!("   {binary} --home \"{home}\" admin --bind 0.0.0.0:17377");
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
