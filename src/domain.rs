@@ -34,6 +34,15 @@ pub enum ScheduleStatus {
 
 #[derive(Clone, Debug, Deserialize, Serialize, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
+pub enum ToolApprovalStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Executed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, sqlx::Type)]
+#[sqlx(type_name = "TEXT")]
 pub enum ScheduleKind {
     System,
     Reminder,
@@ -126,6 +135,17 @@ pub struct SystemEvent {
     pub kind: String,
     pub payload: serde_json::Value,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ToolApproval {
+    pub id: Uuid,
+    pub tool: String,
+    pub action: String,
+    pub payload: serde_json::Value,
+    pub status: ToolApprovalStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

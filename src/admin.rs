@@ -18,7 +18,7 @@ use crate::{
     db::Database,
     domain::{
         ContextPack, JobStatus, MemoryKind, MountMode, NetworkMode, Project, ScheduleKind,
-        ScheduleStatus,
+        ScheduleStatus, ToolApprovalStatus,
     },
     gates, library_tools,
     library_tools::LibraryRoot,
@@ -2327,6 +2327,8 @@ async fn execute_slash_command(
         execute_agent_slash_command(state, config, &args[1..]).await?
     } else if matches!(command.as_str(), "project" | "projects") {
         execute_project_slash_command(state, config, &args[1..]).await?
+    } else if matches!(command.as_str(), "approval" | "approvals") {
+        execute_approval_slash_command(state, &args[1..]).await?
     } else if command == "remember" {
         let mut memory_args = vec!["remember".to_string(), "fact".to_string()];
         memory_args.extend(args.iter().skip(1).cloned());
@@ -2341,7 +2343,7 @@ async fn execute_slash_command(
                 execute_library_slash_command(&state.db, config, &["tree".to_string()]).await?
             }
             _ => slash_reply(
-                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; project commands live under /project; settings commands live under /settings; background agent jobs live under /agent.",
+                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; project commands live under /project; approvals live under /approval; settings commands live under /settings; background agent jobs live under /agent.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -2756,7 +2758,7 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
 }
 
 fn slash_help() -> &'static str {
-    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/approval help - pending tool approval proposals\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
 }
 
 fn library_slash_help() -> &'static str {
@@ -3200,6 +3202,133 @@ async fn log_project_event(db: &Database, action: &str, payload: serde_json::Val
 
 fn project_slash_help() -> &'static str {
     "Project commands live under /project:\n/project list\n/project status <project>\n/project create <name> [--library path] [--workspace existing-directory]\n/project attach-library <project> <library-path>\n/project detach-library <project>\n/project attach-workspace <project> <existing-directory>\n\nA project can have a Library documentation path and one implementation/workspace directory. Default create makes Library/projects/{name} and Projects/{name}."
+}
+
+async fn execute_approval_slash_command(
+    state: &AppState,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            approval_slash_help(),
+            serde_json::json!({ "command": "approval" }),
+        ));
+    }
+
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            approval_slash_help(),
+            serde_json::json!({ "tool": "approval", "command": command }),
+        ),
+        "list" => {
+            let limit = args
+                .get(1)
+                .map(|value| value.parse::<i64>())
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("Invalid limit: {error}"))?
+                .unwrap_or(10)
+                .clamp(1, 50);
+            let approvals = state.db.list_tool_approvals(limit).await?;
+            let mut reply = format!("Tool approvals: {} item(s).", approvals.len());
+            for approval in &approvals {
+                reply.push_str(&format!(
+                    "\n{} {:?} {}.{} {}",
+                    approval.id, approval.status, approval.tool, approval.action, approval.payload
+                ));
+            }
+            slash_reply(
+                &reply,
+                serde_json::json!({ "tool": "approval", "command": command, "approvals": approvals }),
+            )
+        }
+        "propose" => {
+            if args.len() < 4 {
+                anyhow::bail!("Usage: /approval propose <tool> <action> <payload-json>");
+            }
+            let payload = parse_json_payload(&args[3..].join(" "))?;
+            let approval = state
+                .db
+                .create_tool_approval(&args[1], &args[2], payload)
+                .await?;
+            state
+                .db
+                .add_system_event(
+                    "tool_approval",
+                    serde_json::json!({
+                        "action": "propose",
+                        "approval_id": approval.id,
+                        "tool": approval.tool,
+                        "tool_action": approval.action,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!(
+                    "Created pending approval {} for {}.{}.",
+                    approval.id, approval.tool, approval.action
+                ),
+                serde_json::json!({ "tool": "approval", "command": command, "approval": approval }),
+            )
+        }
+        "approve" => {
+            let id = slash_approval_id_arg(args, "/approval approve <approval-id>")?;
+            let approval = state
+                .db
+                .update_tool_approval_status(id, ToolApprovalStatus::Approved)
+                .await?;
+            state
+                .db
+                .add_system_event(
+                    "tool_approval",
+                    serde_json::json!({ "action": "approve", "approval_id": approval.id }),
+                )
+                .await?;
+            slash_reply(
+                &format!("Approved tool proposal {}.", approval.id),
+                serde_json::json!({ "tool": "approval", "command": command, "approval": approval }),
+            )
+        }
+        "reject" => {
+            let id = slash_approval_id_arg(args, "/approval reject <approval-id>")?;
+            let approval = state
+                .db
+                .update_tool_approval_status(id, ToolApprovalStatus::Rejected)
+                .await?;
+            state
+                .db
+                .add_system_event(
+                    "tool_approval",
+                    serde_json::json!({ "action": "reject", "approval_id": approval.id }),
+                )
+                .await?;
+            slash_reply(
+                &format!("Rejected tool proposal {}.", approval.id),
+                serde_json::json!({ "tool": "approval", "command": command, "approval": approval }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown approval command. Try /approval help.",
+            serde_json::json!({ "tool": "approval", "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(result)
+}
+
+fn slash_approval_id_arg(args: &[String], usage: &str) -> Result<Uuid> {
+    args.get(1)
+        .ok_or_else(|| anyhow::anyhow!("Usage: {usage}"))?
+        .parse::<Uuid>()
+        .map_err(|error| anyhow::anyhow!("Invalid approval id: {error}"))
+}
+
+fn parse_json_payload(value: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(value).map_err(|error| anyhow::anyhow!("Invalid JSON payload: {error}"))
+}
+
+fn approval_slash_help() -> &'static str {
+    "Approval commands live under /approval:\n/approval list [limit]\n/approval propose <tool> <action> <payload-json>\n/approval approve <approval-id>\n/approval reject <approval-id>\n\nThis is the approval queue for future assistant-initiated tool calls. Approving marks intent; executors still need to run the approved action explicitly."
 }
 
 async fn execute_memory_slash_command(
@@ -5189,5 +5318,12 @@ mod tests {
         assert_eq!(project_folder_name("My Cool Project"), "my-cool-project");
         assert_eq!(project_folder_name("..."), "...");
         assert_eq!(project_folder_name("  "), "project");
+    }
+
+    #[test]
+    fn parses_approval_json_payload() {
+        let payload = parse_json_payload(r#"{"tool":"library","path":"note.md"}"#).expect("json");
+        assert_eq!(payload["tool"], "library");
+        assert!(parse_json_payload("not-json").is_err());
     }
 }

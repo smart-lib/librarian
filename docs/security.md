@@ -134,3 +134,6 @@ library/workspace tools.
 `/project create` can create a default workspace only under `Librarian/Projects`.
 `/project attach-workspace` accepts external paths only when the directory
 already exists; Librarian does not create arbitrary external directories.
+Assistant-initiated tool requests that require approval are recorded as
+`tool_approvals` and surfaced through `/approval`; marking a proposal approved
+does not bypass the underlying tool sandbox or permission checks.

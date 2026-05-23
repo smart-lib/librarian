@@ -14,7 +14,8 @@ use crate::{
     domain::{
         AutonomyMode, GitPolicy, Job, JobEvent, JobStatus, MemoryEmbedding, MemoryItem, MemoryKind,
         MountMode, NetworkMode, Project, ProviderKind, ProviderState, Schedule, ScheduleKind,
-        ScheduleStatus, SecretAuditEvent, SecretGrant, SecretRecord, SystemEvent, UsageObservation,
+        ScheduleStatus, SecretAuditEvent, SecretGrant, SecretRecord, SystemEvent, ToolApproval,
+        ToolApprovalStatus, UsageObservation,
     },
 };
 
@@ -98,6 +99,22 @@ impl Database {
                 kind TEXT NOT NULL,
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS tool_approvals (
+                id TEXT PRIMARY KEY,
+                tool TEXT NOT NULL,
+                action TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
             "#,
         )
@@ -315,6 +332,11 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_tool_approvals_status_created ON tool_approvals(status, created_at DESC)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             "ALTER TABLE projects ADD COLUMN autonomy_mode TEXT NOT NULL DEFAULT 'ProjectFull'",
@@ -437,6 +459,88 @@ impl Database {
             .await?;
 
         Ok(project)
+    }
+
+    pub async fn create_tool_approval(
+        &self,
+        tool: &str,
+        action: &str,
+        payload: serde_json::Value,
+    ) -> Result<ToolApproval> {
+        let now = Utc::now();
+        let approval = ToolApproval {
+            id: Uuid::new_v4(),
+            tool: tool.to_string(),
+            action: action.to_string(),
+            payload,
+            status: ToolApprovalStatus::Pending,
+            created_at: now,
+            updated_at: now,
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO tool_approvals
+                (id, tool, action, payload, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(approval.id.to_string())
+        .bind(&approval.tool)
+        .bind(&approval.action)
+        .bind(approval.payload.to_string())
+        .bind(format!("{:?}", approval.status))
+        .bind(approval.created_at.to_rfc3339())
+        .bind(approval.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(approval)
+    }
+
+    pub async fn list_tool_approvals(&self, limit: i64) -> Result<Vec<ToolApproval>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, tool, action, payload, status, created_at, updated_at
+            FROM tool_approvals
+            ORDER BY created_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_tool_approval).collect()
+    }
+
+    pub async fn get_tool_approval(&self, id: Uuid) -> Result<ToolApproval> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, tool, action, payload, status, created_at, updated_at
+            FROM tool_approvals
+            WHERE id = ?
+            LIMIT 1
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => row_to_tool_approval(row),
+            None => bail!("Tool approval `{id}` was not found"),
+        }
+    }
+
+    pub async fn update_tool_approval_status(
+        &self,
+        id: Uuid,
+        status: ToolApprovalStatus,
+    ) -> Result<ToolApproval> {
+        sqlx::query("UPDATE tool_approvals SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(format!("{:?}", status))
+            .bind(Utc::now().to_rfc3339())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        self.get_tool_approval(id).await
     }
 
     pub async fn list_projects(&self) -> Result<Vec<Project>> {
@@ -1878,6 +1982,18 @@ fn row_to_job(row: sqlx::sqlite::SqliteRow) -> Result<Job> {
     })
 }
 
+fn row_to_tool_approval(row: sqlx::sqlite::SqliteRow) -> Result<ToolApproval> {
+    Ok(ToolApproval {
+        id: Uuid::parse_str(row.get::<String, _>("id").as_str())?,
+        tool: row.get("tool"),
+        action: row.get("action"),
+        payload: serde_json::from_str(row.get::<String, _>("payload").as_str())?,
+        status: parse_tool_approval_status(row.get::<String, _>("status").as_str())?,
+        created_at: parse_time(row.get::<String, _>("created_at").as_str())?,
+        updated_at: parse_time(row.get::<String, _>("updated_at").as_str())?,
+    })
+}
+
 fn row_to_job_event(row: sqlx::sqlite::SqliteRow) -> Result<JobEvent> {
     Ok(JobEvent {
         id: Uuid::parse_str(row.get::<String, _>("id").as_str())?,
@@ -2049,6 +2165,16 @@ fn parse_status(value: &str) -> Result<JobStatus> {
         "Failed" => Ok(JobStatus::Failed),
         "Cancelled" => Ok(JobStatus::Cancelled),
         _ => bail!("Unknown job status `{value}`"),
+    }
+}
+
+fn parse_tool_approval_status(value: &str) -> Result<ToolApprovalStatus> {
+    match value {
+        "Pending" => Ok(ToolApprovalStatus::Pending),
+        "Approved" => Ok(ToolApprovalStatus::Approved),
+        "Rejected" => Ok(ToolApprovalStatus::Rejected),
+        "Executed" => Ok(ToolApprovalStatus::Executed),
+        _ => bail!("Unknown tool approval status `{value}`"),
     }
 }
 

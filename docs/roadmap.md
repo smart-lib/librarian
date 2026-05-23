@@ -449,6 +449,10 @@ Permission model:
   gate and an explicit slash confirmation flag.
 - Background agent launch, retry, and cancel pass through the `agent_launch`
   gate. Normal chat still never creates jobs.
+- Assistant-initiated tool calls that need confirmation should create pending
+  approvals instead of executing directly. First scaffold adds persisted
+  `tool_approvals` plus `/approval list`, `/approval propose`,
+  `/approval approve`, and `/approval reject`.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
   First pass logs `tool_permission` decisions and mutating library/workspace
@@ -464,6 +468,7 @@ Slash commands:
   working folders. Memory commands now live under `/mem ...` with `/remember`
   as a shortcut. Settings inspection and tool-permission updates now live under
   `/settings ...`. Project library/workspace linking lives under `/project ...`.
+  Approval queue inspection and decisions live under `/approval ...`.
   Background job operations now live under `/agent ...`.
 - Slash commands should execute without spending provider tokens when they are
   deterministic. First library-tool pass bypasses Codex inside `/api/chat`.

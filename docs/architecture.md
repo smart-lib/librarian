@@ -193,6 +193,13 @@ cancel, and retry mutate job state, pass through `tool_permissions.agent_launch`
 and require an explicit confirmation flag. Plain chat requests remain
 conversation-only and do not create jobs.
 
+Assistant-initiated tool calls should not execute directly when a policy asks
+for confirmation. The first approval-queue scaffold stores proposed tool calls
+in `tool_approvals` with `pending`, `approved`, `rejected`, and `executed`
+states, exposed through `/approval list`, `/approval propose`, `/approval
+approve`, and `/approval reject`. Approval records user intent; a later executor
+layer must still run approved actions through the normal tool boundary.
+
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
 `~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired
