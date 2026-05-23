@@ -543,6 +543,9 @@ Tasks:
 - Retry a failed job and cancel a queued/running job.
 - Add chat-visible compact action blocks for explicit agent launch, preflight,
   progress, and result artifacts.
+- First project-overlay agent form can queue explicit `/api/jobs` work from a
+  selected project with provider, read-only, and network controls. Preflight and
+  richer job cards remain next UI polish.
 
 Dependencies:
 

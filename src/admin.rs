@@ -680,6 +680,16 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             <button type="submit">Create</button>
           </div>
         </form>`;
+        const agentForm = state.projects.length ? `<form id="agent-launch-form" class="card stack">
+          <h3>Launch agent</h3>
+          <div class="form-grid">
+            <div><label for="agent-project">Project</label><select id="agent-project">${state.projects.map(project => `<option value="${htmlEscape(project.name)}" ${project.name === state.activeProject ? 'selected' : ''}>${htmlEscape(project.name)}</option>`).join('')}</select></div>
+            <div><label for="agent-provider">Provider</label><select id="agent-provider"><option value="codex">codex</option><option value="openrouter">openrouter</option><option value="claude-code">claude-code</option></select></div>
+            <div class="wide"><label for="agent-goal">Goal</label><input id="agent-goal" required placeholder="Inspect the project and summarize next steps"></div>
+            <button type="submit">Queue</button>
+          </div>
+          <div class="row"><label><input id="agent-read-only" type="checkbox" checked> read-only</label><label><input id="agent-network" type="checkbox"> network</label></div>
+        </form>` : '';
         if (!state.projects.length) {
           el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}<div class="card muted">No projects yet. Create one here or use <code>/project create</code> in chat.</div></div><div class="project-map">${renderProjectMapSurface()}</div></div>`;
           wireProjectForms();
@@ -698,7 +708,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             </div>
           </div>`;
         }).join('');
-        el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}${cards}</div><div class="project-map">${renderProjectMapSurface()}</div></div>`;
+        el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}${agentForm}${cards}</div><div class="project-map">${renderProjectMapSurface()}</div></div>`;
         wireProjectForms();
         qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
           state.activeProject = button.dataset.project || '';
@@ -730,6 +740,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function wireProjectForms() {
         const form = el('project-create-form');
         if (form) form.addEventListener('submit', createProjectFromUi);
+        const agentForm = el('agent-launch-form');
+        if (agentForm) agentForm.addEventListener('submit', launchAgentFromUi);
         qsa('[data-attach-library]').forEach(button => button.addEventListener('click', async () => {
           const value = prompt('Library path inside Librarian/Library');
           if (!value) return;
@@ -748,6 +760,24 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           library_path: el('project-library-path').value || null,
           workspace_path: el('project-workspace-path').value || null
         });
+      }
+      async function launchAgentFromUi(event) {
+        event.preventDefault();
+        const body = {
+          project: el('agent-project').value,
+          provider: el('agent-provider').value,
+          goal: el('agent-goal').value,
+          read_only: el('agent-read-only').checked,
+          allow_network: el('agent-network').checked
+        };
+        const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await response.json();
+        if (!response.ok) {
+          appendMessage('system', data.error || `Agent launch failed: ${response.status}`);
+          return;
+        }
+        appendMessage('system', `Queued agent job ${shortId(data.id)} for ${body.project}.`);
+        await refresh();
       }
       async function postJson(url, body) {
         const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
