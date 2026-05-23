@@ -182,7 +182,14 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         },
     )
     .await?;
-    let enriched_prompt = prompt::build_agent_prompt(&project, &job.goal, &context_pack);
+    let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+    let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
+    let enriched_prompt = prompt::build_agent_prompt(
+        &project,
+        &job.goal,
+        &context_pack,
+        &agent_instruction_blocks,
+    );
 
     let spec = AgentRunSpec {
         job_id: job.id,
@@ -206,6 +213,12 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
             "project_note": project_note,
             "context_hits": context_pack.hits.len(),
             "prompt_chars": prompt_len,
+            "prompt_blocks": agent_blocks.iter().filter(|block| block.enabled).map(|block| serde_json::json!({
+                "id": block.id,
+                "target": block.target,
+                "name": block.name,
+                "position": block.position,
+            })).collect::<Vec<_>>(),
         }),
     )
     .await?;
@@ -396,7 +409,14 @@ async fn prepare_job(
         },
     )
     .await?;
-    let enriched_prompt = prompt::build_agent_prompt(&project, &job.goal, &context_pack);
+    let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+    let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
+    let enriched_prompt = prompt::build_agent_prompt(
+        &project,
+        &job.goal,
+        &context_pack,
+        &agent_instruction_blocks,
+    );
     let prompt_len = enriched_prompt.chars().count();
     let spec = AgentRunSpec {
         job_id: job.id,

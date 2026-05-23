@@ -29,7 +29,7 @@ use crate::{
     },
     gates, library_tools,
     library_tools::LibraryRoot,
-    memory, router, scheduler,
+    memory, prompt, router, scheduler,
     secrets::SecretVault,
     third_eye, worker,
 };
@@ -5054,10 +5054,13 @@ async fn run_librarian_chat_loop(
     let mut last_raw_reply = String::new();
 
     for iteration in 1..=max_iterations {
+        let librarian_blocks = db.list_prompt_blocks(Some("librarian")).await?;
+        let librarian_instruction_blocks = prompt::render_prompt_blocks(&librarian_blocks);
         let prompt = build_librarian_chat_prompt(
             message,
             project,
             &context_packs,
+            &librarian_instruction_blocks,
             iteration,
             max_iterations,
         );
@@ -5231,6 +5234,7 @@ fn build_librarian_chat_prompt(
     message: &str,
     project: Option<&Project>,
     context_packs: &[ContextPack],
+    instruction_blocks: &str,
     iteration: usize,
     max_iterations: usize,
 ) -> String {
@@ -5245,6 +5249,11 @@ fn build_librarian_chat_prompt(
     prompt.push_str("Use the retrieved memory as context, but do not dump it back verbatim. Answer naturally and helpfully.\n");
     prompt.push_str("If the user asks for work that should become an agent task, discuss the plan and say that launching a background agent should be an explicit separate action.\n");
     prompt.push_str("Keep the answer concise unless the user asks for detail.\n\n");
+    if !instruction_blocks.trim().is_empty() {
+        prompt.push_str("## Librarian Instruction Blocks\n\n");
+        prompt.push_str(instruction_blocks.trim());
+        prompt.push_str("\n\n");
+    }
     prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If the user asks you to perform a concrete tool action that should require approval, do not claim it is done; reply with {\"action\":\"propose_tool\",\"tool\":\"library|project|agent|prompt|settings\",\"tool_action\":\"specific action\",\"payload\":{\"summary\":\"what would be done\"},\"reason\":\"why approval is needed\"}. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
 
     prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));

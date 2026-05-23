@@ -515,7 +515,9 @@ Tasks:
 - Add block options for Markdown structure: heading level, wrapping, separators,
   and whether the block is included in prompt output, file output, or both.
 - Store prompt/instruction versions so chat runs and agent jobs can cite which
-  instruction set they used.
+  instruction set they used. First integration pass injects `librarian` blocks
+  into chat prompts and `agents` blocks into background agent prompts; job
+  prepared events include enabled agent block metadata.
 
 Dependencies:
 

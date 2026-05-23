@@ -1,11 +1,32 @@
-use crate::domain::{ContextPack, Project};
+use crate::domain::{ContextPack, Project, PromptBlock};
 
-pub fn build_agent_prompt(project: &Project, goal: &str, context_pack: &ContextPack) -> String {
+pub fn render_prompt_blocks(blocks: &[PromptBlock]) -> String {
+    blocks
+        .iter()
+        .filter(|block| block.enabled)
+        .map(|block| block.content.trim())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+pub fn build_agent_prompt(
+    project: &Project,
+    goal: &str,
+    context_pack: &ContextPack,
+    instruction_blocks: &str,
+) -> String {
     let mut prompt = String::new();
     prompt.push_str(
         "You are a Librarian-managed coding agent running inside a project-scoped container.\n",
     );
     prompt.push_str("Work autonomously within the mounted project boundary and respect the provided policy context.\n\n");
+
+    if !instruction_blocks.trim().is_empty() {
+        prompt.push_str("## Instruction Blocks\n\n");
+        prompt.push_str(instruction_blocks.trim());
+        prompt.push_str("\n\n");
+    }
 
     prompt.push_str("## Project\n\n");
     prompt.push_str(&format!("Name: {}\n", project.name));

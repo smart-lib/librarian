@@ -920,12 +920,19 @@ async fn main() -> Result<()> {
             }
             println!("Created job {}", job.id);
             println!("Context hits: {}", context_pack.hits.len());
+            let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+            let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
             let spec = domain::AgentRunSpec {
                 job_id: job.id,
                 project_path: project.path.clone(),
                 provider: job.provider,
                 goal: job.goal,
-                prompt: prompt::build_agent_prompt(&project, &gated.content, &context_pack),
+                prompt: prompt::build_agent_prompt(
+                    &project,
+                    &gated.content,
+                    &context_pack,
+                    &agent_instruction_blocks,
+                ),
                 mount_mode: job.mount_mode,
                 network_mode: job.network_mode,
                 secret_grant_token,
@@ -1006,7 +1013,17 @@ async fn main() -> Result<()> {
             .await?;
             if show_prompt {
                 if let Some(project) = project {
-                    println!("{}", prompt::build_agent_prompt(&project, &query, &pack));
+                    let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+                    let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
+                    println!(
+                        "{}",
+                        prompt::build_agent_prompt(
+                            &project,
+                            &query,
+                            &pack,
+                            &agent_instruction_blocks
+                        )
+                    );
                 } else {
                     println!("{}", memory::render_context_pack(&pack));
                 }
