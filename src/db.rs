@@ -497,6 +497,19 @@ impl Database {
         self.get_project_by_id(project_id).await
     }
 
+    pub async fn update_project_workspace_path(
+        &self,
+        project_id: Uuid,
+        workspace_path: &Path,
+    ) -> Result<Project> {
+        sqlx::query("UPDATE projects SET path = ? WHERE id = ?")
+            .bind(workspace_path.to_string_lossy().to_string())
+            .bind(project_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        self.get_project_by_id(project_id).await
+    }
+
     pub async fn create_job(
         &self,
         project_id: Uuid,

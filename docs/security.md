@@ -131,3 +131,6 @@ require `--yes` for state-changing operations.
 Project library attachments store only sandbox-relative `Library` paths; parent
 traversal and absolute paths are rejected by the same path normalizer used by
 library/workspace tools.
+`/project create` can create a default workspace only under `Librarian/Projects`.
+`/project attach-workspace` accepts external paths only when the directory
+already exists; Librarian does not create arbitrary external directories.

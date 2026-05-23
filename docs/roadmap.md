@@ -381,7 +381,9 @@ Tasks:
   worker-mounted implementation/workspace path.
 - Add project creation/linking from the admin UI: create the memory folder,
   optionally create the working directory under the default projects root, or
-  attach an existing directory.
+  attach an existing directory. First slash-command pass adds `/project list`,
+  `/project status`, `/project create`, `/project attach-library`,
+  `/project detach-library`, and `/project attach-workspace`.
 - When Librarian is launched from a directory that is not already known as a
   root or project, ask whether to register that directory as a working project
   and create/link the corresponding library folder.
@@ -461,7 +463,8 @@ Slash commands:
   project-folder operations from `/lib`, and adds `/work ...` for default
   working folders. Memory commands now live under `/mem ...` with `/remember`
   as a shortcut. Settings inspection and tool-permission updates now live under
-  `/settings ...`. Background job operations now live under `/agent ...`.
+  `/settings ...`. Project library/workspace linking lives under `/project ...`.
+  Background job operations now live under `/agent ...`.
 - Slash commands should execute without spending provider tokens when they are
   deterministic. First library-tool pass bypasses Codex inside `/api/chat`.
 - Slash-command results should still be added to the conversation/event history

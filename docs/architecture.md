@@ -182,7 +182,10 @@ Projects now carry two separate path concepts. `Project.path` remains the
 implementation/workspace path mounted for worker jobs. `Project.library_path`
 is optional and points to the documentation/memory project inside `Library`,
 stored as a sandbox-relative path. Existing project records continue to work
-with no library attachment until the user links one.
+with no library attachment until the user links one. Chat exposes this through
+the `/project` namespace: create a default Library/Projects pair, attach or
+detach a library path, attach an existing external workspace, list projects, and
+inspect one project.
 
 Background agent jobs use an explicit `/agent` namespace in chat. Listing,
 status, event history, and preflight are read/diagnostic commands. Launch,

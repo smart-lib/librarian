@@ -1,4 +1,4 @@
-use std::{collections::HashSet, process::Stdio, sync::Arc, time::Duration};
+use std::{collections::HashSet, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
@@ -2325,6 +2325,8 @@ async fn execute_slash_command(
         execute_settings_slash_command(state, config, &args[1..]).await?
     } else if matches!(command.as_str(), "agent" | "agents" | "job" | "jobs") {
         execute_agent_slash_command(state, config, &args[1..]).await?
+    } else if matches!(command.as_str(), "project" | "projects") {
+        execute_project_slash_command(state, config, &args[1..]).await?
     } else if command == "remember" {
         let mut memory_args = vec!["remember".to_string(), "fact".to_string()];
         memory_args.extend(args.iter().skip(1).cloned());
@@ -2339,7 +2341,7 @@ async fn execute_slash_command(
                 execute_library_slash_command(&state.db, config, &["tree".to_string()]).await?
             }
             _ => slash_reply(
-                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; settings commands live under /settings; background agent jobs live under /agent.",
+                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; project commands live under /project; settings commands live under /settings; background agent jobs live under /agent.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -2754,7 +2756,7 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
 }
 
 fn slash_help() -> &'static str {
-    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/mem help - durable memory tools\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
 }
 
 fn library_slash_help() -> &'static str {
@@ -2898,6 +2900,306 @@ async fn execute_workspace_slash_command(
 
 fn workspace_slash_help() -> &'static str {
     "Workspace commands live under /work and operate only inside Librarian/Projects:\n/work tree [depth]\n/work mkdir <path>\n/work touch <path>\n/work move <from> <to>\n/work delete <path> --yes [--recursive]\n\nUse this for default implementation/product folders, not for library knowledge."
+}
+
+async fn execute_project_slash_command(
+    state: &AppState,
+    config: &Config,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            project_slash_help(),
+            serde_json::json!({ "command": "project" }),
+        ));
+    }
+
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            project_slash_help(),
+            serde_json::json!({ "tool": "project", "command": command }),
+        ),
+        "list" => {
+            let projects = state.db.list_projects().await?;
+            let mut reply = format!("Projects: {} registered.", projects.len());
+            for project in &projects {
+                reply.push_str(&format!("\n{}", format_project_summary(project)));
+            }
+            slash_reply(
+                &reply,
+                serde_json::json!({ "tool": "project", "command": command, "projects": projects }),
+            )
+        }
+        "status" => {
+            let project = slash_project_arg(args, "/project status <project>")?;
+            let project = state.db.get_project_by_name_or_id(project).await?;
+            slash_reply(
+                &format_project_summary(&project),
+                serde_json::json!({ "tool": "project", "command": command, "project": project }),
+            )
+        }
+        "create" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.create",
+                config.tool_permissions.library_create,
+            )
+            .await?;
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "workspace.create",
+                config.tool_permissions.workspace_create,
+            )
+            .await?;
+            let request = parse_project_create_args(&args[1..])?;
+            let library_path = request
+                .library_path
+                .unwrap_or_else(|| format!("projects/{}", project_folder_name(&request.name)));
+            let library_path = library_tools::normalize_tool_relative_path(&library_path)?;
+            library_tools::create_folder(config, LibraryRoot::Library, &library_path)?;
+
+            let workspace_path = if let Some(path) = request.workspace_path {
+                canonical_existing_dir(&path)?
+            } else {
+                let relative = project_folder_name(&request.name);
+                library_tools::create_folder(config, LibraryRoot::Projects, &relative)?;
+                config.home.join("Projects").join(relative).canonicalize()?
+            };
+            let project = state.db.add_project(&request.name, &workspace_path).await?;
+            let project = state
+                .db
+                .attach_project_library_path(project.id, PathBuf::from(&library_path).as_path())
+                .await?;
+            log_project_event(
+                &state.db,
+                "create",
+                serde_json::json!({
+                    "project_id": project.id,
+                    "name": project.name.clone(),
+                    "library_path": project.library_path.clone(),
+                    "workspace_path": project.path.clone(),
+                }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Created project.\n{}", format_project_summary(&project)),
+                serde_json::json!({ "tool": "project", "command": command, "project": project }),
+            )
+        }
+        "attach-library" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.move",
+                config.tool_permissions.library_move,
+            )
+            .await?;
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /project attach-library <project> <library-path>");
+            }
+            let project = state.db.get_project_by_name_or_id(&args[1]).await?;
+            let library_path = library_tools::normalize_tool_relative_path(&args[2])?;
+            let project = state
+                .db
+                .attach_project_library_path(project.id, PathBuf::from(&library_path).as_path())
+                .await?;
+            log_project_event(
+                &state.db,
+                "attach_library",
+                serde_json::json!({ "project_id": project.id, "library_path": project.library_path.clone() }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "Attached library path.\n{}",
+                    format_project_summary(&project)
+                ),
+                serde_json::json!({ "tool": "project", "command": command, "project": project }),
+            )
+        }
+        "detach-library" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.move",
+                config.tool_permissions.library_move,
+            )
+            .await?;
+            let project = slash_project_arg(args, "/project detach-library <project>")?;
+            let project = state.db.get_project_by_name_or_id(project).await?;
+            let project = state.db.detach_project_library_path(project.id).await?;
+            log_project_event(
+                &state.db,
+                "detach_library",
+                serde_json::json!({ "project_id": project.id }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "Detached library path.\n{}",
+                    format_project_summary(&project)
+                ),
+                serde_json::json!({ "tool": "project", "command": command, "project": project }),
+            )
+        }
+        "attach-workspace" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "workspace.move",
+                config.tool_permissions.workspace_move,
+            )
+            .await?;
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /project attach-workspace <project> <existing-directory>");
+            }
+            let project = state.db.get_project_by_name_or_id(&args[1]).await?;
+            let workspace_path = canonical_existing_dir(&args[2])?;
+            let project = state
+                .db
+                .update_project_workspace_path(project.id, &workspace_path)
+                .await?;
+            log_project_event(
+                &state.db,
+                "attach_workspace",
+                serde_json::json!({ "project_id": project.id, "workspace_path": project.path.clone() }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "Attached workspace path.\n{}",
+                    format_project_summary(&project)
+                ),
+                serde_json::json!({ "tool": "project", "command": command, "project": project }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown project command. Try /project help.",
+            serde_json::json!({ "tool": "project", "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(result)
+}
+
+struct ProjectCreateSlashRequest {
+    name: String,
+    library_path: Option<String>,
+    workspace_path: Option<String>,
+}
+
+fn parse_project_create_args(args: &[String]) -> Result<ProjectCreateSlashRequest> {
+    let name = args
+        .first()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Usage: /project create <name> [--library path] [--workspace existing-directory]"
+            )
+        })?
+        .clone();
+    let mut library_path = None;
+    let mut workspace_path = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--library" | "--library-path" => {
+                index += 1;
+                library_path = Some(
+                    args.get(index)
+                        .ok_or_else(|| anyhow::anyhow!("--library requires a value"))?
+                        .clone(),
+                );
+            }
+            "--workspace" | "--workspace-path" => {
+                index += 1;
+                workspace_path = Some(
+                    args.get(index)
+                        .ok_or_else(|| anyhow::anyhow!("--workspace requires a value"))?
+                        .clone(),
+                );
+            }
+            value => anyhow::bail!("Unknown /project create flag `{value}`"),
+        }
+        index += 1;
+    }
+    Ok(ProjectCreateSlashRequest {
+        name,
+        library_path,
+        workspace_path,
+    })
+}
+
+fn slash_project_arg<'a>(args: &'a [String], usage: &str) -> Result<&'a str> {
+    args.get(1)
+        .map(String::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Usage: {usage}"))
+}
+
+fn canonical_existing_dir(value: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(value);
+    if !path.is_dir() {
+        anyhow::bail!("Workspace path must be an existing directory");
+    }
+    path.canonicalize()
+        .map_err(|error| anyhow::anyhow!("Failed to resolve workspace path: {error}"))
+}
+
+fn project_folder_name(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in name.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "project".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn format_project_summary(project: &Project) -> String {
+    format!(
+        "{} `{}` library={} workspace={}",
+        project.id,
+        project.name,
+        project
+            .library_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        project.path.display()
+    )
+}
+
+async fn log_project_event(db: &Database, action: &str, payload: serde_json::Value) -> Result<()> {
+    db.add_system_event(
+        "project_tool",
+        serde_json::json!({
+            "action": action,
+            "source": "slash-command",
+            "payload": payload,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+fn project_slash_help() -> &'static str {
+    "Project commands live under /project:\n/project list\n/project status <project>\n/project create <name> [--library path] [--workspace existing-directory]\n/project attach-library <project> <library-path>\n/project detach-library <project>\n/project attach-workspace <project> <existing-directory>\n\nA project can have a Library documentation path and one implementation/workspace directory. Default create makes Library/projects/{name} and Projects/{name}."
 }
 
 async fn execute_memory_slash_command(
@@ -4864,5 +5166,28 @@ mod tests {
     fn rejects_agent_launch_without_goal() {
         let args = vec!["Project".to_string(), "--yes".to_string()];
         assert!(parse_agent_launch_args(&args).is_err());
+    }
+
+    #[test]
+    fn parses_project_create_slash_args() {
+        let args = split_slash_args(
+            r#"create "Library Project" --library "projects/Library Project" --workspace "C:/work/library""#,
+        )
+        .expect("split args");
+        let request = parse_project_create_args(&args[1..]).expect("project args");
+
+        assert_eq!(request.name, "Library Project");
+        assert_eq!(
+            request.library_path.as_deref(),
+            Some("projects/Library Project")
+        );
+        assert_eq!(request.workspace_path.as_deref(), Some("C:/work/library"));
+    }
+
+    #[test]
+    fn creates_stable_project_folder_names() {
+        assert_eq!(project_folder_name("My Cool Project"), "my-cool-project");
+        assert_eq!(project_folder_name("..."), "...");
+        assert_eq!(project_folder_name("  "), "project");
     }
 }
