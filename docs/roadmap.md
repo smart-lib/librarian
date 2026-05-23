@@ -455,7 +455,8 @@ Permission model:
 - Assistant-initiated tool calls that need confirmation should create pending
   approvals instead of executing directly. First scaffold adds persisted
   `tool_approvals` plus `/approval list`, `/approval propose`,
-  `/approval approve`, and `/approval reject`.
+  `/approval approve`, and `/approval reject`. Chat loop now also accepts a
+  model-emitted `propose_tool` directive and records it as a pending approval.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
   First pass logs `tool_permission` decisions and mutating library/workspace

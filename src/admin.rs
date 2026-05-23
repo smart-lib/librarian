@@ -2539,6 +2539,9 @@ struct LibrarianChatDirective {
     answer: Option<String>,
     question: Option<String>,
     reason: Option<String>,
+    tool: Option<String>,
+    tool_action: Option<String>,
+    payload: Option<serde_json::Value>,
 }
 
 async fn execute_slash_command(
@@ -4705,6 +4708,61 @@ async fn run_librarian_chat_loop(
                 .await?;
                 context_packs.push(context_pack);
             }
+            "propose_tool" => {
+                let tool = directive
+                    .tool
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let tool_action = directive
+                    .tool_action
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let mut payload = directive.payload.unwrap_or_else(|| serde_json::json!({}));
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert(
+                        "chat_scope".to_string(),
+                        serde_json::json!(project.map(|project| project.name.clone())),
+                    );
+                    object.insert(
+                        "user_message".to_string(),
+                        serde_json::json!(message.trim()),
+                    );
+                }
+                let approval = db
+                    .create_tool_approval(&tool, &tool_action, payload)
+                    .await?;
+                db.add_system_event(
+                    "tool_approval",
+                    serde_json::json!({
+                        "action": "propose_from_chat",
+                        "approval_id": approval.id,
+                        "tool": approval.tool,
+                        "tool_action": approval.action,
+                        "reason": directive.reason,
+                    }),
+                )
+                .await?;
+                trace.push(serde_json::json!({
+                    "iteration": iteration,
+                    "action": "propose_tool",
+                    "approval_id": approval.id,
+                    "tool": approval.tool,
+                    "tool_action": approval.action,
+                    "reason": directive.reason,
+                }));
+                return Ok(LibrarianChatResult {
+                    reply: format!(
+                        "I prepared a tool proposal for approval: `{}` `{}`.\nApproval id: `{}`.\nReview it with `/approval list`, then use `/approval approve {}` or `/approval reject {}`.",
+                        approval.tool, approval.action, approval.id, approval.id, approval.id
+                    ),
+                    iterations: iteration,
+                    memory_hits: combined_memory_hits(&context_packs),
+                    trace,
+                    mode: "codex-chat",
+                });
+            }
             _ => {
                 return Ok(LibrarianChatResult {
                     reply: raw_reply,
@@ -4744,7 +4802,7 @@ fn build_librarian_chat_prompt(
     prompt.push_str("Use the retrieved memory as context, but do not dump it back verbatim. Answer naturally and helpfully.\n");
     prompt.push_str("If the user asks for work that should become an agent task, discuss the plan and say that launching a background agent should be an explicit separate action.\n");
     prompt.push_str("Keep the answer concise unless the user asks for detail.\n\n");
-    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
+    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If the user asks you to perform a concrete tool action that should require approval, do not claim it is done; reply with {\"action\":\"propose_tool\",\"tool\":\"library|project|agent|prompt|settings\",\"tool_action\":\"specific action\",\"payload\":{\"summary\":\"what would be done\"},\"reason\":\"why approval is needed\"}. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
 
     prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));
     prompt.push_str(&format!(
@@ -5720,6 +5778,19 @@ mod tests {
         assert_eq!(directive.action, "search_memory");
         assert_eq!(directive.query.as_deref(), Some("project map"));
         assert_eq!(directive.reason.as_deref(), Some("need project context"));
+    }
+
+    #[test]
+    fn parses_tool_proposal_chat_directive() {
+        let directive = parse_librarian_chat_directive(
+            r#"{"action":"propose_tool","tool":"library","tool_action":"create_folder","payload":{"path":"projects/test"},"reason":"user asked for a project folder"}"#,
+        )
+        .expect("directive");
+
+        assert_eq!(directive.action, "propose_tool");
+        assert_eq!(directive.tool.as_deref(), Some("library"));
+        assert_eq!(directive.tool_action.as_deref(), Some("create_folder"));
+        assert_eq!(directive.payload.expect("payload")["path"], "projects/test");
     }
 
     #[test]

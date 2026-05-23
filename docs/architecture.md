@@ -209,6 +209,8 @@ in `tool_approvals` with `pending`, `approved`, `rejected`, and `executed`
 states, exposed through `/approval list`, `/approval propose`, `/approval
 approve`, and `/approval reject`. Approval records user intent; a later executor
 layer must still run approved actions through the normal tool boundary.
+The chat loop can now accept an internal `propose_tool` directive from the
+Librarian model and records it as a pending approval instead of executing it.
 
 Prompt/instruction authoring starts with persisted prompt blocks. `prompt_blocks`
 store target, name, content, enabled state, order, and markdown mode. `/prompt`
