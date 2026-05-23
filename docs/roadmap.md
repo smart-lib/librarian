@@ -806,7 +806,9 @@ Findings and tasks:
 
 - `src/admin.rs` is too large and mixes active UI, legacy UI, API handlers, and
   helper logic. Split into modules: routes/API, active chat UI, settings UI,
-  project map UI, and legacy removal.
+  project map UI, and legacy removal. First small split moves request/query
+  DTOs into `src/admin_models.rs`; route handlers and HTML still need further
+  extraction.
 - `src/admin.rs` still contains old inactive HTML functions behind
   `#[allow(dead_code)]`. Delete or move them into archived design notes once
   the new chat-first UI has covered the needed controls.

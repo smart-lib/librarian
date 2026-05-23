@@ -1,4 +1,5 @@
 mod admin;
+mod admin_models;
 mod broker;
 mod config;
 mod db;
