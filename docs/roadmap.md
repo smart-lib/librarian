@@ -358,8 +358,9 @@ Tasks:
   and events behind a settings button and full-screen tabbed overlay. First
   pass done; richer settings controls can be restored inside tabs only.
 - Add a project-map view that renders registered projects as a branching node
-  tree. First pass done against the project registry; the next pass should use
-  vault project folders and links.
+  tree. First pass done against the project registry; backend map data is now
+  available through `/api/project-map` and `/project map`, annotated with
+  library visual kinds (`book`, `shelf`, `rack`, `artifact`) for the richer UI.
 - Keep low-level dispatch fields such as provider, project id, secret grant
   token, and network mode out of the main chat composer. First pass done with
   Codex as the default MVP provider and the selected/first project as context.

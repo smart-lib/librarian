@@ -1,4 +1,10 @@
-use std::{collections::HashSet, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    process::Stdio,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Result;
 use axum::{
@@ -1372,6 +1378,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/", get(index))
         .route("/api/health", get(health))
         .route("/api/projects", get(projects))
+        .route("/api/project-map", get(project_map))
         .route("/api/jobs", get(jobs).post(create_job))
         .route("/api/schedules", get(schedules).post(create_schedule))
         .route("/api/settings/worker", post(update_worker_settings))
@@ -1495,6 +1502,12 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn projects(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     Ok(Json(state.db.list_projects().await?))
+}
+
+async fn project_map(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let projects = state.db.list_projects().await?;
+    Ok(Json(build_project_map(&config, projects)?))
 }
 
 async fn library_tree(
@@ -2941,6 +2954,17 @@ async fn execute_project_slash_command(
                 serde_json::json!({ "tool": "project", "command": command, "project": project }),
             )
         }
+        "map" => {
+            let projects = state.db.list_projects().await?;
+            let map = build_project_map(config, projects)?;
+            slash_reply(
+                &format!(
+                    "Project map loaded: {} linked project(s).",
+                    map["linked_project_count"].as_u64().unwrap_or(0)
+                ),
+                serde_json::json!({ "tool": "project", "command": command, "map": map }),
+            )
+        }
         "create" => {
             ensure_tool_permission(
                 &state.db,
@@ -3200,8 +3224,74 @@ async fn log_project_event(db: &Database, action: &str, payload: serde_json::Val
     Ok(())
 }
 
+fn build_project_map(config: &Config, projects: Vec<Project>) -> Result<serde_json::Value> {
+    let mut by_library_path: HashMap<String, Vec<Project>> = HashMap::new();
+    let mut detached = Vec::new();
+    for project in projects {
+        match &project.library_path {
+            Some(path) => by_library_path
+                .entry(path.to_string_lossy().replace('\\', "/"))
+                .or_default()
+                .push(project),
+            None => detached.push(project),
+        }
+    }
+    let linked_project_count = by_library_path.values().map(Vec::len).sum::<usize>();
+    let root = library_tools::tree(config, LibraryRoot::Library, 12)?;
+    let tree = project_map_node(&root, &by_library_path);
+    Ok(serde_json::json!({
+        "root": tree,
+        "linked_project_count": linked_project_count,
+        "detached_projects": detached,
+        "metaphor": {
+            "folder_with_folders": "rack_or_row",
+            "folder_with_files": "shelf",
+            "markdown_file": "book",
+            "file": "artifact"
+        }
+    }))
+}
+
+fn project_map_node(
+    entry: &library_tools::LibraryEntry,
+    projects: &HashMap<String, Vec<Project>>,
+) -> serde_json::Value {
+    let child_nodes = entry
+        .children
+        .iter()
+        .map(|child| project_map_node(child, projects))
+        .collect::<Vec<_>>();
+    let linked_projects = projects.get(&entry.path).cloned().unwrap_or_default();
+    serde_json::json!({
+        "name": entry.name,
+        "path": entry.path,
+        "kind": entry.kind,
+        "visual_kind": project_visual_kind(entry),
+        "projects": linked_projects,
+        "children": child_nodes,
+    })
+}
+
+fn project_visual_kind(entry: &library_tools::LibraryEntry) -> &'static str {
+    match entry.kind {
+        library_tools::LibraryEntryKind::Markdown => "book",
+        library_tools::LibraryEntryKind::File => "artifact",
+        library_tools::LibraryEntryKind::Folder => {
+            if entry
+                .children
+                .iter()
+                .any(|child| child.kind == library_tools::LibraryEntryKind::Folder)
+            {
+                "rack"
+            } else {
+                "shelf"
+            }
+        }
+    }
+}
+
 fn project_slash_help() -> &'static str {
-    "Project commands live under /project:\n/project list\n/project status <project>\n/project create <name> [--library path] [--workspace existing-directory]\n/project attach-library <project> <library-path>\n/project detach-library <project>\n/project attach-workspace <project> <existing-directory>\n\nA project can have a Library documentation path and one implementation/workspace directory. Default create makes Library/projects/{name} and Projects/{name}."
+    "Project commands live under /project:\n/project list\n/project map\n/project status <project>\n/project create <name> [--library path] [--workspace existing-directory]\n/project attach-library <project> <library-path>\n/project detach-library <project>\n/project attach-workspace <project> <existing-directory>\n\nA project can have a Library documentation path and one implementation/workspace directory. Default create makes Library/projects/{name} and Projects/{name}."
 }
 
 async fn execute_approval_slash_command(
@@ -5325,5 +5415,34 @@ mod tests {
         let payload = parse_json_payload(r#"{"tool":"library","path":"note.md"}"#).expect("json");
         assert_eq!(payload["tool"], "library");
         assert!(parse_json_payload("not-json").is_err());
+    }
+
+    #[test]
+    fn maps_library_entries_to_visual_kinds() {
+        let markdown = library_tools::LibraryEntry {
+            name: "Book.md".to_string(),
+            path: "Book.md".to_string(),
+            root: LibraryRoot::Library,
+            kind: library_tools::LibraryEntryKind::Markdown,
+            children: Vec::new(),
+        };
+        let shelf = library_tools::LibraryEntry {
+            name: "Shelf".to_string(),
+            path: "Shelf".to_string(),
+            root: LibraryRoot::Library,
+            kind: library_tools::LibraryEntryKind::Folder,
+            children: vec![markdown.clone()],
+        };
+        let rack = library_tools::LibraryEntry {
+            name: "Rack".to_string(),
+            path: "Rack".to_string(),
+            root: LibraryRoot::Library,
+            kind: library_tools::LibraryEntryKind::Folder,
+            children: vec![shelf.clone()],
+        };
+
+        assert_eq!(project_visual_kind(&markdown), "book");
+        assert_eq!(project_visual_kind(&shelf), "shelf");
+        assert_eq!(project_visual_kind(&rack), "rack");
     }
 }

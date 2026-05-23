@@ -187,6 +187,12 @@ the `/project` namespace: create a default Library/Projects pair, attach or
 detach a library path, attach an existing external workspace, list projects, and
 inspect one project.
 
+The project map API (`/api/project-map`) returns the `Library` tree annotated
+with linked project records and visual kinds for the library metaphor: Markdown
+notes are books, folders with files are shelves, folders with nested folders are
+racks/rows, and other files are artifacts. `/project map` exposes the same data
+to chat without spending provider tokens.
+
 Background agent jobs use an explicit `/agent` namespace in chat. Listing,
 status, event history, and preflight are read/diagnostic commands. Launch,
 cancel, and retry mutate job state, pass through `tool_permissions.agent_launch`,
