@@ -2648,7 +2648,7 @@ async fn execute_slash_command(
     } else if matches!(command.as_str(), "project" | "projects") {
         execute_project_slash_command(state, config, &args[1..]).await?
     } else if matches!(command.as_str(), "approval" | "approvals") {
-        execute_approval_slash_command(state, &args[1..]).await?
+        execute_approval_slash_command(state, config, &args[1..]).await?
     } else if matches!(command.as_str(), "prompt" | "prompts") {
         execute_prompt_slash_command(state, config, &args[1..]).await?
     } else if command == "remember" {
@@ -3605,6 +3605,7 @@ fn project_slash_help() -> &'static str {
 
 async fn execute_approval_slash_command(
     state: &AppState,
+    config: &Config,
     args: &[String],
 ) -> Result<LibrarianChatResult> {
     if args.is_empty() {
@@ -3706,6 +3707,44 @@ async fn execute_approval_slash_command(
                 serde_json::json!({ "tool": "approval", "command": command, "approval": approval }),
             )
         }
+        "execute" => {
+            let id = slash_approval_id_arg(args, "/approval execute <approval-id>")?;
+            let approval = state.db.get_tool_approval(id).await?;
+            if approval.status != ToolApprovalStatus::Approved {
+                anyhow::bail!(
+                    "Approval `{}` must be approved before execution; current status is {:?}",
+                    approval.id,
+                    approval.status
+                );
+            }
+            let output = execute_approved_tool_approval(state, config, &approval).await?;
+            let approval = state
+                .db
+                .update_tool_approval_status(id, ToolApprovalStatus::Executed)
+                .await?;
+            state
+                .db
+                .add_system_event(
+                    "tool_approval",
+                    serde_json::json!({
+                        "action": "execute",
+                        "approval_id": approval.id,
+                        "tool": approval.tool,
+                        "tool_action": approval.action,
+                        "output": output,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!("Executed approved tool proposal {}.", approval.id),
+                serde_json::json!({
+                    "tool": "approval",
+                    "command": command,
+                    "approval": approval,
+                    "output": output,
+                }),
+            )
+        }
         _ => slash_reply(
             "Unknown approval command. Try /approval help.",
             serde_json::json!({ "tool": "approval", "command": command, "status": "unknown" }),
@@ -3726,8 +3765,165 @@ fn parse_json_payload(value: &str) -> Result<serde_json::Value> {
     serde_json::from_str(value).map_err(|error| anyhow::anyhow!("Invalid JSON payload: {error}"))
 }
 
+async fn execute_approved_tool_approval(
+    state: &AppState,
+    config: &Config,
+    approval: &crate::domain::ToolApproval,
+) -> Result<serde_json::Value> {
+    let tool = approval.tool.trim().to_ascii_lowercase();
+    let action = approval.action.trim().to_ascii_lowercase();
+    match (tool.as_str(), action.as_str()) {
+        ("library", "create_folder" | "mkdir") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.create",
+                config.tool_permissions.library_create,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let tool_path = library_tools::create_folder(config, LibraryRoot::Library, &path)?;
+            log_slash_library_event(
+                &state.db,
+                "create_folder",
+                serde_json::json!({ "root": "library", "path": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("library", "create_file" | "touch") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.create",
+                config.tool_permissions.library_create,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let tool_path = library_tools::create_empty_file(config, LibraryRoot::Library, &path)?;
+            log_slash_library_event(
+                &state.db,
+                "create_empty_file",
+                serde_json::json!({ "root": "library", "path": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("library", "write_markdown" | "write") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let content = approval_payload_string(&approval.payload, "content")?;
+            let tool_path = library_tools::write_markdown(config, &path, &content)?;
+            log_slash_library_event(
+                &state.db,
+                "write_markdown",
+                serde_json::json!({ "root": "library", "path": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("library", "append_markdown" | "append") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let content = approval_payload_string(&approval.payload, "content")?;
+            let tool_path = library_tools::append_markdown(config, &path, &content)?;
+            log_slash_library_event(
+                &state.db,
+                "append_markdown",
+                serde_json::json!({ "root": "library", "path": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("memory", "remember" | "add") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "memory.write",
+                config.tool_permissions.memory_write,
+            )
+            .await?;
+            let kind = approval
+                .payload
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .map(parse_memory_kind_token)
+                .transpose()?
+                .unwrap_or(MemoryKind::Fact);
+            let content = approval_payload_string(&approval.payload, "content")?;
+            let item = state
+                .db
+                .add_memory_item(
+                    None,
+                    None,
+                    kind,
+                    None,
+                    &content,
+                    Some("admin:approval-execute"),
+                    serde_json::json!({
+                        "approval_id": approval.id,
+                        "tool": approval.tool,
+                        "action": approval.action,
+                    }),
+                )
+                .await?;
+            memory::embed_item(&state.db, config, &item).await?;
+            Ok(serde_json::json!({ "memory_id": item.id, "kind": item.kind }))
+        }
+        ("prompt", "add_block" | "add-block" | "add") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            let target = approval_payload_string(&approval.payload, "target")?;
+            let name = approval_payload_string(&approval.payload, "name")?;
+            let content = approval_payload_string(&approval.payload, "content")?;
+            let markdown = approval
+                .payload
+                .get("markdown")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            let block = state
+                .db
+                .create_prompt_block(&target, &name, &content, markdown)
+                .await?;
+            Ok(serde_json::json!({ "block_id": block.id, "target": block.target }))
+        }
+        _ => anyhow::bail!(
+            "Approval executor does not allow `{}` `{}` yet",
+            approval.tool,
+            approval.action
+        ),
+    }
+}
+
+fn approval_payload_string(payload: &serde_json::Value, key: &str) -> Result<String> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("Approval payload must contain non-empty string `{key}`"))
+}
+
 fn approval_slash_help() -> &'static str {
-    "Approval commands live under /approval:\n/approval list [limit]\n/approval propose <tool> <action> <payload-json>\n/approval approve <approval-id>\n/approval reject <approval-id>\n\nThis is the approval queue for future assistant-initiated tool calls. Approving marks intent; executors still need to run the approved action explicitly."
+    "Approval commands live under /approval:\n/approval list [limit]\n/approval propose <tool> <action> <payload-json>\n/approval approve <approval-id>\n/approval reject <approval-id>\n/approval execute <approval-id>\n\nExecution uses a small whitelist and still passes through normal tool permissions."
 }
 
 async fn execute_prompt_slash_command(
@@ -5977,6 +6173,16 @@ mod tests {
         let payload = parse_json_payload(r#"{"tool":"library","path":"note.md"}"#).expect("json");
         assert_eq!(payload["tool"], "library");
         assert!(parse_json_payload("not-json").is_err());
+    }
+
+    #[test]
+    fn extracts_required_approval_payload_string() {
+        let payload = serde_json::json!({ "path": "notes/test.md" });
+        assert_eq!(
+            approval_payload_string(&payload, "path").expect("path"),
+            "notes/test.md"
+        );
+        assert!(approval_payload_string(&payload, "content").is_err());
     }
 
     #[test]

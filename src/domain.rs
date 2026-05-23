@@ -32,7 +32,7 @@ pub enum ScheduleStatus {
     Disabled,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, sqlx::Type)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "TEXT")]
 pub enum ToolApprovalStatus {
     Pending,

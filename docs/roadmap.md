@@ -459,6 +459,9 @@ Permission model:
   `tool_approvals` plus `/approval list`, `/approval propose`,
   `/approval approve`, and `/approval reject`. Chat loop now also accepts a
   model-emitted `propose_tool` directive and records it as a pending approval.
+  First executor pass adds `/approval execute <id>` for a narrow whitelist:
+  library create/write/append, memory remember, and prompt add-block. Execution
+  still passes through the normal permission gates and tool sandboxes.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
   First pass logs `tool_permission` decisions and mutating library/workspace
