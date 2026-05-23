@@ -480,7 +480,7 @@ Slash commands:
 
 ## Priority 2: Prompt Builder and Instruction Authoring
 
-Status: Planned.
+Status: Backend model started.
 
 Goal: provide a human-friendly visual editor for Librarian identity, chat
 prompt layers, agent instruction files, and provider-specific launch prompts.
@@ -490,7 +490,10 @@ Tasks:
 - Research UI/UX patterns for block-based prompt/instruction editors before
   implementing the admin surface.
 - Add reusable instruction blocks with drag-and-drop ordering, enable/disable
-  toggles, add/delete actions, and per-block controls.
+  toggles, add/delete actions, and per-block controls. First backend pass adds
+  persisted `prompt_blocks` with target, name, content, enabled state, order,
+  and markdown mode, plus `/prompt blocks`, `/prompt add-block`,
+  `/prompt enable`, `/prompt disable`, and `/prompt render`.
 - Support presets for Librarian identity, operating principles, memory policy,
   tool permissions, git policy, Obsidian/vault behavior, task planning style,
   project goals, and provider caveats.

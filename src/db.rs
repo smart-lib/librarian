@@ -13,9 +13,9 @@ use crate::{
     config::Config,
     domain::{
         AutonomyMode, GitPolicy, Job, JobEvent, JobStatus, MemoryEmbedding, MemoryItem, MemoryKind,
-        MountMode, NetworkMode, Project, ProviderKind, ProviderState, Schedule, ScheduleKind,
-        ScheduleStatus, SecretAuditEvent, SecretGrant, SecretRecord, SystemEvent, ToolApproval,
-        ToolApprovalStatus, UsageObservation,
+        MountMode, NetworkMode, Project, PromptBlock, ProviderKind, ProviderState, Schedule,
+        ScheduleKind, ScheduleStatus, SecretAuditEvent, SecretGrant, SecretRecord, SystemEvent,
+        ToolApproval, ToolApprovalStatus, UsageObservation,
     },
 };
 
@@ -113,6 +113,24 @@ impl Database {
                 action TEXT NOT NULL,
                 payload TEXT NOT NULL,
                 status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS prompt_blocks (
+                id TEXT PRIMARY KEY,
+                target TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                markdown INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -337,6 +355,11 @@ impl Database {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_prompt_blocks_target_position ON prompt_blocks(target, position)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         sqlx::query(
             "ALTER TABLE projects ADD COLUMN autonomy_mode TEXT NOT NULL DEFAULT 'ProjectFull'",
@@ -541,6 +564,107 @@ impl Database {
             .execute(&self.pool)
             .await?;
         self.get_tool_approval(id).await
+    }
+
+    pub async fn create_prompt_block(
+        &self,
+        target: &str,
+        name: &str,
+        content: &str,
+        markdown: bool,
+    ) -> Result<PromptBlock> {
+        let now = Utc::now();
+        let next_position: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(position), 0) + 1 FROM prompt_blocks WHERE target = ?",
+        )
+        .bind(target)
+        .fetch_one(&self.pool)
+        .await?;
+        let block = PromptBlock {
+            id: Uuid::new_v4(),
+            target: target.to_string(),
+            name: name.to_string(),
+            content: content.to_string(),
+            enabled: true,
+            position: next_position,
+            markdown,
+            created_at: now,
+            updated_at: now,
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO prompt_blocks
+                (id, target, name, content, enabled, position, markdown, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(block.id.to_string())
+        .bind(&block.target)
+        .bind(&block.name)
+        .bind(&block.content)
+        .bind(block.enabled)
+        .bind(block.position)
+        .bind(block.markdown)
+        .bind(block.created_at.to_rfc3339())
+        .bind(block.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(block)
+    }
+
+    pub async fn list_prompt_blocks(&self, target: Option<&str>) -> Result<Vec<PromptBlock>> {
+        let rows = if let Some(target) = target {
+            sqlx::query(
+                r#"
+                SELECT id, target, name, content, enabled, position, markdown, created_at, updated_at
+                FROM prompt_blocks
+                WHERE target = ?
+                ORDER BY position, created_at
+                "#,
+            )
+            .bind(target)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, target, name, content, enabled, position, markdown, created_at, updated_at
+                FROM prompt_blocks
+                ORDER BY target, position, created_at
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+        rows.into_iter().map(row_to_prompt_block).collect()
+    }
+
+    pub async fn set_prompt_block_enabled(&self, id: Uuid, enabled: bool) -> Result<PromptBlock> {
+        sqlx::query("UPDATE prompt_blocks SET enabled = ?, updated_at = ? WHERE id = ?")
+            .bind(enabled)
+            .bind(Utc::now().to_rfc3339())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        self.get_prompt_block(id).await
+    }
+
+    pub async fn get_prompt_block(&self, id: Uuid) -> Result<PromptBlock> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, target, name, content, enabled, position, markdown, created_at, updated_at
+            FROM prompt_blocks
+            WHERE id = ?
+            LIMIT 1
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => row_to_prompt_block(row),
+            None => bail!("Prompt block `{id}` was not found"),
+        }
     }
 
     pub async fn list_projects(&self) -> Result<Vec<Project>> {
@@ -1989,6 +2113,20 @@ fn row_to_tool_approval(row: sqlx::sqlite::SqliteRow) -> Result<ToolApproval> {
         action: row.get("action"),
         payload: serde_json::from_str(row.get::<String, _>("payload").as_str())?,
         status: parse_tool_approval_status(row.get::<String, _>("status").as_str())?,
+        created_at: parse_time(row.get::<String, _>("created_at").as_str())?,
+        updated_at: parse_time(row.get::<String, _>("updated_at").as_str())?,
+    })
+}
+
+fn row_to_prompt_block(row: sqlx::sqlite::SqliteRow) -> Result<PromptBlock> {
+    Ok(PromptBlock {
+        id: Uuid::parse_str(row.get::<String, _>("id").as_str())?,
+        target: row.get("target"),
+        name: row.get("name"),
+        content: row.get("content"),
+        enabled: row.get("enabled"),
+        position: row.get("position"),
+        markdown: row.get("markdown"),
         created_at: parse_time(row.get::<String, _>("created_at").as_str())?,
         updated_at: parse_time(row.get::<String, _>("updated_at").as_str())?,
     })

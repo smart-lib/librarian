@@ -149,6 +149,19 @@ pub struct ToolApproval {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PromptBlock {
+    pub id: Uuid,
+    pub target: String,
+    pub name: String,
+    pub content: String,
+    pub enabled: bool,
+    pub position: i64,
+    pub markdown: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SecretRecord {
     pub id: Uuid,
     pub name: String,

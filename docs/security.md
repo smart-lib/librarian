@@ -137,3 +137,6 @@ already exists; Librarian does not create arbitrary external directories.
 Assistant-initiated tool requests that require approval are recorded as
 `tool_approvals` and surfaced through `/approval`; marking a proposal approved
 does not bypass the underlying tool sandbox or permission checks.
+Prompt block mutations are guarded by `tool_permissions.settings_change`.
+Rendering prompt blocks is read-only; writing rendered files such as `AGENTS.md`
+or `CLAUDE.md` remains future work and must go through explicit file targets.

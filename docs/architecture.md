@@ -206,6 +206,12 @@ states, exposed through `/approval list`, `/approval propose`, `/approval
 approve`, and `/approval reject`. Approval records user intent; a later executor
 layer must still run approved actions through the normal tool boundary.
 
+Prompt/instruction authoring starts with persisted prompt blocks. `prompt_blocks`
+store target, name, content, enabled state, order, and markdown mode. `/prompt`
+can list blocks, add a block, enable/disable a block, and render enabled blocks
+for a target. The visual editor can build on this block model for Librarian
+identity, agent prompts, `AGENTS.md`, `CLAUDE.md`, and provider-specific files.
+
 By default, the Librarian root is a single stable per-user application
 directory: `%APPDATA%\Librarian` on Windows, `~/Librarian` on Linux, and
 `~/Library/Application Support/Librarian` on macOS. `setup` asks for the desired

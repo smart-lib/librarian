@@ -2342,6 +2342,8 @@ async fn execute_slash_command(
         execute_project_slash_command(state, config, &args[1..]).await?
     } else if matches!(command.as_str(), "approval" | "approvals") {
         execute_approval_slash_command(state, &args[1..]).await?
+    } else if matches!(command.as_str(), "prompt" | "prompts") {
+        execute_prompt_slash_command(state, config, &args[1..]).await?
     } else if command == "remember" {
         let mut memory_args = vec!["remember".to_string(), "fact".to_string()];
         memory_args.extend(args.iter().skip(1).cloned());
@@ -2356,7 +2358,7 @@ async fn execute_slash_command(
                 execute_library_slash_command(&state.db, config, &["tree".to_string()]).await?
             }
             _ => slash_reply(
-                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; project commands live under /project; approvals live under /approval; settings commands live under /settings; background agent jobs live under /agent.",
+                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; project commands live under /project; approvals live under /approval; prompt blocks live under /prompt; settings commands live under /settings; background agent jobs live under /agent.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -2771,7 +2773,7 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
 }
 
 fn slash_help() -> &'static str {
-    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/approval help - pending tool approval proposals\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/approval help - pending tool approval proposals\n/prompt help - prompt builder block presets\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
 }
 
 fn library_slash_help() -> &'static str {
@@ -3419,6 +3421,191 @@ fn parse_json_payload(value: &str) -> Result<serde_json::Value> {
 
 fn approval_slash_help() -> &'static str {
     "Approval commands live under /approval:\n/approval list [limit]\n/approval propose <tool> <action> <payload-json>\n/approval approve <approval-id>\n/approval reject <approval-id>\n\nThis is the approval queue for future assistant-initiated tool calls. Approving marks intent; executors still need to run the approved action explicitly."
+}
+
+async fn execute_prompt_slash_command(
+    state: &AppState,
+    config: &Config,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            prompt_slash_help(),
+            serde_json::json!({ "command": "prompt" }),
+        ));
+    }
+
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            prompt_slash_help(),
+            serde_json::json!({ "tool": "prompt", "command": command }),
+        ),
+        "blocks" | "list" => {
+            let target = args.get(1).map(String::as_str);
+            let blocks = state.db.list_prompt_blocks(target).await?;
+            let mut reply = format!("Prompt blocks: {} item(s).", blocks.len());
+            for block in &blocks {
+                reply.push_str(&format!(
+                    "\n{} [{}] #{} {} enabled={}",
+                    block.id, block.target, block.position, block.name, block.enabled
+                ));
+            }
+            slash_reply(
+                &reply,
+                serde_json::json!({ "tool": "prompt", "command": command, "target": target, "blocks": blocks }),
+            )
+        }
+        "add-block" | "add" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            let request = parse_prompt_add_block_args(&args[1..])?;
+            let block = state
+                .db
+                .create_prompt_block(
+                    &request.target,
+                    &request.name,
+                    &request.content,
+                    request.markdown,
+                )
+                .await?;
+            state
+                .db
+                .add_system_event(
+                    "prompt_tool",
+                    serde_json::json!({
+                        "action": "add_block",
+                        "source": "slash-command",
+                        "block_id": block.id,
+                        "target": block.target,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!(
+                    "Added prompt block {} [{}] {}.",
+                    block.id, block.target, block.name
+                ),
+                serde_json::json!({ "tool": "prompt", "command": command, "block": block }),
+            )
+        }
+        "enable" | "disable" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            let id = slash_prompt_block_id_arg(args, "/prompt enable <block-id>")?;
+            let enabled = command == "enable";
+            let block = state.db.set_prompt_block_enabled(id, enabled).await?;
+            state
+                .db
+                .add_system_event(
+                    "prompt_tool",
+                    serde_json::json!({
+                        "action": if enabled { "enable_block" } else { "disable_block" },
+                        "source": "slash-command",
+                        "block_id": block.id,
+                        "target": block.target,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!(
+                    "{} prompt block {}.",
+                    if enabled { "Enabled" } else { "Disabled" },
+                    block.id
+                ),
+                serde_json::json!({ "tool": "prompt", "command": command, "block": block }),
+            )
+        }
+        "render" => {
+            let target = args
+                .get(1)
+                .map(String::as_str)
+                .ok_or_else(|| anyhow::anyhow!("Usage: /prompt render <target>"))?;
+            let blocks = state.db.list_prompt_blocks(Some(target)).await?;
+            let rendered = render_prompt_blocks(&blocks);
+            slash_reply(
+                &format!("Rendered prompt target `{target}`:\n\n{rendered}"),
+                serde_json::json!({
+                    "tool": "prompt",
+                    "command": command,
+                    "target": target,
+                    "rendered": rendered,
+                    "blocks": blocks,
+                }),
+            )
+        }
+        _ => slash_reply(
+            "Unknown prompt command. Try /prompt help.",
+            serde_json::json!({ "tool": "prompt", "command": command, "status": "unknown" }),
+        ),
+    };
+
+    Ok(result)
+}
+
+struct PromptAddBlockSlashRequest {
+    target: String,
+    name: String,
+    content: String,
+    markdown: bool,
+}
+
+fn parse_prompt_add_block_args(args: &[String]) -> Result<PromptAddBlockSlashRequest> {
+    if args.len() < 3 {
+        anyhow::bail!("Usage: /prompt add-block <target> <name> <content> [--plain]");
+    }
+    let target = args[0].clone();
+    let name = args[1].clone();
+    let mut markdown = true;
+    let mut content_parts = Vec::new();
+    for arg in &args[2..] {
+        if arg == "--plain" {
+            markdown = false;
+        } else {
+            content_parts.push(arg.clone());
+        }
+    }
+    let content = content_parts.join(" ").trim().to_string();
+    if content.is_empty() {
+        anyhow::bail!("Prompt block content must not be empty");
+    }
+    Ok(PromptAddBlockSlashRequest {
+        target,
+        name,
+        content,
+        markdown,
+    })
+}
+
+fn slash_prompt_block_id_arg(args: &[String], usage: &str) -> Result<Uuid> {
+    args.get(1)
+        .ok_or_else(|| anyhow::anyhow!("Usage: {usage}"))?
+        .parse::<Uuid>()
+        .map_err(|error| anyhow::anyhow!("Invalid prompt block id: {error}"))
+}
+
+fn render_prompt_blocks(blocks: &[crate::domain::PromptBlock]) -> String {
+    blocks
+        .iter()
+        .filter(|block| block.enabled)
+        .map(|block| block.content.trim())
+        .filter(|content| !content.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn prompt_slash_help() -> &'static str {
+    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt add-block <target> <name> <content> [--plain]\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
 }
 
 async fn execute_memory_slash_command(
@@ -5444,5 +5631,48 @@ mod tests {
         assert_eq!(project_visual_kind(&markdown), "book");
         assert_eq!(project_visual_kind(&shelf), "shelf");
         assert_eq!(project_visual_kind(&rack), "rack");
+    }
+
+    #[test]
+    fn parses_prompt_add_block_args() {
+        let args = split_slash_args(r#"add-block agents identity "You are Librarian" --plain"#)
+            .expect("split args");
+        let request = parse_prompt_add_block_args(&args[1..]).expect("prompt args");
+
+        assert_eq!(request.target, "agents");
+        assert_eq!(request.name, "identity");
+        assert_eq!(request.content, "You are Librarian");
+        assert!(!request.markdown);
+    }
+
+    #[test]
+    fn renders_enabled_prompt_blocks_only() {
+        let now = chrono::Utc::now();
+        let blocks = vec![
+            crate::domain::PromptBlock {
+                id: Uuid::new_v4(),
+                target: "agents".to_string(),
+                name: "one".to_string(),
+                content: "First".to_string(),
+                enabled: true,
+                position: 1,
+                markdown: true,
+                created_at: now,
+                updated_at: now,
+            },
+            crate::domain::PromptBlock {
+                id: Uuid::new_v4(),
+                target: "agents".to_string(),
+                name: "two".to_string(),
+                content: "Second".to_string(),
+                enabled: false,
+                position: 2,
+                markdown: true,
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+
+        assert_eq!(render_prompt_blocks(&blocks), "First");
     }
 }
