@@ -67,6 +67,10 @@ impl DockerRunner {
                     host_home.display()
                 );
             }
+            if let Some(user) = container_user_for_host_path(host_home)? {
+                parts.push("--user".to_string());
+                parts.push(user);
+            }
             parts.push("--env".to_string());
             parts.push(format!("CODEX_HOME={}", self.config.codex.container_home));
             parts.push("--env".to_string());
@@ -197,6 +201,20 @@ fn mount_source(config: &Config, path: &std::path::Path) -> String {
     }
 }
 
+#[cfg(unix)]
+fn container_user_for_host_path(path: &std::path::Path) -> Result<Option<String>> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("Failed to inspect {}", path.display()))?;
+    Ok(Some(format!("{}:{}", metadata.uid(), metadata.gid())))
+}
+
+#[cfg(not(unix))]
+fn container_user_for_host_path(_path: &std::path::Path) -> Result<Option<String>> {
+    Ok(None)
+}
+
 fn windows_path_to_wsl(path: &str) -> Option<String> {
     let bytes = path.as_bytes();
     if bytes.len() < 3 || bytes[1] != b':' || bytes[2] != b'\\' {
@@ -208,4 +226,51 @@ fn windows_path_to_wsl(path: &str) -> Option<String> {
     }
     let rest = path[3..].replace('\\', "/");
     Some(format!("/mnt/{drive}/{rest}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{MountMode, NetworkMode, ProviderKind};
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn codex_mount_uses_host_owner_on_unix() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-docker-runner-{}", Uuid::new_v4()));
+
+        {
+            let mut config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let codex_home = home.join(".cfg").join("codex-home");
+            std::fs::create_dir_all(&codex_home).expect("codex home");
+            let project = home.join("Projects").join("Smoke");
+            std::fs::create_dir_all(&project).expect("project");
+            config.codex.host_home = Some(codex_home);
+            config.codex.mount_host_home = true;
+            let spec = AgentRunSpec {
+                job_id: Uuid::new_v4(),
+                project_path: project,
+                provider: ProviderKind::Codex,
+                goal: "test".to_string(),
+                prompt: "test".to_string(),
+                mount_mode: MountMode::ReadOnly,
+                network_mode: NetworkMode::None,
+                secret_grant_token: None,
+            };
+
+            let command = DockerRunner::new(config)
+                .docker_command_parts(&spec)
+                .await
+                .expect("command");
+
+            #[cfg(unix)]
+            assert!(command.iter().any(|part| part == "--user"));
+            #[cfg(not(unix))]
+            assert!(!command.iter().any(|part| part == "--user"));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
 }

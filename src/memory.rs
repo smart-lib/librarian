@@ -101,6 +101,21 @@ fn is_raw_transcript_memory(item: &MemoryItem) -> bool {
             .get("memory_role")
             .and_then(serde_json::Value::as_str)
             == Some("raw_chat_turn")
+        || item
+            .metadata
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            == Some("local-memory-responder")
+        || (matches!(
+            item.kind,
+            MemoryKind::UserMessage | MemoryKind::AssistantMessage
+        ) && item.source.as_deref() == Some("admin:librarian-chat")
+            && item.topic.as_deref() == Some("librarian-chat")
+            && item
+                .metadata
+                .get("durability")
+                .and_then(serde_json::Value::as_str)
+                != Some("durable"))
 }
 
 pub async fn backfill_embeddings(db: &Database, config: &Config, limit: i64) -> Result<usize> {
@@ -433,6 +448,30 @@ mod tests {
                 )
                 .await
                 .expect("transcript memory");
+            let legacy_chat = db
+                .add_memory_item(
+                    None,
+                    None,
+                    MemoryKind::AssistantMessage,
+                    Some("librarian-chat"),
+                    "I am here as Librarian, not as a background agent runner.",
+                    Some("admin:librarian-chat"),
+                    serde_json::json!({ "mode": "local-memory-responder" }),
+                )
+                .await
+                .expect("legacy chat memory");
+            let legacy_user_chat = db
+                .add_memory_item(
+                    None,
+                    None,
+                    MemoryKind::UserMessage,
+                    Some("librarian-chat"),
+                    "Project atlas old chat turn.",
+                    Some("admin:librarian-chat"),
+                    serde_json::json!({}),
+                )
+                .await
+                .expect("legacy user chat memory");
             let fact = db
                 .add_memory_item(
                     None,
@@ -448,6 +487,12 @@ mod tests {
             embed_item(&db, &config, &transcript)
                 .await
                 .expect("embed transcript");
+            embed_item(&db, &config, &legacy_chat)
+                .await
+                .expect("embed legacy chat");
+            embed_item(&db, &config, &legacy_user_chat)
+                .await
+                .expect("embed legacy user chat");
             embed_item(&db, &config, &fact).await.expect("embed fact");
 
             let pack = retrieve_context_with_config(
@@ -465,6 +510,11 @@ mod tests {
 
             assert!(pack.hits.iter().any(|hit| hit.item.id == fact.id));
             assert!(!pack.hits.iter().any(|hit| hit.item.id == transcript.id));
+            assert!(!pack.hits.iter().any(|hit| hit.item.id == legacy_chat.id));
+            assert!(!pack
+                .hits
+                .iter()
+                .any(|hit| hit.item.id == legacy_user_chat.id));
         }
 
         std::fs::remove_dir_all(home).ok();

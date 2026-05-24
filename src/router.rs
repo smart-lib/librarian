@@ -247,6 +247,18 @@ pub fn detect_provider_diagnostic(job: &Job, text: &str) -> Option<serde_json::V
                 "next_step": "Run `librarian auth codex --enable-container-mount`, then `librarian doctor`.",
             }));
         }
+        if (lower.contains("failed to read config file") || lower.contains("config.toml"))
+            && lower.contains("permission denied")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "codex_profile_permission_denied",
+                "severity": "error",
+                "message": "Codex profile files are mounted, but the container user cannot read them.",
+                "next_step": "Upgrade Librarian and retry. The Docker runner should launch Codex with the host profile owner UID/GID on Unix hosts.",
+            }));
+        }
         if lower.contains("401 missing bearer")
             || lower.contains("missing bearer")
             || lower.contains("no bearer token")
@@ -383,6 +395,16 @@ mod tests {
             detect_provider_diagnostic(&codex_job(), "provider error: 401 Missing bearer")
                 .expect("diagnostic");
         assert_eq!(diagnostic["code"], "codex_auth_missing_bearer");
+    }
+
+    #[test]
+    fn detects_codex_profile_permission_denied() {
+        let diagnostic = detect_provider_diagnostic(
+            &codex_job(),
+            "Error loading config.toml: Failed to read config file /home/agent/.codex/config.toml: Permission denied (os error 13)",
+        )
+        .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "codex_profile_permission_denied");
     }
 
     #[test]
