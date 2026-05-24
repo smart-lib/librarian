@@ -9,6 +9,8 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
+- Current crate version: `0.2.0`; bump at least the minor version when a visible
+  MVP capability group lands, not only patch fixes.
 - Next implementation focus: replace the local memory responder with a real
   provider-backed Librarian chat loop, then add explicit tools, permissions,
   and background agent launch as separate actions.
@@ -755,12 +757,14 @@ Dependencies:
 
 ## Priority 9: OpenRouter, Claude, and API Provider Path
 
-Status: Later MVP. Minimal secret/grant backend and first-pass provider
-adapters exist, but OpenRouter and Claude are not the first priority until the
-Librarian chat and Codex paths work.
+Status: Moving up after Codex validation. Minimal secret/grant backend and
+first-pass provider adapters exist. Claude Code should be made usable for
+containerized jobs soon because a working host auth is already available but
+idle; OpenRouter remains the first API-key/broker path.
 
-Goal: support OpenRouter-style provider testing without putting raw API keys
-inside agent containers.
+Goal: support both OpenRouter-style API provider testing without putting raw API
+keys inside agent containers and Claude Code CLI jobs that feel to Claude like a
+normal project-local launch.
 
 Tasks:
 
@@ -772,8 +776,26 @@ Tasks:
 - Keep Codex CLI as the primary chat and agent path until the basic flows work.
 - Add OpenRouter as the first API provider once chat/agent boundaries are
   stable.
-- Add Claude Code after OpenRouter and Codex are verified, including provider
-  auth/config UX.
+- Add Claude Code container job support before broader provider polish if Codex
+  background smoke succeeds: mount/copy the Claude auth/profile in the
+  provider-specific way, run Claude from the mounted project directory, pass the
+  task prompt as the normal Claude launch prompt, and ensure `CLAUDE.md` is
+  present when Claude starts.
+- Add provider-specific launch-shape metadata. Codex expects `codex exec` plus
+  `CODEX_HOME`; Claude should behave as if launched normally in a directory
+  containing `CLAUDE.md`; future providers may need different identity files,
+  env vars, profile homes, stdin handling, or prompt-file strategy.
+- Generate or mount provider instruction files during job preparation according
+  to connected providers: `CLAUDE.md` for Claude, `AGENTS.md` for generic agent
+  profiles, and provider/user identity files later. The prompt builder should
+  own these blocks.
+- Add real provider setup/status in Settings -> Providers: host CLI detection,
+  auth/profile path, container mount state, image support, last diagnostic,
+  and action buttons for auth/bootstrap/build/check where possible. Replace
+  placeholder “ready” states with data from doctor/provider diagnostics.
+- Add Claude-specific doctor checks and worker diagnostics: host command
+  present, profile/auth available, container path readable, `CLAUDE.md`
+  generated/mounted, and common login/network failures.
 
 Dependencies:
 
@@ -935,7 +957,9 @@ Findings and tasks:
 - OpenRouter adapter is a first-pass shell command against the broker and has
   not been validated as a production chat/agent provider.
 - Claude Code adapter is a minimal command wrapper and lacks real auth/config
-  UX, diagnostics, and validation.
+  UX, diagnostics, and validation. It also needs provider-specific launch
+  semantics so Claude sees a normal project directory with `CLAUDE.md` rather
+  than a generic stdin-only runner.
 - Provider cost/budget logic uses observed spend only; no estimated reservation
   exists before dispatch.
 - Gate/redaction logic is heuristic. It can over-capture high-entropy strings
