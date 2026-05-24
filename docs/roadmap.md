@@ -804,7 +804,8 @@ Tasks:
   and action buttons for auth/bootstrap/build/check where possible. Replace
   placeholder “ready” states with data from doctor/provider diagnostics. First
   UI pass shows stored Codex/Claude runtime state and allows saving Claude
-  profile/mount settings.
+  profile/mount settings. Second pass adds Codex runtime editing plus generated
+  auth/build/smoke commands in the Providers tab.
 - Add Claude-specific doctor checks and worker diagnostics: host command
   present, profile/auth available, container path readable, `CLAUDE.md`
   generated/mounted, and common login/network failures. First pass adds host

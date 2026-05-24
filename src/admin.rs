@@ -916,16 +916,32 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             : '';
           return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="muted">${htmlEscape(current.status || 'Not paused')}</span>${runtimeLines}`);
         }).join('') : '<div class="card muted">No providers reported.</div>';
+        const commands = state.providers.commands || {};
+        const codex = runtime['codex'] || {};
         const claude = runtime['claude-code'] || {};
         const providerTools = `<div class="card">
           <h3>Provider Setup</h3>
-          <div class="muted tiny">Codex and Claude auth are still completed in the host shell. This panel now shows real stored config; action buttons are next.</div>
+          <div class="muted tiny">Auth still opens in the host shell, but these commands match the current Librarian root.</div>
           <div class="row">
             <button type="button" class="secondary" data-provider-command="codex">Codex auth command</button>
-            <button type="button" class="secondary" data-provider-command="claude">Claude setup note</button>
+            <button type="button" class="secondary" data-provider-command="claude">Claude auth command</button>
+            <button type="button" class="secondary" data-provider-command="image">Build image</button>
+            <button type="button" class="secondary" data-provider-command="smoke-codex">Codex smoke</button>
+            <button type="button" class="secondary" data-provider-command="smoke-claude">Claude smoke</button>
           </div>
           <div class="muted tiny">Claude instruction file: ${htmlEscape(claude.instruction_file || 'CLAUDE.md')}</div>
         </div>`;
+        const codexForm = `<form id="codex-runtime-form" class="card stack">
+          <h3>Codex Runtime</h3>
+          <div class="form-grid">
+            <div class="wide"><label for="codex-host-home">Host profile path</label><input id="codex-host-home" value="${htmlEscape(codex.host_home || '')}" placeholder="/home/user/Librarian/.cfg/codex-home"></div>
+            <button type="submit">Save</button>
+          </div>
+          <div class="row">
+            <label><input id="codex-mount-home" type="checkbox" ${codex.mount_host_home ? 'checked' : ''}> mount profile</label>
+            <label><input id="codex-mount-readonly" type="checkbox" ${codex.mount_read_only ? 'checked' : ''}> read-only</label>
+          </div>
+        </form>`;
         const claudeForm = `<form id="claude-runtime-form" class="card stack">
           <h3>Claude Runtime</h3>
           <div class="form-grid">
@@ -938,16 +954,30 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             <label><input id="claude-mount-readonly" type="checkbox" ${claude.mount_read_only ? 'checked' : ''}> read-only</label>
           </div>
         </form>`;
-        el('providers').innerHTML = providerTools + claudeForm + cards;
+        el('providers').innerHTML = providerTools + codexForm + claudeForm + cards;
+        const codexRuntimeForm = el('codex-runtime-form');
+        if (codexRuntimeForm) codexRuntimeForm.addEventListener('submit', saveCodexRuntime);
         const form = el('claude-runtime-form');
         if (form) form.addEventListener('submit', saveClaudeRuntime);
         qsa('[data-provider-command]').forEach(button => button.addEventListener('click', () => {
-          if (button.dataset.providerCommand === 'codex') {
-            appendMessage('system', 'Run Codex auth from the host shell, then enable the mount: librarian auth codex --enable-container-mount');
-          } else {
-            appendMessage('system', 'Claude Code support now expects a signed-in host profile path in [claude].host_home and [claude].mount_host_home=true. UI bootstrap is next.');
-          }
+          const key = button.dataset.providerCommand;
+          const command = {
+            codex: commands.codex_auth,
+            claude: commands.claude_auth,
+            image: commands.build_agent_image,
+            'smoke-codex': commands.smoke_codex,
+            'smoke-claude': commands.smoke_claude
+          }[key] || 'Command is not available yet.';
+          appendMessage('system', command, 'Provider command');
         }));
+      }
+      async function saveCodexRuntime(event) {
+        event.preventDefault();
+        await postJson('/api/settings/codex', {
+          host_home: el('codex-host-home').value || null,
+          mount_host_home: el('codex-mount-home').checked,
+          mount_read_only: el('codex-mount-readonly').checked
+        });
       }
       async function saveClaudeRuntime(event) {
         event.preventDefault();
@@ -2070,6 +2100,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/schedules", get(schedules).post(create_schedule))
         .route("/api/settings/worker", post(update_worker_settings))
         .route("/api/settings/chat", post(update_chat_settings))
+        .route("/api/settings/codex", post(update_codex_runtime_settings))
         .route("/api/settings/claude", post(update_claude_runtime_settings))
         .route("/api/settings/routing", post(update_routing_settings))
         .route("/api/settings/budget", post(update_budget_settings))
@@ -2801,9 +2832,37 @@ async fn providers_status(State(state): State<AppState>) -> Result<impl IntoResp
     let states = state.db.list_provider_states().await?;
     let catalog = router::model_catalog();
     let config = state.config.read().await;
+    let command_prefix = format!("librarian --home {}", admin_shell_path(&config.home));
+    let default_codex_home = config.home.join(".cfg").join("codex-home");
+    let codex_home = config
+        .codex
+        .host_home
+        .as_ref()
+        .unwrap_or(&default_codex_home);
+    let default_claude_home = config.home.join(".cfg").join("claude-home");
+    let claude_home = config
+        .claude
+        .host_home
+        .as_ref()
+        .unwrap_or(&default_claude_home);
     Ok(Json(serde_json::json!({
         "catalog": catalog,
         "states": states,
+        "commands": {
+            "codex_auth": format!(
+                "CODEX_HOME={} codex\n{} auth codex --enable-container-mount --codex-home {}",
+                admin_shell_path(codex_home),
+                command_prefix,
+                admin_shell_path(codex_home),
+            ),
+            "claude_auth": format!(
+                "CLAUDE_HOME={} claude\n# Then save this profile path and enable the Claude mount in Settings -> Providers.",
+                admin_shell_path(claude_home),
+            ),
+            "build_agent_image": format!("{command_prefix} runtime build-agent-image"),
+            "smoke_codex": format!("{command_prefix} smoke mvp --provider codex --run-agent"),
+            "smoke_claude": format!("{command_prefix} smoke mvp --provider claude-code --run-agent"),
+        },
         "runtime": {
             "codex": {
                 "host_home": config.codex.host_home.as_ref().map(|path| path.display().to_string()),
@@ -3151,6 +3210,60 @@ async fn update_chat_settings(
             "codex_timeout_seconds": codex_timeout_seconds,
             "memory_hit_limit": memory_hit_limit,
             "max_iterations": max_iterations,
+        },
+    })))
+}
+
+async fn update_codex_runtime_settings(
+    State(state): State<AppState>,
+    Json(input): Json<UpdateCodexRuntimeRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (host_home, mount_host_home, mount_read_only, config_path) = {
+        let mut config = state.config.write().await;
+        if let Some(path) = input.host_home {
+            let path = path.trim();
+            config.codex.host_home = if path.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(path))
+            };
+        }
+        if let Some(enabled) = input.mount_host_home {
+            config.codex.mount_host_home = enabled;
+        }
+        if let Some(read_only) = input.mount_read_only {
+            config.codex.mount_read_only = read_only;
+        }
+        config.save()?;
+        (
+            config
+                .codex
+                .host_home
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            config.codex.mount_host_home,
+            config.codex.mount_read_only,
+            config.config_path.clone(),
+        )
+    };
+    state
+        .db
+        .add_system_event(
+            "codex_runtime_updated",
+            serde_json::json!({
+                "host_home": host_home,
+                "mount_host_home": mount_host_home,
+                "mount_read_only": mount_read_only,
+                "config_path": config_path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "codex": {
+            "host_home": host_home,
+            "mount_host_home": mount_host_home,
+            "mount_read_only": mount_read_only,
         },
     })))
 }
@@ -4482,6 +4595,18 @@ fn canonical_existing_dir(value: &str) -> Result<PathBuf> {
     }
     path.canonicalize()
         .map_err(|error| anyhow::anyhow!("Failed to resolve workspace path: {error}"))
+}
+
+fn admin_shell_path(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    if text
+        .chars()
+        .any(|ch| ch.is_whitespace() || matches!(ch, '"' | '\'' | '(' | ')' | '&' | ';'))
+    {
+        format!("\"{}\"", text.replace('"', "\\\""))
+    } else {
+        text
+    }
 }
 
 fn project_folder_name(name: &str) -> String {

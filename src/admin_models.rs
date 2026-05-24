@@ -129,6 +129,13 @@ pub struct UpdateChatSettingsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateCodexRuntimeRequest {
+    pub host_home: Option<String>,
+    pub mount_host_home: Option<bool>,
+    pub mount_read_only: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateClaudeRuntimeRequest {
     pub host_home: Option<String>,
     pub mount_host_home: Option<bool>,
