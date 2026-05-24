@@ -297,7 +297,9 @@ Tasks:
   search-memory iteration stops at the configured budget and includes retrieved
   memory in the next prompt.
 - Add admin controls/readout for chat iteration settings and optionally expose a
-  compact developer trace when diagnostics are enabled.
+  compact developer trace when diagnostics are enabled. First settings UI/API
+  pass lets the admin edit assistant name, Codex timeout, memory hit limit, and
+  max iterations.
 
 ## Priority 1: Actionable Bootstrap and Doctor
 
@@ -811,8 +813,8 @@ readiness or a later planned milestone.
   at a sensible boundary, Up/Down should cycle previous submitted prompts and
   commands; typing `/` should open discoverable slash-command suggestions with
   arrow navigation and Tab completion. First browser-side pass adds local
-  per-page input history and a static slash palette; richer server-provided
-  command metadata and argument-aware completion remain.
+  per-page input history and a slash palette backed by `/api/slash-commands`;
+  richer server-provided argument-aware completion remains.
 
 ## Scheduler and Worker Backlog
 
