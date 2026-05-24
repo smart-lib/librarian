@@ -608,7 +608,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const thread = el('thread');
         thread.innerHTML = '';
         for (const turn of transcript.turns) {
-          appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? `session ${shortId(session.id)}` : '');
+          appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? 'Librarian' : '');
         }
         if (!transcript.turns.length) {
           appendMessage('system', `Restored empty chat session ${shortId(session.id)}.`);
@@ -869,8 +869,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
           if (data.session_id) state.chatSessionId = data.session_id;
-          const scope = data.project ? `project: ${data.project}` : 'global library';
-          appendMessage('assistant', data.reply || 'I am here.', data.session_id ? `${scope} · session ${shortId(data.session_id)}` : scope);
+          appendMessage('assistant', data.reply || 'I am here.', data.mode === 'slash-command' ? 'Command result' : 'Librarian');
           await refresh();
         } catch (error) {
           appendMessage('system', `Could not answer: ${error.message || error}`);
@@ -882,7 +881,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       el('new-chat').addEventListener('click', () => {
         state.chatSessionId = null;
         el('thread').innerHTML = '';
-        appendMessage('assistant', 'New chat started.', activeProjectName() ? `project: ${activeProjectName()}` : 'global library');
+        appendMessage('assistant', 'New chat started.', 'Librarian');
         el('goal-input').focus();
       });
       qsa('[data-close]').forEach(button => button.addEventListener('click', () => closeOverlay(button.dataset.close)));
@@ -4534,13 +4533,14 @@ async fn execute_memory_slash_command(
                 .await?;
             let items = items
                 .into_iter()
-                .filter(|item| !is_raw_transcript_memory_item(item))
+                .filter(|item| is_visible_durable_memory_item(item))
                 .collect::<Vec<_>>();
             let mut reply = format!("Recent memory: {} item(s).", items.len());
             for item in &items {
                 reply.push_str(&format!(
-                    "\n{} {:?}: {}",
+                    "\n{} {} {:?}: {}",
                     item.observed_at.format("%Y-%m-%d %H:%M"),
+                    item.id,
                     item.kind,
                     item.content
                 ));
@@ -4574,6 +4574,23 @@ fn is_raw_transcript_memory_item(item: &crate::domain::MemoryItem) -> bool {
             .get("memory_role")
             .and_then(serde_json::Value::as_str)
             == Some("raw_chat_turn")
+}
+
+fn is_visible_durable_memory_item(item: &crate::domain::MemoryItem) -> bool {
+    if is_raw_transcript_memory_item(item) {
+        return false;
+    }
+    if matches!(
+        item.kind,
+        MemoryKind::UserMessage | MemoryKind::AssistantMessage
+    ) {
+        return item
+            .metadata
+            .get("memory_role")
+            .and_then(serde_json::Value::as_str)
+            == Some("durable_memory");
+    }
+    true
 }
 
 fn memory_slash_help() -> &'static str {
@@ -6121,6 +6138,17 @@ mod tests {
             )
             .await
             .expect("raw memory");
+            db.add_memory_item(
+                None,
+                None,
+                MemoryKind::AssistantMessage,
+                Some("legacy-chat"),
+                "legacy assistant chat should stay out of /mem recent",
+                Some("test"),
+                serde_json::json!({}),
+            )
+            .await
+            .expect("legacy assistant memory");
 
             execute_memory_slash_command(
                 &db,
@@ -6146,7 +6174,9 @@ mod tests {
             assert!(result
                 .reply
                 .contains("durable memory should remain visible"));
+            assert!(result.reply.contains("Fact"));
             assert!(!result.reply.contains("raw chat should stay out"));
+            assert!(!result.reply.contains("legacy assistant chat"));
             assert_eq!(result.mode, "slash-command");
         }
 

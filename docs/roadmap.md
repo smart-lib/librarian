@@ -447,8 +447,9 @@ Tool groups:
   `/remember <content>` as a fact shortcut, and `/mem recent [limit]` in the
   current chat scope. Durable remember now marks memory with
   `memory_role=durable_memory` and `durability=durable`; `/mem recent` filters
-  raw transcript turns out of the user-visible memory list. First correction
-  pass adds `/mem supersede <old-id> <kind> <content>` and
+  raw transcript turns and legacy chat UserMessage/AssistantMessage rows out of
+  the user-visible memory list, and shows memory ids so correction commands are
+  usable. First correction pass adds `/mem supersede <old-id> <kind> <content>` and
   `/mem contradict <old-id> <kind> <content>` with linked durable memory records
   and `memory_tool` audit events.
 - Settings/prompt tools: inspect settings, propose changes, and apply only
@@ -782,6 +783,13 @@ readiness or a later planned milestone.
 - Add compact expandable action blocks in chat for command execution, task
   creation, agent launch, memory retrieval, scheduling decisions, and provider
   routing.
+- Add per-message metadata affordances: hover/click tooltips for timestamp,
+  generation time, iteration count, token/cost estimate where available, memory
+  hits, tool calls, and technical ids. Keep normal message labels human-facing:
+  Librarian/model replies, command results, and background-agent reports should
+  be visually distinct.
+- Add richer message formatting for citations, quoted user history, agent
+  summaries, documentation excerpts, and external-source snippets.
 
 ## Scheduler and Worker Backlog
 
