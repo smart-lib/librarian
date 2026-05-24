@@ -103,15 +103,30 @@ From Windows with WSL2, open:
 http://127.0.0.1:17377
 ```
 
-Print the current WSL/Ubuntu smoke-test sequence with:
+Run the MVP integration smoke test with one command:
+
+```bash
+librarian --home "$HOME/Librarian" smoke mvp --provider codex --run-agent
+```
+
+This creates a disposable Library/Projects pair, exercises the file-tool
+sandbox, writes searchable memory, queues a read-only provider job, preflights
+the container command, then runs that exact job. If you only want the cheap
+local/preflight part without calling the model:
+
+```bash
+librarian --home "$HOME/Librarian" smoke mvp --provider codex
+```
+
+Print the expanded WSL/Ubuntu smoke-test sequence with:
 
 ```bash
 librarian --home "$HOME/Librarian" runtime smoke-plan
 ```
 
-That command does not modify state; it prints the doctor, image build, project
-creation, agent queue, worker, and inspection commands for a disposable smoke
-project.
+That command does not modify state; it prints the one-command smoke entry point
+plus the manual doctor, image build, project creation, agent queue, worker, and
+inspection commands.
 
 If `doctor` reports a missing Codex profile, sign in once with Librarian's
 portable profile:

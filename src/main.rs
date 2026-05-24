@@ -25,7 +25,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use db::Database;
@@ -83,6 +84,10 @@ enum Command {
     Runtime {
         #[command(subcommand)]
         command: RuntimeCommand,
+    },
+    Smoke {
+        #[command(subcommand)]
+        command: SmokeCommand,
     },
     Auth {
         #[command(subcommand)]
@@ -192,6 +197,20 @@ enum RuntimeCommand {
     SmokePlan {
         #[arg(long, default_value = "LibrarianSmoke")]
         project: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SmokeCommand {
+    Mvp {
+        #[arg(long, value_enum, default_value_t = ProviderArg::Codex)]
+        provider: ProviderArg,
+        #[arg(long)]
+        run_agent: bool,
+        #[arg(long)]
+        allow_network: bool,
+        #[arg(long, default_value = "LibrarianSmoke")]
+        name: String,
     },
 }
 
@@ -419,7 +438,7 @@ enum ThirdEyeCommand {
     },
 }
 
-#[derive(Clone, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum ProviderArg {
     Codex,
     OpenRouter,
@@ -752,6 +771,16 @@ async fn main() -> Result<()> {
             }
             RuntimeCommand::SmokePlan { project } => {
                 print_runtime_smoke_plan(&config, &project);
+            }
+        },
+        Command::Smoke { command } => match command {
+            SmokeCommand::Mvp {
+                provider,
+                run_agent,
+                allow_network,
+                name,
+            } => {
+                run_mvp_smoke(&config, provider.into(), run_agent, allow_network, &name).await?;
             }
         },
         Command::Auth { command } => match command {
@@ -1720,6 +1749,14 @@ fn print_runtime_smoke_plan(config: &Config, project: &str) {
     };
     println!("Librarian runtime smoke plan");
     println!();
+    println!("One-command MVP smoke:");
+    println!("   {binary} --home \"{home}\" smoke mvp --provider codex --run-agent");
+    println!();
+    println!("Safe preflight-only variant:");
+    println!("   {binary} --home \"{home}\" smoke mvp --provider codex");
+    println!();
+    println!("Manual equivalent, if you need to inspect every step:");
+    println!();
     println!("1. Verify setup:");
     println!("   {binary} --home \"{home}\" doctor");
     println!("   {binary} --home \"{home}\" runtime build-agent-image");
@@ -1742,6 +1779,249 @@ fn print_runtime_smoke_plan(config: &Config, project: &str) {
     println!();
     println!("Admin UI during the smoke:");
     println!("   {binary} --home \"{home}\" admin --bind 0.0.0.0:17377");
+}
+
+async fn run_mvp_smoke(
+    config: &Config,
+    provider: ProviderKind,
+    run_agent: bool,
+    allow_network: bool,
+    name: &str,
+) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+
+    let started_at = Utc::now();
+    let run_slug = smoke_slug(name, started_at);
+    let project_name = format!(
+        "{}-{}",
+        smoke_display_name(name),
+        started_at.format("%Y%m%d%H%M%S")
+    );
+    let library_dir = format!("smoke/{run_slug}");
+    let project_dir = format!("_smoke/{run_slug}");
+    let project_path = config.home.join("Projects").join(&project_dir);
+
+    println!("Librarian MVP smoke");
+    println!("  root: {}", config.home.display());
+    println!("  provider: {}", router::provider_name(&provider));
+    println!(
+        "  mode: {}",
+        if run_agent {
+            "preflight + real agent run"
+        } else {
+            "local checks + preflight"
+        }
+    );
+    println!();
+
+    println!("1. Exercising Library and Projects tool sandboxes...");
+    library_tools::create_folder(config, library_tools::LibraryRoot::Library, &library_dir)?;
+    library_tools::write_markdown(
+        config,
+        &format!("{library_dir}/overview.md"),
+        "# Smoke project\n\nstatus: created\nline-to-replace: old\nline-to-cut: remove me\n",
+    )?;
+    library_tools::append_markdown(
+        config,
+        &format!("{library_dir}/overview.md"),
+        "\nappend-check: ok\n",
+    )?;
+    let _slice =
+        library_tools::read_markdown_lines(config, &format!("{library_dir}/overview.md"), 1, 2)?;
+    let matches = library_tools::find_markdown(
+        config,
+        &format!("{library_dir}/overview.md"),
+        "line-to-replace",
+        5,
+    )?;
+    if matches.is_empty() {
+        anyhow::bail!("Smoke markdown find did not return the expected marker");
+    }
+    library_tools::replace_first_markdown_match(
+        config,
+        &format!("{library_dir}/overview.md"),
+        "line-to-replace",
+        "line-to-replace: new\n",
+    )?;
+    library_tools::cut_first_markdown_match(
+        config,
+        &format!("{library_dir}/overview.md"),
+        "line-to-cut",
+    )?;
+    library_tools::create_folder(config, library_tools::LibraryRoot::Projects, &project_dir)?;
+    library_tools::create_empty_file(
+        config,
+        library_tools::LibraryRoot::Projects,
+        &format!("{project_dir}/scratch.tmp"),
+    )?;
+    library_tools::move_path(
+        config,
+        library_tools::LibraryRoot::Projects,
+        &format!("{project_dir}/scratch.tmp"),
+        &format!("{project_dir}/scratch-renamed.tmp"),
+    )?;
+    library_tools::delete_path(
+        config,
+        library_tools::LibraryRoot::Projects,
+        &format!("{project_dir}/scratch-renamed.tmp"),
+        false,
+    )?;
+    println!("   OK: created, read, found, replaced, cut, moved, and deleted test files.");
+
+    println!("2. Registering disposable project...");
+    let project_path = project_path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project_path.display()))?;
+    let project = db.add_project(&project_name, &project_path).await?;
+    let project = db
+        .attach_project_library_path(project.id, Path::new(&library_dir))
+        .await?;
+    println!("   OK: {} ({})", project.name, project.id);
+
+    println!("3. Adding searchable smoke memory...");
+    let memory_item = db
+        .add_memory_item(
+            Some(project.id),
+            None,
+            MemoryKind::Fact,
+            Some("mvp-smoke"),
+            &format!("MVP smoke marker for {project_name}: tool sandbox and provider preflight were prepared."),
+            Some("cli:smoke"),
+            json!({
+                "project": project.name,
+                "scope": "smoke",
+                "provider": router::provider_name(&provider),
+            }),
+        )
+        .await?;
+    memory::embed_item(&db, config, &memory_item).await?;
+    println!("   OK: {}", memory_item.id);
+
+    println!("4. Queueing provider job and running preflight...");
+    let network_mode = router::default_network_mode_for_provider(&provider, allow_network, false);
+    let goal = "Reply with one short MVP smoke-test summary. Do not edit files.";
+    let job = db
+        .create_job(
+            project.id,
+            provider.clone(),
+            goal,
+            MountMode::ReadOnly,
+            network_mode,
+            None,
+        )
+        .await?;
+    let context_pack = memory::retrieve_context_with_config(
+        &db,
+        Some(config),
+        memory::RetrievalRequest {
+            query: goal.to_string(),
+            project_id: Some(project.id),
+            activity_id: None,
+            limit: memory::default_hit_limit(),
+        },
+    )
+    .await?;
+    db.add_job_event(
+        job.id,
+        "context_pack",
+        json!({
+            "query": context_pack.query,
+            "generated_at": context_pack.generated_at,
+            "hits": context_pack.hits,
+        }),
+    )
+    .await?;
+    let report = worker::preflight_job(config.clone(), db.clone(), job.id).await?;
+    println!(
+        "   OK: job={} context_hits={} prompt_chars={} instruction_files={}",
+        report.job_id,
+        report.context_hits,
+        report.prompt_chars,
+        report.instruction_files.len()
+    );
+
+    if !run_agent {
+        println!();
+        println!("Smoke preflight passed.");
+        println!(
+            "To run the real provider call: {} smoke mvp --provider {} --run-agent",
+            doctor_command_prefix(config),
+            provider_arg_name(&provider)
+        );
+        println!(
+            "Inspect events: {} jobs events {}",
+            doctor_command_prefix(config),
+            job.id
+        );
+        return Ok(());
+    }
+
+    println!("5. Running the selected provider in the agent container...");
+    worker::run_job_by_id(config.clone(), db.clone(), job.id).await?;
+    let job = db.get_job(job.id).await?;
+    let events = db.list_job_events(job.id).await?;
+    println!("   status: {:?}", job.status);
+    if let Some(event) = events.iter().rev().find(|event| {
+        matches!(
+            event.kind.as_str(),
+            "vault" | "failure_category" | "error" | "stderr" | "stdout"
+        )
+    }) {
+        println!(
+            "   last signal: {} {}",
+            event.kind,
+            serde_json::to_string(&event.payload)?
+        );
+    }
+    println!(
+        "   events: {} jobs events {}",
+        doctor_command_prefix(config),
+        job.id
+    );
+    if !matches!(job.status, JobStatus::Completed) {
+        anyhow::bail!("MVP smoke agent run finished as {:?}", job.status);
+    }
+    println!();
+    println!("Smoke passed.");
+    Ok(())
+}
+
+fn smoke_display_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        "LibrarianSmoke".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn smoke_slug(name: &str, timestamp: chrono::DateTime<Utc>) -> String {
+    let mut slug = name
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        slug = "librarian-smoke".to_string();
+    }
+    format!("{}-{}", slug, timestamp.format("%Y%m%d%H%M%S"))
+}
+
+fn provider_arg_name(provider: &ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::Codex => "codex",
+        ProviderKind::OpenRouter => "open-router",
+        ProviderKind::ClaudeCode => "claude-code",
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1953,12 +2233,11 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
             color_text(
                 color_enabled,
                 "32",
-                "Next step: start the admin UI, add a project, then queue a smoke job."
+                "Next step: run the one-command smoke test, then open the admin UI."
             )
         );
+        println!("  {command} smoke mvp --provider codex --run-agent");
         println!("  {command} admin");
-        println!("  {command} project add <path>");
-        println!("  {command} worker --once");
         println!();
         println!("Upgrade:");
         println!("  {command} upgrade");

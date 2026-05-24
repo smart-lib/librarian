@@ -366,7 +366,11 @@ Tasks:
   path.
 - Start admin UI on `0.0.0.0:17377` and verify Windows/host access through
   `http://127.0.0.1:17377`.
-- After Codex auth, build `librarian-agent` and run the MVP smoke flow.
+- After Codex auth, build `librarian-agent` and run the MVP smoke flow. First
+  pass now exposes `librarian smoke mvp --provider codex --run-agent`, which
+  creates a disposable project, exercises Library/Projects file-tool sandbox
+  operations, writes searchable memory, runs job preflight, and optionally runs
+  that exact provider job.
 
 ## Priority 1B: Project Library and Friendly Admin UX
 
@@ -573,11 +577,12 @@ normal Librarian chat.
 Tasks:
 
 - Register a test project and run a real containerized Codex job with the
-  mounted portable Codex profile. `librarian runtime smoke-plan` now prints the
-  exact WSL/Ubuntu command sequence for this disposable smoke flow. First
-  validation fixed portable profile permissions and provider network defaults;
-  next manual smoke should confirm a complete `codex exec` response inside the
-  agent container.
+  mounted portable Codex profile. `librarian smoke mvp --provider codex
+  --run-agent` now performs the disposable smoke flow in one command; `librarian
+  runtime smoke-plan` prints the expanded manual equivalent. First validation
+  fixed portable profile permissions and provider network defaults; next manual
+  smoke should confirm a complete `codex exec` response inside the agent
+  container.
 - Verify `codex exec` works in the agent image and diagnose auth/profile issues
   without inspecting undocumented auth files.
 - Keep background runs non-blocking from the chat perspective: chat records

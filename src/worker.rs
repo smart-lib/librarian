@@ -1,6 +1,7 @@
 use std::process::Stdio;
 
 use anyhow::Result;
+use chrono::Utc;
 use serde::Serialize;
 use serde_json::json;
 use tokio::{
@@ -45,6 +46,22 @@ pub async fn run_batch(config: Config, db: Database, concurrency: usize) -> Resu
         }
     }
     Ok(ran)
+}
+
+pub async fn run_job_by_id(config: Config, db: Database, job_id: uuid::Uuid) -> Result<()> {
+    let job = db.get_job(job_id).await?;
+    if !matches!(job.status, JobStatus::Queued) {
+        anyhow::bail!(
+            "Job {job_id} is {:?}, but smoke runs can only execute queued jobs",
+            job.status
+        );
+    }
+    let now = Utc::now().to_rfc3339();
+    db.update_job_status(job.id, JobStatus::Preparing).await?;
+    db.add_job_event(job.id, "claimed", json!({ "at": now, "mode": "by_id" }))
+        .await?;
+    let job = db.get_job(job.id).await?;
+    run_job(config, db, job).await
 }
 
 #[derive(Clone, Debug, Serialize)]
