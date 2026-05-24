@@ -45,6 +45,9 @@ pub async fn retrieve_context_with_config(
     let mut hits = Vec::new();
 
     for item in candidates {
+        if is_raw_transcript_memory(&item) {
+            continue;
+        }
         if item
             .valid_until
             .is_some_and(|valid_until| valid_until < now)
@@ -86,6 +89,18 @@ pub async fn retrieve_context_with_config(
         generated_at: now,
         hits,
     })
+}
+
+fn is_raw_transcript_memory(item: &MemoryItem) -> bool {
+    item.metadata
+        .get("durability")
+        .and_then(serde_json::Value::as_str)
+        == Some("transcript")
+        || item
+            .metadata
+            .get("memory_role")
+            .and_then(serde_json::Value::as_str)
+            == Some("raw_chat_turn")
 }
 
 pub async fn backfill_embeddings(db: &Database, config: &Config, limit: i64) -> Result<usize> {
@@ -385,4 +400,73 @@ fn stopword(term: &str) -> bool {
 
 pub fn default_hit_limit() -> usize {
     DEFAULT_HIT_LIMIT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{config::Config, db::Database};
+
+    #[tokio::test]
+    async fn retrieval_excludes_raw_transcript_memory() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-memory-filter-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let transcript = db
+                .add_memory_item(
+                    None,
+                    None,
+                    MemoryKind::UserMessage,
+                    Some("chat"),
+                    "Project atlas should use a glowing spiral.",
+                    Some("test"),
+                    serde_json::json!({
+                        "memory_role": "raw_chat_turn",
+                        "durability": "transcript",
+                    }),
+                )
+                .await
+                .expect("transcript memory");
+            let fact = db
+                .add_memory_item(
+                    None,
+                    None,
+                    MemoryKind::Fact,
+                    Some("project atlas"),
+                    "Project atlas should use a branching library tree.",
+                    Some("test"),
+                    serde_json::json!({}),
+                )
+                .await
+                .expect("durable memory");
+            embed_item(&db, &config, &transcript)
+                .await
+                .expect("embed transcript");
+            embed_item(&db, &config, &fact).await.expect("embed fact");
+
+            let pack = retrieve_context_with_config(
+                &db,
+                Some(&config),
+                RetrievalRequest {
+                    query: "project atlas".to_string(),
+                    project_id: None,
+                    activity_id: None,
+                    limit: 5,
+                },
+            )
+            .await
+            .expect("context");
+
+            assert!(pack.hits.iter().any(|hit| hit.item.id == fact.id));
+            assert!(!pack.hits.iter().any(|hit| hit.item.id == transcript.id));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
 }

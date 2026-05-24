@@ -878,7 +878,10 @@ Findings and tasks:
   still needs UI session switching, pruning/export policy, and a cleaner module
   boundary outside `src/admin.rs`.
 - Memory retrieval lacks filters for source/mode, so placeholder assistant
-  output and low-value operational messages can pollute context.
+  output and low-value operational messages can pollute context. First filter
+  pass now excludes memory marked `durability=transcript` or
+  `memory_role=raw_chat_turn` from durable context retrieval; the current
+  session transcript is supplied separately.
 - `local-hash` embeddings are useful for offline MVP plumbing but weak for
   semantic quality. Keep as fallback; add real embedding providers later.
 - Codex agent adapter exists, but real containerized Codex execution has not
