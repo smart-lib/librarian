@@ -869,8 +869,9 @@ Findings and tasks:
 - The previous hardcoded `looks_like_agent_request` intent detector had mojibake
   Russian literals and was removed. Do not reintroduce multilingual intent
   heuristics; use slash commands and the tool/permission intent layer.
-- Chat has no session/thread model yet; messages are stored as generic memory
-  without ordered transcript structure.
+- Chat now has first-pass `chat_sessions`/`chat_turns`, but transcript work
+  still needs UI session switching, pruning/export policy, and a cleaner module
+  boundary outside `src/admin.rs`.
 - Memory retrieval lacks filters for source/mode, so placeholder assistant
   output and low-value operational messages can pollute context.
 - `local-hash` embeddings are useful for offline MVP plumbing but weak for
@@ -885,8 +886,9 @@ Findings and tasks:
   exists before dispatch.
 - Gate/redaction logic is heuristic. It can over-capture high-entropy strings
   and needs review/undo UX plus stronger tests.
-- Tool permissions do not exist yet. Any future filesystem, memory, settings,
-  or agent-launch operation must go through a policy/audit layer.
+- Tool permissions now exist as a first-pass policy/audit layer. Remaining debt:
+  richer interactive approval UX, policy UI, and clearer assistant-initiated
+  tool execution review.
 - Admin authentication is not implemented. Before exposing non-localhost admin
   access, add auth, CSRF/session handling where relevant, and clear bind/router
   guidance.
