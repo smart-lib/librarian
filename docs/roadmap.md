@@ -373,14 +373,85 @@ Tasks:
   that exact provider job. `doctor --smoke` runs the same preflight smoke from
   the readiness command.
 
-## Priority 1B: Project Library and Friendly Admin UX
+## Priority 1B: Literal Project Library and Friendly Admin UX
 
 Status: In progress. Chat-first shell is active and `/api/chat` is separated
 from background agent jobs; backend project library workflows remain. Real chat
-model integration moved to Priority 0.
+model integration moved to Priority 0. The current temporary project-map/admin
+surfaces are not an acceptable product target; replace them with finished UX
+flows instead of patching placeholders.
 
-Goal: make Librarian feel like a project library first, and hide low-level
-agent dispatch mechanics until they are needed.
+Goal: make Librarian feel like a literal project library first, where project
+context is rooted in the knowledge tree and low-level agent dispatch mechanics
+stay hidden until they are needed.
+
+Project tree model:
+
+- Every node in `Librarian/Library` can be treated as a project context: a root
+  folder, a nested folder, or a Markdown note. For example, `/Games` can be the
+  high-level game-development project, while `/Games/AdvenTableDays` is a
+  concrete game project underneath it.
+- Projects are hierarchical. A parent project can group several child projects:
+  for example, `/Librarian` can contain `/Librarian/Core`,
+  `/Librarian/Site`, and `/Librarian/Mobile`. Each child is independently
+  addressable, while the parent remains a meaningful project context.
+- The library path is the primary identity/index for project memory. The path
+  acts as a block index: memories attached to `/Games` apply to that node and
+  can be searched together with descendants; memories attached to
+  `/Games/AdvenTableDays` are narrower.
+- Context retrieval must understand tree scope:
+  - current node only;
+  - current node plus descendants;
+  - current node plus ancestors;
+  - a focused path selected by user command;
+  - automatic project selection from the current dialogue when confidence is
+    high, otherwise ask the user.
+- A project may optionally attach a workspace/implementation folder. That
+  workspace can be the default `Librarian/Projects/{ProjectName}` or an
+  existing external directory chosen by the user. The library tree remains the
+  source of meaning; attached workspaces are implementation targets for agents.
+
+Literal library visualization:
+
+- Opening "Projects" should become opening the "Library". The primary view is
+  a literal library, not a generic graph or file-manager table.
+- Root library folders are shown as library rows or corridors of shelves. These
+  rows can visually recede into depth when the structure contains multiple
+  large branches such as `Games`, `Personal Assistant`, `Tools`, or `Books`.
+- A standalone top-level project may appear as an individual bookcase instead
+  of a corridor.
+- A project with only files is shown as books on one or more unnamed shelves.
+- A project with subfolders is shown as a bookcase with named shelves. Each
+  shelf contains books for Markdown files and/or doors/markers for nested
+  shelves/bookcases.
+- Deeper structures should become navigable spaces: click a row/corridor to
+  enter the branch, click a bookcase to focus it, click a shelf to inspect the
+  files and child projects on that shelf, click a book to open/read the note.
+- Bookcases and shelves are labeled. Books can show title/spine labels derived
+  from Markdown filenames and frontmatter/heading metadata later.
+- Favorites must be supported. Favorite projects/bookcases/books should be
+  visually highlighted in the library.
+- Activity state should be visible without opening details: recently edited,
+  actively developed, active background jobs, blocked jobs, pending approvals,
+  or scheduled work can use distinct glows/badges.
+- Hover/focus details should show useful metadata: last edited/developed time,
+  active tasks, attached workspace status, memory count, recent decisions, and
+  provider/job status. Do this as tooltips/side panels, not cluttered text on
+  the main shelf.
+- The library UI must support direct commands/actions from the selected node:
+  start chat in this context, attach/create workspace, add note/book, create
+  child project, mark favorite, queue explicit agent work, inspect memory.
+
+Acceptance criteria for the finished Library UI:
+
+- The first screen reads visually as a library: rows, bookcases, shelves, and
+  books. It must not look like a temporary card grid or a generic node graph.
+- Every visible item maps to a real `Library` path and can be selected as a
+  project context.
+- The selected context is reflected in chat and memory retrieval.
+- Parent/child project scopes are testable with memory searches over a subtree.
+- Attached workspace is visible and editable from the selected node details.
+- The design works at the MVP minimum viewport without browser-level scrolling.
 
 Tasks:
 
@@ -389,12 +460,10 @@ Tasks:
 - Make chat the primary surface; move providers, schedules, secrets, budgets,
   and events behind a settings button and full-screen tabbed overlay. First
   pass done; richer settings controls can be restored inside tabs only.
-- Add a project-map view that renders registered projects as a branching node
-  tree. First pass done against the project registry; backend map data is now
-  available through `/api/project-map` and `/project map`, annotated with
-  library visual kinds (`book`, `shelf`, `rack`, `artifact`) for the richer UI.
-  Chat-first project overlay now renders the annotated library tree with a
-  legend and linked/detached counts.
+- Replace the temporary project-map/card surface with the literal Library UI
+  described above. The current `/api/project-map` and `/project map` data can
+  be reused only as backend tree data; the product UI should be a finished
+  library visualization, not a placeholder graph.
 - Keep low-level dispatch fields such as provider, project id, secret grant
   token, and network mode out of the main chat composer. First pass done with
   Codex as the default MVP provider and the selected/first project as context.
@@ -403,17 +472,23 @@ Tasks:
   response is tracked in Priority 0.
 - Polish the main chat shell for actual conversation: full-width thread and
   prompt input, Enter-to-send with Ctrl+Enter newline, floating corner controls,
-  and a centered pull-tab identity marker. First pass done.
+  and a centered pull-tab identity marker. First pass done. Next finished
+  design should turn the centered pull-tab into a real control drawer: new chat,
+  recent chats, active context, quick context switch, and future chat actions
+  live there. Do not place chat controls in the right corner where they collide
+  with the Library button.
 - Move background agent launch into explicit project actions and command blocks,
   so agents can run without interrupting the Librarian conversation.
-- Define the project library model: Markdown project memory folders live under
-  `Librarian/Library/projects/{ProjectName}` by default, and each can attach to an
-  external working directory mounted into agent containers. Refined model:
-  any folder or Markdown note in `Library` can behave as a project-like library
-  item (book/shelf/rack/row metaphor), while implementation/product folders stay
-  separate attached working directories. First DB pass adds optional
-  `library_path` to project records while keeping existing `path` as the
-  worker-mounted implementation/workspace path.
+- Define and implement hierarchical project contexts: every Library node can be
+  a context/project; project records should attach to Library paths without
+  forcing a flat `projects/{ProjectName}` namespace; parent/child paths should
+  drive memory retrieval and UI navigation.
+- Add tree-aware memory retrieval: when the active context is `/Games`, the
+  default search should include `/Games` and descendants, with options to
+  narrow to current node only or include ancestors.
+- Add dialogue-aware context selection: Librarian should automatically infer
+  the likely project/library node from the conversation when confidence is
+  high, otherwise ask the user or accept an explicit command.
 - Add project creation/linking from the admin UI: create the memory folder,
   optionally create the working directory under the default projects root, or
   attach an existing directory. First slash-command pass adds `/project list`,
