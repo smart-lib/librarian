@@ -323,6 +323,80 @@ pub fn detect_provider_diagnostic(job: &Job, text: &str) -> Option<serde_json::V
             }));
         }
     }
+    if matches!(job.provider, ProviderKind::ClaudeCode) {
+        if lower.contains("librarian_diagnostic claude_cli_missing") {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_cli_missing",
+                "severity": "error",
+                "message": "Claude Code CLI is not installed in the agent image.",
+                "next_step": "Rebuild the Librarian agent image with Claude Code installed, then rerun `librarian doctor`.",
+            }));
+        }
+        if lower.contains("librarian_diagnostic claude_home_missing") {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_home_missing",
+                "severity": "error",
+                "message": "The configured Claude profile directory was not mounted into the agent container.",
+                "next_step": "Set `[claude].host_home` to the signed-in profile and enable `[claude].mount_host_home`, then rerun `librarian doctor`.",
+            }));
+        }
+        if lower.contains("librarian_diagnostic claude_instruction_missing") {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_instruction_missing",
+                "severity": "error",
+                "message": "Claude started without the expected project-local CLAUDE.md instruction file.",
+                "next_step": "Upgrade Librarian and retry; Claude jobs should mount CLAUDE.md into the project root during job preparation.",
+            }));
+        }
+        if lower.contains("permission denied")
+            && (lower.contains("claude")
+                || lower.contains("credentials")
+                || lower.contains("config"))
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_profile_permission_denied",
+                "severity": "error",
+                "message": "Claude profile files are mounted, but the container user cannot read them.",
+                "next_step": "Retry with the current Librarian Docker runner, which should launch Claude with the host profile owner UID/GID on Unix hosts.",
+            }));
+        }
+        if lower.contains("not logged in")
+            || lower.contains("please log in")
+            || lower.contains("login required")
+            || lower.contains("authentication required")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_login_required",
+                "severity": "error",
+                "message": "Claude Code reports that the mounted profile is not authenticated.",
+                "next_step": "Sign in to Claude Code on the host, point `[claude].host_home` at that profile, enable the container mount, and retry.",
+            }));
+        }
+        if lower.contains("failed to lookup address information")
+            || lower.contains("network")
+                && (lower.contains("unreachable") || lower.contains("timed out"))
+            || lower.contains("api.anthropic.com")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_provider_network_unavailable",
+                "severity": "error",
+                "message": "Claude Code started, but the agent container could not reach Claude/Anthropic endpoints.",
+                "next_step": "Confirm the job uses provider network mode and retry. Use open network only when the task itself needs broader network access.",
+            }));
+        }
+    }
 
     None
 }
@@ -407,10 +481,18 @@ mod tests {
     use uuid::Uuid;
 
     fn codex_job() -> Job {
+        provider_job(ProviderKind::Codex)
+    }
+
+    fn claude_job() -> Job {
+        provider_job(ProviderKind::ClaudeCode)
+    }
+
+    fn provider_job(provider: ProviderKind) -> Job {
         Job {
             id: Uuid::new_v4(),
             project_id: Uuid::new_v4(),
-            provider: ProviderKind::Codex,
+            provider,
             status: crate::domain::JobStatus::Running,
             goal: "test".to_string(),
             mount_mode: crate::domain::MountMode::ReadWrite,
@@ -473,6 +555,36 @@ mod tests {
         )
         .expect("diagnostic");
         assert_eq!(diagnostic["code"], "codex_cli_missing");
+    }
+
+    #[test]
+    fn detects_claude_cli_missing_preflight() {
+        let diagnostic = detect_provider_diagnostic(
+            &claude_job(),
+            "LIBRARIAN_DIAGNOSTIC claude_cli_missing: claude is not installed",
+        )
+        .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "claude_cli_missing");
+    }
+
+    #[test]
+    fn detects_claude_instruction_missing() {
+        let diagnostic = detect_provider_diagnostic(
+            &claude_job(),
+            "LIBRARIAN_DIAGNOSTIC claude_instruction_missing: /workspace/project/CLAUDE.md is not mounted",
+        )
+        .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "claude_instruction_missing");
+    }
+
+    #[test]
+    fn detects_claude_login_required() {
+        let diagnostic = detect_provider_diagnostic(
+            &claude_job(),
+            "Authentication required: please log in to Claude Code",
+        )
+        .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "claude_login_required");
     }
 
     async fn test_config_and_db(name: &str) -> (Config, Database, PathBuf) {
