@@ -177,6 +177,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     #settings-open { left: 12px; }
     #projects-open { right: 12px; }
+    #new-chat {
+      right: 66px;
+      font-size: 22px;
+      font-weight: 700;
+    }
     .icon-button:hover, .icon-button:focus-visible {
       color: var(--accent);
       background: transparent;
@@ -467,6 +472,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     <header class="topbar">
       <button id="settings-open" class="icon-button" type="button" aria-label="Settings" title="Settings"><span class="settings-icon"></span></button>
       <div class="brand">Librarian<span id="context-line">Smart. Silent. Steady.</span></div>
+      <button id="new-chat" class="icon-button" type="button" aria-label="New chat" title="New chat">+</button>
       <button id="projects-open" class="icon-button" type="button" aria-label="Projects" title="Projects"><span class="map-icon"></span></button>
     </header>
     <main id="chat-log" class="chat-log">
@@ -881,6 +887,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
 
       el('settings-open').addEventListener('click', () => openOverlay('settings-overlay'));
       el('projects-open').addEventListener('click', () => openOverlay('projects-overlay'));
+      el('new-chat').addEventListener('click', () => {
+        state.chatSessionId = null;
+        el('thread').innerHTML = '';
+        appendMessage('assistant', 'New chat started.', activeProjectName() ? `project: ${activeProjectName()}` : 'global library');
+        el('goal-input').focus();
+      });
       qsa('[data-close]').forEach(button => button.addEventListener('click', () => closeOverlay(button.dataset.close)));
       qsa('.tab-button').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab)));
       el('chat-form').addEventListener('submit', submitChat);

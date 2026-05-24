@@ -240,7 +240,8 @@ Tasks:
   messages and resets it when the active project changes. Read API first pass
   adds `/api/chat/sessions` and `/api/chat/sessions/{id}/turns` for restoring
   transcript state. Chat-first admin UI now restores the latest session and
-  thread on page load.
+  thread on page load, and exposes a lightweight new-chat control that clears
+  the active session without touching history.
 - Add a clear fallback when the chat provider is unavailable: actionable
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that
