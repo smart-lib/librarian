@@ -587,6 +587,12 @@ fn failure_category(code: &'static str) -> FailureCategory {
             message: "The configured Librarian agent image is missing or cannot be pulled.",
             next_step: "Run `librarian runtime build-agent-image`, then rerun `librarian doctor`.",
         },
+        "provider_network_unavailable" => FailureCategory {
+            code,
+            severity: "error",
+            message: "The provider CLI started, but the agent container could not reach the provider endpoint.",
+            next_step: "Upgrade Librarian, confirm the job preflight does not include `--network none`, and retry. Use `--allow-network` only for broader job network access.",
+        },
         "cancelled" => FailureCategory {
             code,
             severity: "info",
@@ -657,6 +663,14 @@ fn output_failure_category(text: &str) -> Option<FailureCategory> {
     {
         return Some(failure_category("agent_image_missing"));
     }
+    if lower.contains("failed to lookup address information")
+        || lower.contains("failed to connect to websocket")
+        || (lower.contains("stream disconnected before completion")
+            && lower.contains("chatgpt.com"))
+        || (lower.contains("error sending request for url") && lower.contains("chatgpt.com"))
+    {
+        return Some(failure_category("provider_network_unavailable"));
+    }
     None
 }
 
@@ -692,6 +706,15 @@ mod tests {
         )
         .expect("category");
         assert_eq!(category.code, "agent_image_missing");
+    }
+
+    #[test]
+    fn categorizes_provider_network_output_failure() {
+        let category = output_failure_category(
+            "stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+        )
+        .expect("category");
+        assert_eq!(category.code, "provider_network_unavailable");
     }
 
     #[test]
