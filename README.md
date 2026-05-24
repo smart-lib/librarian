@@ -118,6 +118,12 @@ local/preflight part without calling the model:
 librarian --home "$HOME/Librarian" smoke mvp --provider codex
 ```
 
+The same preflight smoke can also run through doctor:
+
+```bash
+librarian --home "$HOME/Librarian" doctor --smoke
+```
+
 Print the expanded WSL/Ubuntu smoke-test sequence with:
 
 ```bash

@@ -66,7 +66,14 @@ enum Command {
         skip_doctor: bool,
     },
     Init,
-    Doctor,
+    Doctor {
+        #[arg(long)]
+        smoke: bool,
+        #[arg(long, value_enum, default_value_t = ProviderArg::Codex)]
+        smoke_provider: ProviderArg,
+        #[arg(long)]
+        smoke_run_agent: bool,
+    },
     Upgrade {
         #[arg(long)]
         nightly: bool,
@@ -742,8 +749,23 @@ async fn main() -> Result<()> {
             println!("Initialized Librarian at {}", config.home.display());
             println!("Admin UI: http://{}", config.admin.bind);
         }
-        Command::Doctor => {
+        Command::Doctor {
+            smoke,
+            smoke_provider,
+            smoke_run_agent,
+        } => {
             run_doctor(&config).await?;
+            if smoke {
+                println!();
+                run_mvp_smoke(
+                    &config,
+                    smoke_provider.into(),
+                    smoke_run_agent,
+                    false,
+                    "LibrarianDoctorSmoke",
+                )
+                .await?;
+            }
         }
         Command::Upgrade { nightly, reference } => {
             run_upgrade(&config, nightly, reference.as_deref()).await?;
@@ -2250,6 +2272,7 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
             )
         );
         println!("  {command} smoke mvp --provider codex --run-agent");
+        println!("  {command} doctor --smoke");
         println!("  {command} admin");
         println!();
         println!("Upgrade:");

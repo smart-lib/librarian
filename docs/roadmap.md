@@ -370,7 +370,8 @@ Tasks:
   pass now exposes `librarian smoke mvp --provider codex --run-agent`, which
   creates a disposable project, exercises Library/Projects file-tool sandbox
   operations, writes searchable memory, runs job preflight, and optionally runs
-  that exact provider job.
+  that exact provider job. `doctor --smoke` runs the same preflight smoke from
+  the readiness command.
 
 ## Priority 1B: Project Library and Friendly Admin UX
 
