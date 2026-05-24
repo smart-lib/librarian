@@ -236,6 +236,9 @@ Tasks:
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that
   placeholder/self-echo memories are excluded.
+- First provider-unavailable fallback now returns
+  `mode=chat-provider-unavailable` with portable `CODEX_HOME`, `auth codex`,
+  and `doctor` commands when the chat runner fails.
 
 Dependencies:
 
@@ -697,6 +700,9 @@ Tasks:
 - Add tests for bounded iterative chat behavior. First pass done: mock-runner
   coverage verifies that repeated `search_memory` directives stop at
   `[chat].max_iterations` without calling the real provider.
+- Add tests for unavailable chat-provider fallback. First pass done: mock-runner
+  failure returns an actionable Codex setup response instead of an endpoint
+  error or memory dump.
 
 Dependencies:
 

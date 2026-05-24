@@ -5066,7 +5066,18 @@ async fn run_librarian_chat_loop_with_runner(
             iteration,
             max_iterations,
         );
-        let raw_reply = runner.run(config, &prompt).await?;
+        let raw_reply = match runner.run(config, &prompt).await {
+            Ok(reply) => reply,
+            Err(error) => {
+                return Ok(chat_provider_unavailable_result(
+                    config,
+                    error,
+                    iteration,
+                    combined_memory_hits(&context_packs),
+                    trace,
+                ));
+            }
+        };
         last_raw_reply = raw_reply.clone();
 
         let Some(directive) = parse_librarian_chat_directive(&raw_reply) else {
@@ -5230,6 +5241,36 @@ async fn run_librarian_chat_loop_with_runner(
         trace,
         mode: "codex-chat",
     })
+}
+
+fn chat_provider_unavailable_result(
+    config: &Config,
+    error: anyhow::Error,
+    iteration: usize,
+    memory_hits: Vec<crate::domain::MemoryHit>,
+    mut trace: Vec<serde_json::Value>,
+) -> LibrarianChatResult {
+    let codex_home = config.home.join(".cfg").join("codex-home");
+    trace.push(serde_json::json!({
+        "iteration": iteration,
+        "action": "provider_unavailable",
+        "provider": "codex",
+        "error": error.to_string(),
+    }));
+    LibrarianChatResult {
+        reply: format!(
+            "Codex chat is not available yet, so I cannot answer with the model in this session.\n\nNext steps:\n1. `CODEX_HOME=\"{}\" codex`\n2. `librarian --home \"{}\" auth codex --enable-container-mount --codex-home \"{}\"`\n3. `librarian --home \"{}\" doctor`\n\nProvider error: {}",
+            codex_home.display(),
+            config.home.display(),
+            codex_home.display(),
+            config.home.display(),
+            error
+        ),
+        iterations: iteration,
+        memory_hits,
+        trace,
+        mode: "chat-provider-unavailable",
+    }
 }
 
 fn build_librarian_chat_prompt(
@@ -6441,6 +6482,49 @@ mod tests {
         std::fs::remove_dir_all(home).ok();
     }
 
+    #[tokio::test]
+    async fn chat_loop_returns_actionable_provider_unavailable_fallback() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-chat-provider-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let initial_context = ContextPack {
+                query: "hello".to_string(),
+                project_id: None,
+                activity_id: None,
+                generated_at: chrono::Utc::now(),
+                hits: Vec::new(),
+            };
+            let mut runner = FailingChatRunner;
+
+            let result = run_librarian_chat_loop_with_runner(
+                &db,
+                &config,
+                "hello",
+                None,
+                initial_context,
+                &mut runner,
+            )
+            .await
+            .expect("fallback result");
+
+            assert_eq!(result.mode, "chat-provider-unavailable");
+            assert_eq!(result.iterations, 1);
+            assert!(result.reply.contains("Codex chat is not available yet"));
+            assert!(result.reply.contains("CODEX_HOME="));
+            assert!(result.reply.contains("auth codex --enable-container-mount"));
+            assert_eq!(result.trace[0]["action"], "provider_unavailable");
+            assert_eq!(result.trace[0]["provider"], "codex");
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
     #[test]
     fn filters_placeholder_chat_memory_from_context_hits() {
         let pack = ContextPack {
@@ -6536,6 +6620,15 @@ mod tests {
             self.replies
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("mock chat runner exhausted"))
+        }
+    }
+
+    struct FailingChatRunner;
+
+    #[async_trait]
+    impl LibrarianChatRunner for FailingChatRunner {
+        async fn run(&mut self, _config: &Config, _prompt: &str) -> Result<String> {
+            anyhow::bail!("codex profile missing for test")
         }
     }
 
