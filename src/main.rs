@@ -923,6 +923,8 @@ async fn main() -> Result<()> {
             println!("Context hits: {}", context_pack.hits.len());
             let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
             let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
+            let instruction_files =
+                worker::provider_instruction_files(&db, &config, &job.provider).await?;
             let spec = domain::AgentRunSpec {
                 job_id: job.id,
                 project_path: project.path.clone(),
@@ -934,6 +936,7 @@ async fn main() -> Result<()> {
                     &context_pack,
                     &agent_instruction_blocks,
                 ),
+                instruction_files,
                 mount_mode: job.mount_mode,
                 network_mode: job.network_mode,
                 secret_grant_token,

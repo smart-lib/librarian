@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use anyhow::{bail, Context, Result};
 use tokio::process::Command;
@@ -88,6 +88,14 @@ impl DockerRunner {
         parts.push(run_mount(&self.config, &run_dir));
         parts.push("--mount".to_string());
         parts.push(project_mount(&self.config, spec));
+        for file in &spec.instruction_files {
+            parts.push("--mount".to_string());
+            parts.push(instruction_file_mount(
+                &self.config,
+                &run_dir,
+                &file.filename,
+            )?);
+        }
         parts.push(self.config.docker.agent_image.clone());
         parts.push(provider_command.program);
         parts.extend(provider_command.args);
@@ -105,6 +113,15 @@ impl DockerRunner {
             .with_context(|| format!("Failed to create {}", run_dir.display()))?;
         fs::write(run_dir.join("prompt.txt"), &spec.prompt)
             .with_context(|| format!("Failed to write prompt for job {}", spec.job_id))?;
+        for file in &spec.instruction_files {
+            validate_instruction_filename(&file.filename)?;
+            fs::write(run_dir.join(&file.filename), &file.content).with_context(|| {
+                format!(
+                    "Failed to write instruction file {} for job {}",
+                    file.filename, spec.job_id
+                )
+            })?;
+        }
         Ok(run_dir)
     }
 
@@ -184,6 +201,33 @@ fn run_mount(config: &Config, run_dir: &std::path::Path) -> String {
     )
 }
 
+fn instruction_file_mount(
+    config: &Config,
+    run_dir: &std::path::Path,
+    filename: &str,
+) -> Result<String> {
+    validate_instruction_filename(filename)?;
+    let source = run_dir.join(filename);
+    Ok(format!(
+        "type=bind,source={},target=/workspace/project/{},readonly",
+        mount_source(config, &source),
+        filename
+    ))
+}
+
+fn validate_instruction_filename(filename: &str) -> Result<()> {
+    if filename.is_empty()
+        || filename.contains('/')
+        || filename.contains('\\')
+        || filename == "."
+        || filename == ".."
+        || PathBuf::from(filename).components().count() != 1
+    {
+        bail!("Invalid provider instruction filename `{filename}`");
+    }
+    Ok(())
+}
+
 fn mount_source(config: &Config, path: &std::path::Path) -> String {
     let raw = path.display().to_string();
     let host_path = if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
@@ -255,6 +299,7 @@ mod tests {
                 provider: ProviderKind::Codex,
                 goal: "test".to_string(),
                 prompt: "test".to_string(),
+                instruction_files: Vec::new(),
                 mount_mode: MountMode::ReadOnly,
                 network_mode: NetworkMode::None,
                 secret_grant_token: None,
@@ -269,6 +314,44 @@ mod tests {
             assert!(command.iter().any(|part| part == "--user"));
             #[cfg(not(unix))]
             assert!(!command.iter().any(|part| part == "--user"));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn claude_instruction_file_mounts_into_project_root() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-claude-runner-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let project = home.join("Projects").join("Smoke");
+            std::fs::create_dir_all(&project).expect("project");
+            let spec = AgentRunSpec {
+                job_id: Uuid::new_v4(),
+                project_path: project,
+                provider: ProviderKind::ClaudeCode,
+                goal: "test".to_string(),
+                prompt: "test".to_string(),
+                instruction_files: vec![crate::domain::AgentInstructionFile {
+                    filename: "CLAUDE.md".to_string(),
+                    content: "Use the library context.".to_string(),
+                }],
+                mount_mode: MountMode::ReadOnly,
+                network_mode: NetworkMode::Provider,
+                secret_grant_token: None,
+            };
+
+            let command = DockerRunner::new(config)
+                .docker_command_parts(&spec)
+                .await
+                .expect("command");
+            assert!(command.iter().any(|part| {
+                part.contains("target=/workspace/project/CLAUDE.md") && part.contains("readonly")
+            }));
         }
 
         std::fs::remove_dir_all(home).ok();

@@ -333,7 +333,15 @@ pub struct AgentRunSpec {
     pub provider: ProviderKind,
     pub goal: String,
     pub prompt: String,
+    #[serde(default)]
+    pub instruction_files: Vec<AgentInstructionFile>,
     pub mount_mode: MountMode,
     pub network_mode: NetworkMode,
     pub secret_grant_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AgentInstructionFile {
+    pub filename: String,
+    pub content: String,
 }

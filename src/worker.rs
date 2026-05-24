@@ -12,7 +12,7 @@ use crate::{
     config::Config,
     db::Database,
     docker_runner::DockerRunner,
-    domain::{AgentRunSpec, Job, JobStatus, MemoryKind},
+    domain::{AgentInstructionFile, AgentRunSpec, Job, JobStatus, MemoryKind, ProviderKind},
     gates,
     memory::{self, RetrievalRequest},
     prompt, router,
@@ -94,6 +94,30 @@ pub async fn preflight_job(
     )
     .await?;
     Ok(report)
+}
+
+pub async fn provider_instruction_files(
+    db: &Database,
+    config: &Config,
+    provider: &ProviderKind,
+) -> Result<Vec<AgentInstructionFile>> {
+    let mut files = Vec::new();
+    if matches!(provider, ProviderKind::ClaudeCode) {
+        let blocks = db.list_prompt_blocks(Some("CLAUDE.md")).await?;
+        let mut content = prompt::render_prompt_blocks(&blocks);
+        if content.trim().is_empty() {
+            let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+            content = prompt::render_prompt_blocks(&agent_blocks);
+        }
+        if content.trim().is_empty() {
+            content = "You are Claude Code working inside a Librarian-managed project. Follow the user task prompt and respect the mounted project boundary.".to_string();
+        }
+        files.push(AgentInstructionFile {
+            filename: config.claude.instruction_file.clone(),
+            content,
+        });
+    }
+    Ok(files)
 }
 
 async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
@@ -184,6 +208,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
     .await?;
     let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
+    let instruction_files = provider_instruction_files(&db, &config, &job.provider).await?;
     let enriched_prompt = prompt::build_agent_prompt(
         &project,
         &job.goal,
@@ -197,6 +222,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         provider: job.provider.clone(),
         goal: job.goal.clone(),
         prompt: enriched_prompt,
+        instruction_files,
         mount_mode: job.mount_mode,
         network_mode: job.network_mode,
         secret_grant_token: job.secret_grant_token.clone(),
@@ -218,6 +244,10 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 "target": block.target,
                 "name": block.name,
                 "position": block.position,
+            })).collect::<Vec<_>>(),
+            "instruction_files": spec.instruction_files.iter().map(|file| serde_json::json!({
+                "filename": file.filename,
+                "chars": file.content.chars().count(),
             })).collect::<Vec<_>>(),
         }),
     )
@@ -411,6 +441,7 @@ async fn prepare_job(
     .await?;
     let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
+    let instruction_files = provider_instruction_files(db, config, &job.provider).await?;
     let enriched_prompt = prompt::build_agent_prompt(
         &project,
         &job.goal,
@@ -424,6 +455,7 @@ async fn prepare_job(
         provider: job.provider.clone(),
         goal: job.goal.clone(),
         prompt: enriched_prompt,
+        instruction_files,
         mount_mode: job.mount_mode,
         network_mode: job.network_mode,
         secret_grant_token: job.secret_grant_token.clone(),
