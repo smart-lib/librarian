@@ -780,22 +780,29 @@ Tasks:
   background smoke succeeds: mount/copy the Claude auth/profile in the
   provider-specific way, run Claude from the mounted project directory, pass the
   task prompt as the normal Claude launch prompt, and ensure `CLAUDE.md` is
-  present when Claude starts.
+  present when Claude starts. First implementation pass adds `[claude]` runtime
+  config, optional profile mount, `CLAUDE.md` run-layer mount, and `claude -p`
+  launch from `/workspace/project`.
 - Add provider-specific launch-shape metadata. Codex expects `codex exec` plus
   `CODEX_HOME`; Claude should behave as if launched normally in a directory
   containing `CLAUDE.md`; future providers may need different identity files,
-  env vars, profile homes, stdin handling, or prompt-file strategy.
+  env vars, profile homes, stdin handling, or prompt-file strategy. First pass
+  models Claude home/container home/instruction filename in config.
 - Generate or mount provider instruction files during job preparation according
   to connected providers: `CLAUDE.md` for Claude, `AGENTS.md` for generic agent
   profiles, and provider/user identity files later. The prompt builder should
-  own these blocks.
+  own these blocks. First pass renders prompt blocks targeting `CLAUDE.md`,
+  falling back to `agents`, and reports mounted instruction files in preflight.
 - Add real provider setup/status in Settings -> Providers: host CLI detection,
   auth/profile path, container mount state, image support, last diagnostic,
   and action buttons for auth/bootstrap/build/check where possible. Replace
-  placeholder “ready” states with data from doctor/provider diagnostics.
+  placeholder “ready” states with data from doctor/provider diagnostics. First
+  UI pass shows stored Codex/Claude runtime state and allows saving Claude
+  profile/mount settings.
 - Add Claude-specific doctor checks and worker diagnostics: host command
   present, profile/auth available, container path readable, `CLAUDE.md`
-  generated/mounted, and common login/network failures.
+  generated/mounted, and common login/network failures. First pass adds host
+  Claude/profile doctor checks and structured `claude_*` provider diagnostics.
 
 Dependencies:
 
