@@ -4362,6 +4362,203 @@ async fn execute_approved_tool_approval(
             .await?;
             Ok(serde_json::json!({ "path": tool_path }))
         }
+        ("library", "move" | "rename") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.move",
+                config.tool_permissions.library_move,
+            )
+            .await?;
+            let from = approval_payload_string_any(&approval.payload, &["from", "from_path"])?;
+            let to = approval_payload_string_any(&approval.payload, &["to", "to_path"])?;
+            let tool_path = library_tools::move_path(config, LibraryRoot::Library, &from, &to)?;
+            log_slash_library_event(
+                &state.db,
+                "move",
+                serde_json::json!({ "root": "library", "from": from, "to": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("library", "delete") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.delete",
+                config.tool_permissions.library_delete,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let recursive = approval_payload_bool(&approval.payload, "recursive").unwrap_or(false);
+            let tool_path =
+                library_tools::delete_path(config, LibraryRoot::Library, &path, recursive)?;
+            log_slash_library_event(
+                &state.db,
+                "delete",
+                serde_json::json!({ "root": "library", "path": tool_path.path, "recursive": recursive }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path, "recursive": recursive }))
+        }
+        ("library", "replace_lines" | "replace-lines") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let start_line = approval_payload_usize(&approval.payload, "start_line")?;
+            let end_line = approval_payload_usize(&approval.payload, "end_line")?;
+            let content = approval_payload_string(&approval.payload, "content")?;
+            let edit = library_tools::replace_markdown_lines(
+                config, &path, start_line, end_line, &content,
+            )?;
+            log_slash_library_event(
+                &state.db,
+                "replace_markdown_lines",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "edit": edit }))
+        }
+        ("library", "cut_lines" | "cut-lines") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let start_line = approval_payload_usize(&approval.payload, "start_line")?;
+            let end_line = approval_payload_usize(&approval.payload, "end_line")?;
+            let edit = library_tools::cut_markdown_lines(config, &path, start_line, end_line)?;
+            log_slash_library_event(
+                &state.db,
+                "cut_markdown_lines",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "edit": edit }))
+        }
+        ("library", "replace_find" | "replace-find") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let query = approval_payload_string(&approval.payload, "query")?;
+            let content = approval_payload_string(&approval.payload, "content")?;
+            let edit =
+                library_tools::replace_first_markdown_match(config, &path, &query, &content)?;
+            log_slash_library_event(
+                &state.db,
+                "replace_markdown_match",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "edit": edit }))
+        }
+        ("library", "cut_find" | "cut-find") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let query = approval_payload_string(&approval.payload, "query")?;
+            let edit = library_tools::cut_first_markdown_match(config, &path, &query)?;
+            log_slash_library_event(
+                &state.db,
+                "cut_markdown_match",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "edit": edit }))
+        }
+        ("workspace", "create_folder" | "mkdir") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "workspace.create",
+                config.tool_permissions.workspace_create,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let tool_path = library_tools::create_folder(config, LibraryRoot::Projects, &path)?;
+            log_workspace_event(
+                &state.db,
+                "create_folder",
+                serde_json::json!({ "root": "projects", "path": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("workspace", "create_file" | "touch") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "workspace.create",
+                config.tool_permissions.workspace_create,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let tool_path = library_tools::create_empty_file(config, LibraryRoot::Projects, &path)?;
+            log_workspace_event(
+                &state.db,
+                "create_empty_file",
+                serde_json::json!({ "root": "projects", "path": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("workspace", "move" | "rename") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "workspace.move",
+                config.tool_permissions.workspace_move,
+            )
+            .await?;
+            let from = approval_payload_string_any(&approval.payload, &["from", "from_path"])?;
+            let to = approval_payload_string_any(&approval.payload, &["to", "to_path"])?;
+            let tool_path = library_tools::move_path(config, LibraryRoot::Projects, &from, &to)?;
+            log_workspace_event(
+                &state.db,
+                "move",
+                serde_json::json!({ "root": "projects", "from": from, "to": tool_path.path }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path }))
+        }
+        ("workspace", "delete") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "workspace.delete",
+                config.tool_permissions.workspace_delete,
+            )
+            .await?;
+            let path = approval_payload_string(&approval.payload, "path")?;
+            let recursive = approval_payload_bool(&approval.payload, "recursive").unwrap_or(false);
+            let tool_path =
+                library_tools::delete_path(config, LibraryRoot::Projects, &path, recursive)?;
+            log_workspace_event(
+                &state.db,
+                "delete",
+                serde_json::json!({ "root": "projects", "path": tool_path.path, "recursive": recursive }),
+            )
+            .await?;
+            Ok(serde_json::json!({ "path": tool_path, "recursive": recursive }))
+        }
         ("project", "create_starting_docs_and_project_folder" | "create_starting_docs") => {
             ensure_tool_permission(
                 &state.db,
@@ -4510,6 +4707,15 @@ fn approval_payload_string(payload: &serde_json::Value, key: &str) -> Result<Str
         .ok_or_else(|| anyhow::anyhow!("Approval payload must contain non-empty string `{key}`"))
 }
 
+fn approval_payload_string_any(payload: &serde_json::Value, keys: &[&str]) -> Result<String> {
+    for key in keys {
+        if let Some(value) = approval_payload_optional_string(payload, key) {
+            return Ok(value);
+        }
+    }
+    anyhow::bail!("Approval payload must contain one of: {}", keys.join(", "))
+}
+
 fn approval_payload_optional_string(payload: &serde_json::Value, key: &str) -> Option<String> {
     payload
         .get(key)
@@ -4517,6 +4723,27 @@ fn approval_payload_optional_string(payload: &serde_json::Value, key: &str) -> O
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn approval_payload_bool(payload: &serde_json::Value, key: &str) -> Option<bool> {
+    payload.get(key).and_then(serde_json::Value::as_bool)
+}
+
+fn approval_payload_usize(payload: &serde_json::Value, key: &str) -> Result<usize> {
+    let value = payload
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("Approval payload must contain `{key}`"))?;
+    if let Some(number) = value.as_u64() {
+        return usize::try_from(number)
+            .map_err(|error| anyhow::anyhow!("Invalid `{key}` value: {error}"));
+    }
+    if let Some(text) = value.as_str() {
+        return text
+            .trim()
+            .parse::<usize>()
+            .map_err(|error| anyhow::anyhow!("Invalid `{key}` value: {error}"));
+    }
+    anyhow::bail!("Approval payload `{key}` must be a positive integer")
 }
 
 fn approval_project_library_path(payload: &serde_json::Value) -> Result<String> {
@@ -6973,6 +7200,73 @@ mod tests {
                     .status,
                 ToolApprovalStatus::Executed
             );
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn approval_executor_handles_library_edits_and_workspace_moves() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-approval-tools-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            library_tools::write_markdown(&config, "notes/demo.md", "one\ntwo\nthree\n")
+                .expect("seed note");
+            library_tools::create_empty_file(&config, LibraryRoot::Projects, "Demo/old.txt")
+                .expect("seed workspace file");
+            let state = AppState {
+                db: db.clone(),
+                config: Arc::new(RwLock::new(config.clone())),
+            };
+
+            let edit = db
+                .create_tool_approval(
+                    "library",
+                    "replace_lines",
+                    serde_json::json!({
+                        "path": "notes/demo.md",
+                        "start_line": 2,
+                        "end_line": 2,
+                        "content": "TWO\n"
+                    }),
+                )
+                .await
+                .expect("edit approval");
+            execute_approval_slash_command(
+                &state,
+                &config,
+                &["approve".to_string(), edit.id.to_string()],
+            )
+            .await
+            .expect("approve edit");
+            assert_eq!(
+                library_tools::read_markdown(&config, "notes/demo.md").expect("read note"),
+                "one\nTWO\nthree\n"
+            );
+
+            let move_file = db
+                .create_tool_approval(
+                    "workspace",
+                    "move",
+                    serde_json::json!({ "from": "Demo/old.txt", "to": "Demo/new.txt" }),
+                )
+                .await
+                .expect("move approval");
+            execute_approval_slash_command(
+                &state,
+                &config,
+                &["approve".to_string(), move_file.id.to_string()],
+            )
+            .await
+            .expect("approve move");
+            assert!(home.join("Projects").join("Demo").join("new.txt").is_file());
+            assert!(!home.join("Projects").join("Demo").join("old.txt").exists());
         }
 
         std::fs::remove_dir_all(home).ok();
