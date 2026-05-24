@@ -782,6 +782,21 @@ impl Database {
         }
     }
 
+    pub async fn list_chat_sessions(&self, limit: i64) -> Result<Vec<ChatSession>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, project_id, title, created_at, updated_at
+            FROM chat_sessions
+            ORDER BY updated_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit.clamp(1, 100))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_chat_session).collect()
+    }
+
     pub async fn add_chat_turn(
         &self,
         session_id: Uuid,

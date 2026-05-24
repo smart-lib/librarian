@@ -20,6 +20,11 @@ pub struct LibrarianChatRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ChatSessionsQuery {
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateProjectRequest {
     pub name: String,
     pub library_path: Option<String>,

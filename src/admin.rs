@@ -1586,6 +1586,8 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
             "/api/schedules/:id",
             patch(update_schedule).delete(delete_schedule),
         )
+        .route("/api/chat/sessions", get(chat_sessions))
+        .route("/api/chat/sessions/:id/turns", get(chat_session_turns))
         .route("/api/chat", post(librarian_chat))
         .route("/api/agent-jobs", post(create_job))
         .layer(CorsLayer::permissive())
@@ -2605,6 +2607,30 @@ async fn update_budget_settings(
             "daily_provider_usd": daily_provider_usd,
             "daily_project_usd": daily_project_usd,
         },
+    })))
+}
+
+async fn chat_sessions(
+    State(state): State<AppState>,
+    Query(query): Query<ChatSessionsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        state
+            .db
+            .list_chat_sessions(query.limit.unwrap_or(20))
+            .await?,
+    ))
+}
+
+async fn chat_session_turns(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session = state.db.get_chat_session(id).await?;
+    let turns = state.db.list_chat_turns(id).await?;
+    Ok(Json(serde_json::json!({
+        "session": session,
+        "turns": turns,
     })))
 }
 
@@ -6437,6 +6463,40 @@ mod tests {
             assert_eq!(turns[1].role, "assistant");
             assert!(turns[0].memory_id.is_some());
             assert!(turns[1].memory_id.is_some());
+
+            let sessions = chat_sessions(
+                State(AppState {
+                    db: db.clone(),
+                    config: Arc::new(RwLock::new(
+                        Config::load_or_default(Some(home.clone())).expect("config reload"),
+                    )),
+                }),
+                Query(ChatSessionsQuery { limit: Some(5) }),
+            )
+            .await
+            .expect("sessions")
+            .into_response();
+            assert_eq!(sessions.status(), StatusCode::OK);
+
+            let response = chat_session_turns(
+                State(AppState {
+                    db: db.clone(),
+                    config: Arc::new(RwLock::new(
+                        Config::load_or_default(Some(home.clone())).expect("config reload"),
+                    )),
+                }),
+                AxumPath(session_id),
+            )
+            .await
+            .expect("turn response")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("turn body");
+            let payload: serde_json::Value = serde_json::from_slice(&body).expect("turn json");
+            assert_eq!(payload["session"]["id"], session_id.to_string());
+            assert_eq!(payload["turns"].as_array().expect("turns").len(), 2);
         }
 
         std::fs::remove_dir_all(home).ok();

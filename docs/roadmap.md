@@ -237,7 +237,9 @@ Tasks:
   `chat_sessions` and `chat_turns`; `/api/chat` now creates or reuses a session,
   records ordered user/assistant turns, links them to memory ids, and returns
   `session_id`. Chat-first admin UI now keeps the returned session id across
-  messages and resets it when the active project changes.
+  messages and resets it when the active project changes. Read API first pass
+  adds `/api/chat/sessions` and `/api/chat/sessions/{id}/turns` for restoring
+  transcript state.
 - Add a clear fallback when the chat provider is unavailable: actionable
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that
@@ -711,7 +713,7 @@ Tasks:
   error or memory dump.
 - Add tests for chat transcript persistence. First pass extends the chat
   endpoint slash-flow test to assert returned `session_id`, ordered user and
-  assistant turns, and memory links.
+  assistant turns, memory links, session listing, and turn retrieval.
 - Add tests that recent transcript turns are included in the Librarian prompt.
   First pass covers prompt construction for prior user/assistant turns plus the
   new user message.
