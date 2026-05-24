@@ -4450,6 +4450,77 @@ async fn execute_memory_slash_command(
                 }),
             )
         }
+        "supersede" | "contradict" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "memory.write",
+                config.tool_permissions.memory_write,
+            )
+            .await?;
+            if args.len() < 4 {
+                anyhow::bail!(
+                    "Usage: /mem {command} <old-memory-id> <fact|decision|instruction|status|summary> <content>"
+                );
+            }
+            let old_id = args[1]
+                .parse::<Uuid>()
+                .map_err(|error| anyhow::anyhow!("Invalid memory id: {error}"))?;
+            let old = db.get_memory_item(old_id).await?;
+            let kind = parse_memory_kind_token(&args[2])?;
+            let content = args[3..].join(" ");
+            let supersedes_id = (command == "supersede").then_some(old.id);
+            let contradicts_id = (command == "contradict").then_some(old.id);
+            let item = db
+                .add_linked_memory_item(
+                    project.map(|project| project.id),
+                    None,
+                    kind,
+                    old.topic.as_deref(),
+                    &content,
+                    Some("admin:slash-memory"),
+                    serde_json::json!({
+                        "tool": "memory",
+                        "command": command,
+                        "memory_role": "durable_memory",
+                        "durability": "durable",
+                        "scope": if project.is_some() { "project" } else { "global" },
+                        "project": project.map(|project| project.name.clone()),
+                        "linked_memory_id": old.id,
+                    }),
+                    supersedes_id,
+                    contradicts_id,
+                )
+                .await?;
+            memory::embed_item(db, config, &item).await?;
+            db.add_system_event(
+                "memory_tool",
+                serde_json::json!({
+                    "action": command,
+                    "source": "slash-command",
+                    "memory_id": item.id,
+                    "linked_memory_id": old.id,
+                    "kind": item.kind,
+                    "scope": if project.is_some() { "project" } else { "global" },
+                    "project": project.map(|project| project.name.clone()),
+                }),
+            )
+            .await?;
+            slash_reply(
+                &format!(
+                    "{command} memory `{}` with {:?}: {}",
+                    old.id, item.kind, item.content
+                ),
+                serde_json::json!({
+                    "tool": "memory",
+                    "command": command,
+                    "memory_id": item.id,
+                    "linked_memory_id": old.id,
+                    "kind": item.kind,
+                    "scope": if project.is_some() { "project" } else { "global" },
+                }),
+            )
+        }
         "recent" => {
             let limit = args
                 .get(1)
@@ -4506,7 +4577,7 @@ fn is_raw_transcript_memory_item(item: &crate::domain::MemoryItem) -> bool {
 }
 
 fn memory_slash_help() -> &'static str {
-    "Memory commands live under /mem:\n/mem remember <fact|decision|instruction|status|summary> <content>\n/remember <content> - shortcut for /mem remember fact <content>\n/mem recent [limit]\n\nMemory is stored in the current chat scope: selected project when present, otherwise global."
+    "Memory commands live under /mem:\n/mem remember <fact|decision|instruction|status|summary> <content>\n/mem supersede <old-memory-id> <kind> <content>\n/mem contradict <old-memory-id> <kind> <content>\n/remember <content> - shortcut for /mem remember fact <content>\n/mem recent [limit]\n\nMemory is stored in the current chat scope: selected project when present, otherwise global."
 }
 
 async fn execute_settings_slash_command(
@@ -6077,6 +6148,66 @@ mod tests {
                 .contains("durable memory should remain visible"));
             assert!(!result.reply.contains("raw chat should stay out"));
             assert_eq!(result.mode, "slash-command");
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn memory_supersede_links_new_durable_item() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-memory-supersede-{}",
+            Uuid::new_v4()
+        ));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let old = db
+                .add_memory_item(
+                    None,
+                    None,
+                    MemoryKind::Fact,
+                    Some("test"),
+                    "Old durable fact",
+                    Some("test"),
+                    serde_json::json!({ "durability": "durable" }),
+                )
+                .await
+                .expect("old memory");
+
+            let result = execute_memory_slash_command(
+                &db,
+                &config,
+                None,
+                &[
+                    "supersede".to_string(),
+                    old.id.to_string(),
+                    "fact".to_string(),
+                    "New durable fact".to_string(),
+                ],
+            )
+            .await
+            .expect("supersede");
+
+            let memory_id = Uuid::parse_str(
+                result.trace[0]["memory_id"]
+                    .as_str()
+                    .expect("memory id in trace"),
+            )
+            .expect("memory uuid");
+            let new = db.get_memory_item(memory_id).await.expect("new memory");
+            assert_eq!(new.supersedes_id, Some(old.id));
+            assert_eq!(new.contradicts_id, None);
+            assert_eq!(
+                new.metadata
+                    .get("durability")
+                    .and_then(serde_json::Value::as_str),
+                Some("durable")
+            );
+            assert!(result.reply.contains("supersede memory"));
         }
 
         std::fs::remove_dir_all(home).ok();

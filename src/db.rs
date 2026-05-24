@@ -2035,6 +2035,98 @@ impl Database {
         Ok(item)
     }
 
+    pub async fn add_linked_memory_item(
+        &self,
+        project_id: Option<Uuid>,
+        activity_id: Option<Uuid>,
+        kind: MemoryKind,
+        topic: Option<&str>,
+        content: &str,
+        source: Option<&str>,
+        metadata: serde_json::Value,
+        supersedes_id: Option<Uuid>,
+        contradicts_id: Option<Uuid>,
+    ) -> Result<MemoryItem> {
+        let now = Utc::now();
+        let item = MemoryItem {
+            id: Uuid::new_v4(),
+            project_id,
+            activity_id,
+            kind,
+            topic: topic.map(ToOwned::to_owned),
+            content: content.to_string(),
+            source: source.map(ToOwned::to_owned),
+            observed_at: now,
+            valid_from: None,
+            valid_until: None,
+            confidence: 1.0,
+            salience: 1.0,
+            supersedes_id,
+            contradicts_id,
+            metadata,
+            created_at: now,
+            updated_at: now,
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO memory_items
+                (id, project_id, activity_id, kind, topic, content, source, observed_at, valid_from,
+                 valid_until, confidence, salience, supersedes_id, contradicts_id, metadata,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(item.id.to_string())
+        .bind(item.project_id.map(|id| id.to_string()))
+        .bind(item.activity_id.map(|id| id.to_string()))
+        .bind(format!("{:?}", item.kind))
+        .bind(&item.topic)
+        .bind(&item.content)
+        .bind(&item.source)
+        .bind(item.observed_at.to_rfc3339())
+        .bind(item.valid_from.map(|time| time.to_rfc3339()))
+        .bind(item.valid_until.map(|time| time.to_rfc3339()))
+        .bind(item.confidence)
+        .bind(item.salience)
+        .bind(item.supersedes_id.map(|id| id.to_string()))
+        .bind(item.contradicts_id.map(|id| id.to_string()))
+        .bind(serde_json::to_string(&item.metadata)?)
+        .bind(item.created_at.to_rfc3339())
+        .bind(item.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("INSERT INTO memory_fts (memory_id, content, topic) VALUES (?, ?, ?)")
+            .bind(item.id.to_string())
+            .bind(&item.content)
+            .bind(&item.topic)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(item)
+    }
+
+    pub async fn get_memory_item(&self, id: Uuid) -> Result<MemoryItem> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, project_id, activity_id, kind, topic, content, source, observed_at,
+                   valid_from, valid_until, confidence, salience, supersedes_id,
+                   contradicts_id, metadata, created_at, updated_at
+            FROM memory_items
+            WHERE id = ?
+            LIMIT 1
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => row_to_memory_item(row),
+            None => bail!("Memory item `{id}` was not found"),
+        }
+    }
+
     pub async fn upsert_memory_embedding(
         &self,
         memory_id: Uuid,

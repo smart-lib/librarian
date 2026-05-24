@@ -447,7 +447,10 @@ Tool groups:
   `/remember <content>` as a fact shortcut, and `/mem recent [limit]` in the
   current chat scope. Durable remember now marks memory with
   `memory_role=durable_memory` and `durability=durable`; `/mem recent` filters
-  raw transcript turns out of the user-visible memory list.
+  raw transcript turns out of the user-visible memory list. First correction
+  pass adds `/mem supersede <old-id> <kind> <content>` and
+  `/mem contradict <old-id> <kind> <content>` with linked durable memory records
+  and `memory_tool` audit events.
 - Settings/prompt tools: inspect settings, propose changes, and apply only
   after explicit user approval. First settings slash pass supports
   `/settings tool-permissions` and guarded
@@ -726,6 +729,8 @@ Tasks:
   new user message.
 - Add tests for raw transcript separation from durable memory. First pass covers
   durable retrieval filtering and `/mem recent` hiding raw chat turns.
+- Add tests for durable memory correction links. First pass covers
+  `/mem supersede` creating a new durable item linked through `supersedes_id`.
 
 Dependencies:
 
