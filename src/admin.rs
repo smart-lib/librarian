@@ -853,10 +853,31 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         el('overview').innerHTML = [
           card('Worker', `queued=${worker.queued_jobs ?? 0}<br>running=${worker.running_jobs ?? 0}<br>slots=${worker.available_slots ?? '__WORKER_CONCURRENCY__'}`),
           card('Chat', `name=${htmlEscape(chat.assistant_name || 'Librarian')}<br>timeout=${chat.codex_timeout_seconds ?? 180}s<br>memory hits=${chat.memory_hit_limit ?? 12}<br>max iterations=${chat.max_iterations ?? 6}`),
+          `<form id="chat-settings-form" class="card stack">
+            <h3>Chat Settings</h3>
+            <div class="form-grid">
+              <div><label for="chat-assistant-name">Name</label><input id="chat-assistant-name" value="${htmlEscape(chat.assistant_name || 'Librarian')}"></div>
+              <div><label for="chat-timeout">Timeout, seconds</label><input id="chat-timeout" type="number" min="1" value="${chat.codex_timeout_seconds ?? 180}"></div>
+              <div><label for="chat-memory-hit-limit">Memory hits</label><input id="chat-memory-hit-limit" type="number" min="1" value="${chat.memory_hit_limit ?? 12}"></div>
+              <div><label for="chat-max-iterations">Max iterations</label><input id="chat-max-iterations" type="number" min="1" max="100" value="${chat.max_iterations ?? 6}"></div>
+              <button type="submit">Save</button>
+            </div>
+          </form>`,
           card('Memory', `items=${memory.items ?? 0}<br>embedded=${memory.embedded_items ?? 0}<br>missing=${memory.missing_embeddings ?? 0}`),
           card('Knowledge base', `${htmlEscape(health.vault_path || 'Library')}<br><span class="muted">${htmlEscape(health.database_path || '.mdb/librarian.db')}</span>`),
           card('Secrets', `${htmlEscape(secrets.status || 'unknown')}<br><span class="muted">${htmlEscape(secrets.location || '')}</span>`)
         ].join('');
+        const chatForm = el('chat-settings-form');
+        if (chatForm) chatForm.addEventListener('submit', saveChatSettings);
+      }
+      async function saveChatSettings(event) {
+        event.preventDefault();
+        await postJson('/api/settings/chat', {
+          assistant_name: el('chat-assistant-name').value,
+          codex_timeout_seconds: Number(el('chat-timeout').value || 180),
+          memory_hit_limit: Number(el('chat-memory-hit-limit').value || 12),
+          max_iterations: Number(el('chat-max-iterations').value || 6)
+        });
       }
       function renderProviders() {
         const states = new Map((state.providers.states || []).map(item => [`${item.provider}:${item.model || ''}`, item]));
@@ -1973,6 +1994,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/jobs", get(jobs).post(create_job))
         .route("/api/schedules", get(schedules).post(create_schedule))
         .route("/api/settings/worker", post(update_worker_settings))
+        .route("/api/settings/chat", post(update_chat_settings))
         .route("/api/settings/routing", post(update_routing_settings))
         .route("/api/settings/budget", post(update_budget_settings))
         .route("/api/secrets", get(secrets).post(create_secret))
@@ -2964,6 +2986,62 @@ async fn update_worker_settings(
         "ok": true,
         "worker": {
             "max_concurrent_jobs": max_concurrent_jobs,
+        },
+    })))
+}
+
+async fn update_chat_settings(
+    State(state): State<AppState>,
+    Json(input): Json<UpdateChatSettingsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (assistant_name, codex_timeout_seconds, memory_hit_limit, max_iterations, config_path) = {
+        let mut config = state.config.write().await;
+        if let Some(name) = input.assistant_name {
+            let name = name.trim();
+            config.chat.assistant_name = if name.is_empty() {
+                "Librarian".to_string()
+            } else {
+                name.to_string()
+            };
+        }
+        if let Some(timeout) = input.codex_timeout_seconds {
+            config.chat.codex_timeout_seconds = timeout.max(1);
+        }
+        if let Some(limit) = input.memory_hit_limit {
+            config.chat.memory_hit_limit = limit.max(1);
+        }
+        if let Some(iterations) = input.max_iterations {
+            config.chat.max_iterations = iterations.clamp(1, 100);
+        }
+        config.save()?;
+        (
+            config.chat.assistant_name.clone(),
+            config.chat.codex_timeout_seconds,
+            config.chat.memory_hit_limit,
+            config.chat.max_iterations,
+            config.config_path.clone(),
+        )
+    };
+    state
+        .db
+        .add_system_event(
+            "chat_settings_updated",
+            serde_json::json!({
+                "assistant_name": assistant_name,
+                "codex_timeout_seconds": codex_timeout_seconds,
+                "memory_hit_limit": memory_hit_limit,
+                "max_iterations": max_iterations,
+                "config_path": config_path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "chat": {
+            "assistant_name": assistant_name,
+            "codex_timeout_seconds": codex_timeout_seconds,
+            "memory_hit_limit": memory_hit_limit,
+            "max_iterations": max_iterations,
         },
     })))
 }

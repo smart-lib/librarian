@@ -121,6 +121,14 @@ pub struct UpdateWorkerRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateChatSettingsRequest {
+    pub assistant_name: Option<String>,
+    pub codex_timeout_seconds: Option<u64>,
+    pub memory_hit_limit: Option<usize>,
+    pub max_iterations: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateRoutingRequest {
     pub fallback_enabled: bool,
     pub fallback_order: Vec<String>,
