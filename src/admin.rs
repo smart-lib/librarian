@@ -465,6 +465,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       padding: 14px;
       line-height: 1.45;
     }
+    .card.action {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
     .muted { color: var(--muted); }
     .tiny { font-size: 12px; }
     .stack { display: grid; gap: 12px; }
@@ -858,8 +863,49 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
       function renderJobs() {
         el('jobs').innerHTML = state.jobs.length ? state.jobs.slice(0, 12).map(job => {
-          return `<div class="card"><b>${htmlEscape(job.status)}</b> <span class="muted">${htmlEscape(job.provider)} ${shortId(job.id)}</span><br>${htmlEscape(job.goal)}<br><span class="muted tiny">${htmlEscape(job.created_at || '')}</span></div>`;
+          return `<div class="card">
+            <h3>${htmlEscape(job.status)} <span class="muted tiny">${htmlEscape(job.provider)} ${shortId(job.id)}</span></h3>
+            <div>${htmlEscape(job.goal)}</div>
+            <div class="muted tiny">${htmlEscape(job.created_at || '')}</div>
+            <div class="row">
+              <button type="button" class="secondary" data-job-events="${htmlEscape(job.id)}">Events</button>
+              <button type="button" data-job-preflight="${htmlEscape(job.id)}">Preflight</button>
+              <button type="button" class="secondary" data-job-retry="${htmlEscape(job.id)}">Retry</button>
+              <button type="button" class="danger" data-job-cancel="${htmlEscape(job.id)}">Cancel</button>
+            </div>
+            <div id="job-events-${htmlEscape(job.id)}" class="stack"></div>
+          </div>`;
         }).join('') : '<div class="card muted">No jobs yet.</div>';
+        qsa('[data-job-events]').forEach(button => button.addEventListener('click', () => showJobEvents(button.dataset.jobEvents)));
+        qsa('[data-job-preflight]').forEach(button => button.addEventListener('click', () => runJobAction(button.dataset.jobPreflight, 'preflight')));
+        qsa('[data-job-retry]').forEach(button => button.addEventListener('click', () => runJobAction(button.dataset.jobRetry, 'retry')));
+        qsa('[data-job-cancel]').forEach(button => button.addEventListener('click', () => runJobAction(button.dataset.jobCancel, 'cancel')));
+      }
+      async function showJobEvents(id) {
+        const target = el(`job-events-${id}`);
+        if (!target) return;
+        target.innerHTML = '<div class="muted tiny">Loading events...</div>';
+        const events = await loadJson(`/api/jobs/${encodeURIComponent(id)}/events`, []);
+        target.innerHTML = Array.isArray(events) && events.length ? events.slice(-8).reverse().map(event => {
+          const payload = event.payload || {};
+          const summary = event.kind === 'stdout' || event.kind === 'stderr'
+            ? payload.line || ''
+            : event.kind === 'failure_category'
+              ? `${payload.category?.code || 'failure'}: ${payload.category?.message || ''}`
+              : JSON.stringify(payload);
+          return `<div class="card action"><b>${htmlEscape(event.kind)}</b> <span class="muted tiny">${htmlEscape(event.created_at || '')}</span><br>${htmlEscape(summary)}</div>`;
+        }).join('') : '<div class="muted tiny">No events for this job.</div>';
+      }
+      async function runJobAction(id, action) {
+        const response = await fetch(`/api/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          appendMessage('system', data.error || `${action} failed: ${response.status}`);
+          return;
+        }
+        appendMessage('system', `${action} queued for job ${shortId(id)}.`);
+        await refresh();
+        if (action === 'preflight') await showJobEvents(id);
       }
       function renderPromptBuilder() {
         const blocks = state.promptBlocks;
