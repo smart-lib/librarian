@@ -926,7 +926,21 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           </div>
           <div class="muted tiny">Claude instruction file: ${htmlEscape(claude.instruction_file || 'CLAUDE.md')}</div>
         </div>`;
-        el('providers').innerHTML = providerTools + cards;
+        const claudeForm = `<form id="claude-runtime-form" class="card stack">
+          <h3>Claude Runtime</h3>
+          <div class="form-grid">
+            <div class="wide"><label for="claude-host-home">Host profile path</label><input id="claude-host-home" value="${htmlEscape(claude.host_home || '')}" placeholder="/home/user/.claude"></div>
+            <div><label for="claude-instruction-file">Instruction file</label><input id="claude-instruction-file" value="${htmlEscape(claude.instruction_file || 'CLAUDE.md')}"></div>
+            <button type="submit">Save</button>
+          </div>
+          <div class="row">
+            <label><input id="claude-mount-home" type="checkbox" ${claude.mount_host_home ? 'checked' : ''}> mount profile</label>
+            <label><input id="claude-mount-readonly" type="checkbox" ${claude.mount_read_only ? 'checked' : ''}> read-only</label>
+          </div>
+        </form>`;
+        el('providers').innerHTML = providerTools + claudeForm + cards;
+        const form = el('claude-runtime-form');
+        if (form) form.addEventListener('submit', saveClaudeRuntime);
         qsa('[data-provider-command]').forEach(button => button.addEventListener('click', () => {
           if (button.dataset.providerCommand === 'codex') {
             appendMessage('system', 'Run Codex auth from the host shell, then enable the mount: librarian auth codex --enable-container-mount');
@@ -934,6 +948,15 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             appendMessage('system', 'Claude Code support now expects a signed-in host profile path in [claude].host_home and [claude].mount_host_home=true. UI bootstrap is next.');
           }
         }));
+      }
+      async function saveClaudeRuntime(event) {
+        event.preventDefault();
+        await postJson('/api/settings/claude', {
+          host_home: el('claude-host-home').value || null,
+          mount_host_home: el('claude-mount-home').checked,
+          mount_read_only: el('claude-mount-readonly').checked,
+          instruction_file: el('claude-instruction-file').value || 'CLAUDE.md'
+        });
       }
       function renderJobs() {
         el('jobs').innerHTML = state.jobs.length ? state.jobs.slice(0, 12).map(job => {
@@ -2047,6 +2070,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/schedules", get(schedules).post(create_schedule))
         .route("/api/settings/worker", post(update_worker_settings))
         .route("/api/settings/chat", post(update_chat_settings))
+        .route("/api/settings/claude", post(update_claude_runtime_settings))
         .route("/api/settings/routing", post(update_routing_settings))
         .route("/api/settings/budget", post(update_budget_settings))
         .route("/api/secrets", get(secrets).post(create_secret))
@@ -3127,6 +3151,73 @@ async fn update_chat_settings(
             "codex_timeout_seconds": codex_timeout_seconds,
             "memory_hit_limit": memory_hit_limit,
             "max_iterations": max_iterations,
+        },
+    })))
+}
+
+async fn update_claude_runtime_settings(
+    State(state): State<AppState>,
+    Json(input): Json<UpdateClaudeRuntimeRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let (host_home, mount_host_home, mount_read_only, instruction_file, config_path) = {
+        let mut config = state.config.write().await;
+        if let Some(path) = input.host_home {
+            let path = path.trim();
+            config.claude.host_home = if path.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(path))
+            };
+        }
+        if let Some(enabled) = input.mount_host_home {
+            config.claude.mount_host_home = enabled;
+        }
+        if let Some(read_only) = input.mount_read_only {
+            config.claude.mount_read_only = read_only;
+        }
+        if let Some(file) = input.instruction_file {
+            let file = file.trim();
+            if file.is_empty() || file.contains('/') || file.contains('\\') {
+                return Err(anyhow::anyhow!(
+                    "Claude instruction file must be a filename like CLAUDE.md"
+                )
+                .into());
+            }
+            config.claude.instruction_file = file.to_string();
+        }
+        config.save()?;
+        (
+            config
+                .claude
+                .host_home
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            config.claude.mount_host_home,
+            config.claude.mount_read_only,
+            config.claude.instruction_file.clone(),
+            config.config_path.clone(),
+        )
+    };
+    state
+        .db
+        .add_system_event(
+            "claude_runtime_updated",
+            serde_json::json!({
+                "host_home": host_home,
+                "mount_host_home": mount_host_home,
+                "mount_read_only": mount_read_only,
+                "instruction_file": instruction_file,
+                "config_path": config_path,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "claude": {
+            "host_home": host_home,
+            "mount_host_home": mount_host_home,
+            "mount_read_only": mount_read_only,
+            "instruction_file": instruction_file,
         },
     })))
 }

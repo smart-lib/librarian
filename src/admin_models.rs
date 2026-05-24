@@ -129,6 +129,14 @@ pub struct UpdateChatSettingsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateClaudeRuntimeRequest {
+    pub host_home: Option<String>,
+    pub mount_host_home: Option<bool>,
+    pub mount_read_only: Option<bool>,
+    pub instruction_file: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UpdateRoutingRequest {
     pub fallback_enabled: bool,
     pub fallback_order: Vec<String>,
