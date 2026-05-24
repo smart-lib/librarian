@@ -863,6 +863,8 @@ Findings and tasks:
   the new chat-first UI has covered the needed controls.
 - `/api/chat` now has a first Codex-backed path, but it is still embedded in
   `src/admin.rs`; move chat prompting/provider execution into dedicated modules.
+  First split done: iterative chat loop, Codex chat runner, prompt assembly,
+  directive parsing, and chat-loop tests now live in `src/chat.rs`.
 - Legacy `local-memory-responder` memories may remain in existing user
   databases. Keep filtering them from chat context and add a cleanup/backfill
   command later.

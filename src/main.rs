@@ -1,6 +1,7 @@
 mod admin;
 mod admin_models;
 mod broker;
+mod chat;
 mod config;
 mod db;
 mod docker_runner;
