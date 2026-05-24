@@ -124,6 +124,9 @@ fn looks_like_secret(value: &str) -> bool {
     if value.len() < 20 {
         return false;
     }
+    if value.parse::<Uuid>().is_ok() {
+        return false;
+    }
     let lower = value.to_lowercase();
     lower.starts_with("sk-")
         || lower.starts_with("sk_")
@@ -148,4 +151,17 @@ fn high_entropy(value: &str) -> bool {
         .filter(|ch| matches!(ch, '_' | '-' | '.' | '='))
         .count();
     alpha_num + symbols == value.len() && symbols > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approval_uuid_is_not_treated_as_secret() {
+        assert!(!looks_like_secret("7b8d0ee0-225e-438a-adbb-5a0a33999f08"));
+        assert!(looks_like_secret(
+            "sk-test_abcdefghijklmnopqrstuvwxyz1234567890"
+        ));
+    }
 }
