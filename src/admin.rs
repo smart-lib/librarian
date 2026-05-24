@@ -4419,6 +4419,8 @@ async fn execute_memory_slash_command(
                     serde_json::json!({
                         "tool": "memory",
                         "command": command,
+                        "memory_role": "durable_memory",
+                        "durability": "durable",
                         "scope": if project.is_some() { "project" } else { "global" },
                         "project": project.map(|project| project.name.clone()),
                     }),
@@ -4459,6 +4461,10 @@ async fn execute_memory_slash_command(
             let items = db
                 .recent_memory_for_project(project.map(|project| project.id), limit)
                 .await?;
+            let items = items
+                .into_iter()
+                .filter(|item| !is_raw_transcript_memory_item(item))
+                .collect::<Vec<_>>();
             let mut reply = format!("Recent memory: {} item(s).", items.len());
             for item in &items {
                 reply.push_str(&format!(
@@ -4485,6 +4491,18 @@ async fn execute_memory_slash_command(
     };
 
     Ok(result)
+}
+
+fn is_raw_transcript_memory_item(item: &crate::domain::MemoryItem) -> bool {
+    item.metadata
+        .get("durability")
+        .and_then(serde_json::Value::as_str)
+        == Some("transcript")
+        || item
+            .metadata
+            .get("memory_role")
+            .and_then(serde_json::Value::as_str)
+            == Some("raw_chat_turn")
 }
 
 fn memory_slash_help() -> &'static str {
@@ -6002,6 +6020,63 @@ mod tests {
             let payload: serde_json::Value = serde_json::from_slice(&body).expect("turn json");
             assert_eq!(payload["session"]["id"], session_id.to_string());
             assert_eq!(payload["turns"].as_array().expect("turns").len(), 2);
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn memory_recent_hides_raw_transcript_turns() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-memory-recent-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            db.add_memory_item(
+                None,
+                None,
+                MemoryKind::UserMessage,
+                Some("chat"),
+                "raw chat should stay out of /mem recent",
+                Some("test"),
+                serde_json::json!({
+                    "memory_role": "raw_chat_turn",
+                    "durability": "transcript",
+                }),
+            )
+            .await
+            .expect("raw memory");
+
+            execute_memory_slash_command(
+                &db,
+                &config,
+                None,
+                &[
+                    "remember".to_string(),
+                    "fact".to_string(),
+                    "durable memory should remain visible".to_string(),
+                ],
+            )
+            .await
+            .expect("remember");
+            let result = execute_memory_slash_command(
+                &db,
+                &config,
+                None,
+                &["recent".to_string(), "10".to_string()],
+            )
+            .await
+            .expect("recent");
+
+            assert!(result
+                .reply
+                .contains("durable memory should remain visible"));
+            assert!(!result.reply.contains("raw chat should stay out"));
+            assert_eq!(result.mode, "slash-command");
         }
 
         std::fs::remove_dir_all(home).ok();

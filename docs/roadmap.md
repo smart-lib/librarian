@@ -445,7 +445,9 @@ Tool groups:
   status notes, and run observations; update/supersede/contradict older memory
   with audit trail. First slash pass supports `/mem remember <kind> <content>`,
   `/remember <content>` as a fact shortcut, and `/mem recent [limit]` in the
-  current chat scope.
+  current chat scope. Durable remember now marks memory with
+  `memory_role=durable_memory` and `durability=durable`; `/mem recent` filters
+  raw transcript turns out of the user-visible memory list.
 - Settings/prompt tools: inspect settings, propose changes, and apply only
   after explicit user approval. First settings slash pass supports
   `/settings tool-permissions` and guarded
@@ -722,6 +724,8 @@ Tasks:
 - Add tests that recent transcript turns are included in the Librarian prompt.
   First pass covers prompt construction for prior user/assistant turns plus the
   new user message.
+- Add tests for raw transcript separation from durable memory. First pass covers
+  durable retrieval filtering and `/mem recent` hiding raw chat turns.
 
 Dependencies:
 
