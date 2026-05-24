@@ -637,9 +637,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         historyIndex: null,
         draftInput: '',
         slashIndex: 0,
-        slashOpen: false
+        slashOpen: false,
+        slashCommands: []
       };
-      const slashCommands = [
+      const fallbackSlashCommands = [
         ['/help', 'Show available command groups'],
         ['/lib help', 'Knowledge base files and Markdown tools'],
         ['/lib tree', 'Show the Library tree'],
@@ -1163,7 +1164,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const value = el('goal-input').value;
         if (!value.startsWith('/')) return [];
         const query = value.toLowerCase();
-        return slashCommands
+        const commands = state.slashCommands.length ? state.slashCommands : fallbackSlashCommands.map(([command, description]) => ({ command, description }));
+        return commands
+          .map(item => [item.command, item.description || ''])
           .filter(([command]) => command.toLowerCase().startsWith(query) || command.toLowerCase().includes(query))
           .slice(0, 8);
       }
@@ -1226,7 +1229,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
         return false;
       }
+      async function loadSlashCommands() {
+        const commands = await loadJson('/api/slash-commands', []);
+        if (Array.isArray(commands)) state.slashCommands = commands;
+      }
       refresh()
+        .then(loadSlashCommands)
         .then(restoreLatestChatSession)
         .catch(error => appendMessage('system', `Admin data failed to load: ${error.message || error}`));
     })();
@@ -1944,6 +1952,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/chat/sessions", get(chat_sessions))
         .route("/api/chat/sessions/:id/turns", get(chat_session_turns))
         .route("/api/chat", post(librarian_chat))
+        .route("/api/slash-commands", get(slash_commands))
         .route("/api/approvals/:id/approve", post(approve_tool_approval))
         .route("/api/approvals/:id/reject", post(reject_tool_approval))
         .route("/api/agent-jobs", post(create_job))
@@ -1963,6 +1972,34 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
         &config.admin.bind,
         config.worker.max_concurrent_jobs,
     ))
+}
+
+async fn slash_commands() -> impl IntoResponse {
+    Json(vec![
+        serde_json::json!({"command": "/help", "description": "Show available command groups", "group": "general"}),
+        serde_json::json!({"command": "/lib help", "description": "Knowledge base files and Markdown tools", "group": "library"}),
+        serde_json::json!({"command": "/lib tree", "description": "Show the Library tree", "group": "library"}),
+        serde_json::json!({"command": "/lib read ", "description": "Read a Markdown note", "group": "library"}),
+        serde_json::json!({"command": "/lib append ", "description": "Append to a Markdown note", "group": "library"}),
+        serde_json::json!({"command": "/lib replace-lines ", "description": "Replace a line range in a note", "group": "library"}),
+        serde_json::json!({"command": "/lib replace-find ", "description": "Replace the first search match in a note", "group": "library"}),
+        serde_json::json!({"command": "/work help", "description": "Project workspace folder tools", "group": "workspace"}),
+        serde_json::json!({"command": "/work mkdir ", "description": "Create a workspace folder", "group": "workspace"}),
+        serde_json::json!({"command": "/work touch ", "description": "Create an empty workspace file", "group": "workspace"}),
+        serde_json::json!({"command": "/project help", "description": "Project records and attachments", "group": "project"}),
+        serde_json::json!({"command": "/project list", "description": "List registered projects", "group": "project"}),
+        serde_json::json!({"command": "/project create ", "description": "Create a library project", "group": "project"}),
+        serde_json::json!({"command": "/project attach-workspace ", "description": "Attach an existing workspace directory", "group": "project"}),
+        serde_json::json!({"command": "/mem help", "description": "Durable memory tools", "group": "memory"}),
+        serde_json::json!({"command": "/remember ", "description": "Remember a durable fact", "group": "memory"}),
+        serde_json::json!({"command": "/mem recent", "description": "Show recent durable memory", "group": "memory"}),
+        serde_json::json!({"command": "/approval list", "description": "Review pending approvals", "group": "approval"}),
+        serde_json::json!({"command": "/prompt blocks", "description": "List prompt blocks", "group": "prompt"}),
+        serde_json::json!({"command": "/settings tool-permissions", "description": "Show tool permission policy", "group": "settings"}),
+        serde_json::json!({"command": "/agent list", "description": "List background agent jobs", "group": "agent"}),
+        serde_json::json!({"command": "/agent preflight ", "description": "Prepare a job command without running it", "group": "agent"}),
+        serde_json::json!({"command": "/agent launch ", "description": "Queue an explicit background agent job", "group": "agent"}),
+    ])
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
