@@ -508,7 +508,7 @@ fn resolve_cli_home(cli: &Cli) -> Result<Option<PathBuf>> {
         return Ok(Some(default));
     }
 
-    println!("Librarian needs a root directory for config, SQLite, vault, run artifacts, and portable agent profiles.");
+    println!("Librarian needs a root directory for config, SQLite, knowledge base, run artifacts, and portable agent profiles.");
     println!("Default root: {}", default.display());
     print!("Use this path? Press Enter to accept, or type another path: ");
     io::stdout().flush()?;
@@ -1827,7 +1827,11 @@ async fn run_doctor(config: &Config) -> Result<()> {
             ),
         ),
         path_check("config file", &config.config_path, "Run `librarian init`."),
-        path_check("vault", &config.vault_path, "Run `librarian init`."),
+        path_check(
+            "knowledge base",
+            &config.vault_path,
+            "Run `librarian init`.",
+        ),
         DoctorCheck::ok("runtime command", runtime_display(config)),
         DoctorCheck::ok("agent image setting", config.docker.agent_image.clone()),
         DoctorCheck::ok("mount path style", config.docker.mount_path_style.clone()),

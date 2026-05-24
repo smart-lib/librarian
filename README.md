@@ -14,7 +14,7 @@ wget -qO- https://raw.githubusercontent.com/smart-lib/librarian/main/scripts/ins
 
 Librarian is a local-first automation harness for ideas, projects, and coding agents.
 It runs a small root orchestrator on the host, keeps durable memory in SQLite and
-an Obsidian-compatible Markdown vault, and launches worker agents inside Docker
+an Obsidian-compatible Markdown knowledge base, and launches worker agents inside Docker
 containers with explicit filesystem and network policies.
 
 The first provider target is OpenAI Codex CLI. Additional providers such as
@@ -31,7 +31,7 @@ adapter interface.
 - SQLite for internal state, jobs, schedules, and memory.
 - Vector-ready SQLite memory with recency-aware retrieval and project/activity
   filters.
-- One global Obsidian-compatible Markdown vault for chats, project notes,
+- One global Obsidian-compatible Markdown knowledge base for chats, project notes,
   decisions, and background run summaries.
 - Local, open-source secret handling with a future broker mode where agents can
   use capabilities without reading raw credentials.
@@ -338,7 +338,7 @@ See `docs/third-eye.md` for the current integration notes and container log
 export caveats.
 
 Prompt and output gates run automatically. Secret-shaped tokens in prompts are
-captured into the vault and replaced with `secret://...` references; known
+captured into the local secret vault and replaced with `secret://...` references; known
 secrets are redacted from worker output before event storage.
 
 Run scheduler maintenance:

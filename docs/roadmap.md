@@ -28,7 +28,7 @@ the product direction.
   `.app`, `.cfg`, and `.mdb` folders from public `Library` and `Projects`.
 - Ubuntu is the current golden-path install target: clone the repository and
   run one bootstrap script, or use the README one-line starter for clean hosts.
-- The Obsidian-compatible vault is global at the Librarian root, so chats,
+- The Obsidian-compatible knowledge base is global at the Librarian root, so chats,
   project notes, decisions, and background runs across many projects share one
   knowledge base.
 - Agents have full privileges inside the mounted project boundary by default.
@@ -53,7 +53,7 @@ Status: Done.
 - Docker runner abstraction.
 - Codex provider shell.
 - Worker command for queued jobs.
-- Job event log for status, stdout, stderr, and vault notes.
+- Job event log for status, stdout, stderr, and knowledge-base notes.
 
 ## Milestone 2: Usable Agent Runs
 
@@ -62,7 +62,7 @@ Status: Done for MVP code path. Runtime hardening is tracked below.
 - Build `librarian-agent` image.
 - Run Codex in a container.
 - Stream logs into SQLite with UI refresh.
-- Persist run summaries into the Markdown vault.
+- Persist run summaries into the Markdown knowledge base.
 - Feed enriched memory context into provider prompts.
 - Store run outcomes back into memory.
 - Add pause/cancel/retry lifecycle commands.
@@ -79,7 +79,7 @@ Status: MVP shell done. Richer operator views are tracked below.
 - Worker capacity panel with configured slots, active jobs, queued jobs, and
   available slots.
 - Recent Librarian actions panel backed by structured system events.
-- Vault editor for basic notes.
+- Knowledge base editor for basic notes.
 - Codex auth status check and onboarding.
 
 ## Milestone 4: Schedules and Heartbeats
@@ -115,7 +115,7 @@ Status: Done for local MVP.
 
 Status: Done for local MVP backend.
 
-- Local encrypted vault.
+- Local encrypted secret vault.
 - Windows DPAPI and explicit AES-GCM fallback encryption modes.
 - Capability grants per provider/session/job with TTL and max-use limits.
 - Host-side broker HTTP endpoint.
@@ -141,7 +141,7 @@ next.
 - Prompt/response gate pipeline entry points for lightweight validation,
   filtering, transformation, provider-specific prompt shaping, and redaction.
 - Automatic secret detection before prompt enrichment: move raw tokens into the
-  secret vault, replace them with vault/grant references, and audit the action.
+  secret vault, replace them with secret/grant references, and audit the action.
 - Output/tool-result leak scanning: redact known secrets or secret-shaped values
   before they are stored, displayed, or reintroduced into prompts.
 - OpenRouter API adapter.
@@ -310,7 +310,7 @@ Tasks:
 - Convert `doctor` output into structured severity checks: `ok`, `warn`,
   `error`, with concise next steps.
 - Cover the MVP bootstrap chain in diagnostics: config layout, SQLite open,
-  vault path, runtime command, agent image, Codex host CLI, Codex profile path,
+  knowledge-base path, runtime command, agent image, Codex host CLI, Codex profile path,
   Codex container mount setting, and project mount path style.
 - Add an explicit preflight result for the selected runtime path: host Docker or
   Podman, and WSL Podman fallback on Windows.
@@ -533,7 +533,7 @@ Tasks:
   moves, and export proposals that create approvals instead of writing files
   directly.
 - Support presets for Librarian identity, operating principles, memory policy,
-  tool permissions, git policy, Obsidian/vault behavior, task planning style,
+  tool permissions, git policy, Obsidian/knowledge-base behavior, task planning style,
   project goals, and provider caveats.
 - Render Markdown preview per block plus compiled preview for each target:
   Librarian chat prompt, agent launch prompt, `AGENTS.md`, `CLAUDE.md`, and
@@ -569,7 +569,7 @@ Tasks:
 - Keep background runs non-blocking from the chat perspective: chat records
   launch/preflight/result events but remains conversational.
 - Confirm status transitions, stdout/stderr events, provider diagnostics, usage
-  observation, vault run summary, and memory run observation.
+  observation, knowledge-base run summary, and memory run observation.
 - Retry a failed job and cancel a queued/running job.
 - Add chat-visible compact action blocks for explicit agent launch, preflight,
   progress, and result artifacts.
@@ -613,7 +613,7 @@ Goal: prove the main path once the user's environment is ready.
 
 Manual flow to validate:
 
-- Initialize Librarian home, DB, and vault.
+- Initialize Librarian home, DB, and knowledge base.
 - Launch the built binary through the release-folder launcher.
 - Configure Codex host authentication and explicit container mount.
 - Build `librarian-agent`.
@@ -621,7 +621,7 @@ Manual flow to validate:
 - Queue a Codex job from CLI and admin UI.
 - Run `worker --once`.
 - Confirm status transitions, stdout/stderr events, provider diagnostics,
-  usage observation, vault run summary, and memory run observation.
+  usage observation, knowledge-base run summary, and memory run observation.
 - Retry a failed job and cancel a queued/running job.
 
 Dependencies:
@@ -650,7 +650,7 @@ Tasks:
 - Add a job detail view or detail panel for lifecycle timestamps,
   cancellation state, provider/model, retry source, and prepared command.
 - Render key event types compactly: context pack, gate events, provider
-  fallback, budget check/block, provider diagnostics, stdout/stderr, vault
+  fallback, budget check/block, provider diagnostics, stdout/stderr, knowledge-base
   summary, and retry source.
 - Surface failure categories prominently: runtime unavailable, image missing,
   Codex CLI missing, Codex auth missing, provider paused, rate limit, budget
@@ -781,7 +781,7 @@ readiness or a later planned milestone.
 - Show per-job lifecycle fields: created, started, last heartbeat, finished,
   cancellation requested. Covered by MVP Priority 6.
 - Show recent job events inline: context pack, prepared command, stdout/stderr,
-  vault summary, retry source. Covered by MVP Priority 6.
+  knowledge-base summary, retry source. Covered by MVP Priority 6.
 - Add compact expandable action blocks in chat for command execution, task
   creation, agent launch, memory retrieval, scheduling decisions, and provider
   routing.
@@ -931,7 +931,7 @@ Findings and tasks:
   polish after auth exists.
 - Project library UI cannot yet create/link memory folders and working
   directories from the admin surface.
-- Vault writes are basic Markdown files without conflict handling, rename
+- Knowledge-base writes are basic Markdown files without conflict handling, rename
   policy, or richer Obsidian link maintenance.
 - Installer upgrade still rebuilds from source through git. Keep command UX,
   but replace internals with release binary downloads once releases are stable.
@@ -1009,7 +1009,7 @@ planned.
   until brokered provider flows are stable.
   Sources: <https://help.openai.com/en/articles/11096431>,
   <https://help.openai.com/en/articles/11381614-api-codex-cli-and-sign-in-with-chatgpt>
-- Obsidian-compatible storage is plain Markdown inside a vault, so Librarian can
+- Obsidian-compatible storage is plain Markdown inside the knowledge base, so Librarian can
   use Git-managed Markdown and YAML frontmatter without depending on the
   Obsidian app.
   Source: <https://obsidian.md/help/data-storage>

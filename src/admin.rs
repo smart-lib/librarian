@@ -265,6 +265,53 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       color: var(--muted);
       border-style: dashed;
     }
+    .message.approval {
+      border-color: rgba(228, 193, 111, .58);
+      background: #211f18;
+    }
+    .approval-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      font-weight: 800;
+    }
+    .approval-risk {
+      color: var(--chrome);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+    .approval-summary {
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .approval-paths {
+      display: grid;
+      gap: 5px;
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .approval-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .approval-actions button {
+      min-height: 34px;
+    }
+    .approval-actions .reject {
+      background: transparent;
+      border-color: rgba(199, 111, 111, .7);
+      color: #efb1b1;
+    }
+    .approval-status {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
     .thinking-dots {
       display: inline-flex;
       gap: 4px;
@@ -584,6 +631,63 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
         return article;
       }
+      function setApprovalCard(article, approval, fallbackText, detail) {
+        const payload = approval?.payload || {};
+        const paths = [];
+        if (payload.library_path) paths.push(`Knowledge base: ${payload.library_path}`);
+        if (payload.workspace_path) paths.push(`Project folder: ${payload.workspace_path}`);
+        if (Array.isArray(payload.files)) {
+          for (const file of payload.files.slice(0, 4)) {
+            if (file?.path) paths.push(`File: ${file.path}`);
+          }
+        }
+        const summary = payload.summary || fallbackText || `${approval?.tool || 'tool'} ${approval?.action || 'action'}`;
+        const terminal = approval?.status && approval.status !== 'Pending';
+        article.className = 'message assistant approval';
+        article.innerHTML = `
+          <div class="approval-head"><span>Approval needed</span><span class="approval-risk">Review</span></div>
+          <div class="approval-summary">${htmlEscape(summary)}</div>
+          <div class="approval-paths">${paths.length ? paths.map(path => `<div>${htmlEscape(path)}</div>`).join('') : '<div>No paths declared.</div>'}</div>
+          <div class="approval-actions">
+            <button type="button" data-approval-decision="approve">Approve</button>
+            <button type="button" class="reject" data-approval-decision="reject">Reject</button>
+          </div>
+          <details><summary>Technical details</summary><pre>${htmlEscape(JSON.stringify({ id: approval?.id, tool: approval?.tool, action: approval?.action, payload }, null, 2))}</pre></details>
+          ${terminal ? `<div class="approval-status">${htmlEscape(approval.status)}</div>` : ''}
+        `;
+        if (detail) {
+          const small = document.createElement('small');
+          small.textContent = detail;
+          article.appendChild(small);
+        }
+        article.querySelectorAll('[data-approval-decision]').forEach(button => {
+          if (terminal) button.disabled = true;
+          button.addEventListener('click', () => decideApproval(article, approval?.id, button.dataset.approvalDecision));
+        });
+        el('chat-log').scrollTop = el('chat-log').scrollHeight;
+      }
+      async function decideApproval(article, approvalId, decision) {
+        if (!approvalId) return;
+        const buttons = Array.from(article.querySelectorAll('[data-approval-decision]'));
+        buttons.forEach(button => button.disabled = true);
+        let status = article.querySelector('.approval-status');
+        if (!status) {
+          status = document.createElement('div');
+          status.className = 'approval-status';
+          article.appendChild(status);
+        }
+        status.textContent = decision === 'approve' ? 'Approving and running...' : 'Rejecting...';
+        try {
+          const response = await fetch(`/api/approvals/${encodeURIComponent(approvalId)}/${decision}`, { method: 'POST' });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+          status.textContent = decision === 'approve' ? 'Approved and executed.' : 'Rejected.';
+          await refresh();
+        } catch (error) {
+          status.textContent = `Could not ${decision}: ${error.message || error}`;
+          buttons.forEach(button => button.disabled = false);
+        }
+      }
       function setMessage(article, text, detail) {
         article.classList.remove('thinking');
         article.textContent = text;
@@ -644,7 +748,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const thread = el('thread');
         thread.innerHTML = '';
         for (const turn of transcript.turns) {
-          appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? 'Librarian' : '');
+          const article = appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? 'Librarian' : '');
+          if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'approval') {
+            setApprovalCard(article, turn.metadata.ui.approval, turn.content, 'Librarian');
+          }
         }
         if (!transcript.turns.length) {
           appendMessage('system', `Restored empty chat session ${shortId(session.id)}.`);
@@ -663,7 +770,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           card('Worker', `queued=${worker.queued_jobs ?? 0}<br>running=${worker.running_jobs ?? 0}<br>slots=${worker.available_slots ?? '__WORKER_CONCURRENCY__'}`),
           card('Chat', `timeout=${chat.codex_timeout_seconds ?? 180}s<br>memory hits=${chat.memory_hit_limit ?? 12}<br>max iterations=${chat.max_iterations ?? 6}`),
           card('Memory', `items=${memory.items ?? 0}<br>embedded=${memory.embedded_items ?? 0}<br>missing=${memory.missing_embeddings ?? 0}`),
-          card('Storage', `${htmlEscape(health.vault_path || 'Library')}<br><span class="muted">${htmlEscape(health.database_path || '.mdb/librarian.db')}</span>`),
+          card('Knowledge base', `${htmlEscape(health.vault_path || 'Library')}<br><span class="muted">${htmlEscape(health.database_path || '.mdb/librarian.db')}</span>`),
           card('Secrets', `${htmlEscape(secrets.status || 'unknown')}<br><span class="muted">${htmlEscape(secrets.location || '')}</span>`)
         ].join('');
       }
@@ -767,7 +874,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           <h3>Create project</h3>
           <div class="form-grid">
             <div><label for="project-name">Name</label><input id="project-name" required placeholder="My Project"></div>
-            <div><label for="project-library-path">Library path</label><input id="project-library-path" placeholder="projects/my-project"></div>
+            <div><label for="project-library-path">Knowledge path</label><input id="project-library-path" placeholder="projects/my-project"></div>
             <div class="wide"><label for="project-workspace-path">Existing workspace path</label><input id="project-workspace-path" placeholder="optional external directory"></div>
             <button type="submit">Create</button>
           </div>
@@ -791,11 +898,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const active = project.name === state.activeProject ? ' active' : '';
           return `<div class="card${active}">
             <h3>${htmlEscape(project.name)}</h3>
-            <div class="muted tiny">Library: ${htmlEscape(project.library_path || '-')}</div>
+            <div class="muted tiny">Knowledge: ${htmlEscape(project.library_path || '-')}</div>
             <div class="muted tiny">Workspace: ${htmlEscape(project.path)}</div>
             <div class="row">
               <button type="button" data-project="${htmlEscape(project.name)}">Use</button>
-              <button class="secondary" type="button" data-attach-library="${htmlEscape(project.id)}">Library</button>
+              <button class="secondary" type="button" data-attach-library="${htmlEscape(project.id)}">Knowledge</button>
               <button class="secondary" type="button" data-attach-workspace="${htmlEscape(project.id)}">Workspace</button>
             </div>
           </div>`;
@@ -811,14 +918,14 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }));
       }
       function renderProjectMapTree(node) {
-        if (!node) return '<div class="node root"><h3>Librarian</h3><div class="muted tiny">Library is empty.</div></div>';
+        if (!node) return '<div class="node root"><h3>Librarian</h3><div class="muted tiny">Knowledge base is empty.</div></div>';
         const projects = Array.isArray(node.projects) && node.projects.length
           ? `<div class="muted tiny">${node.projects.map(project => htmlEscape(project.name)).join(', ')}</div>`
           : '';
         const children = Array.isArray(node.children) && node.children.length
           ? `<div class="node-column">${node.children.map(renderProjectMapTree).join('')}</div>`
           : '';
-        return `<div class="tree"><div class="node ${htmlEscape(node.visual_kind || '')}"><span class="badge">${htmlEscape(node.visual_kind || 'node')}</span><h3>${htmlEscape(node.name || 'Library')}</h3><div class="muted tiny">${htmlEscape(node.path || '.')}</div>${projects}</div>${children}</div>`;
+        return `<div class="tree"><div class="node ${htmlEscape(node.visual_kind || '')}"><span class="badge">${htmlEscape(node.visual_kind || 'node')}</span><h3>${htmlEscape(node.name || 'Knowledge base')}</h3><div class="muted tiny">${htmlEscape(node.path || '.')}</div>${projects}</div>${children}</div>`;
       }
       function renderProjectMapSurface() {
         const count = state.projectMap?.linked_project_count ?? 0;
@@ -836,7 +943,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const agentForm = el('agent-launch-form');
         if (agentForm) agentForm.addEventListener('submit', launchAgentFromUi);
         qsa('[data-attach-library]').forEach(button => button.addEventListener('click', async () => {
-          const value = prompt('Library path inside Librarian/Library');
+          const value = prompt('Knowledge base path inside Librarian/Library');
           if (!value) return;
           await postJson(`/api/projects/${button.dataset.attachLibrary}/attach-library`, { library_path: value });
         }));
@@ -910,7 +1017,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           if (data.session_id) state.chatSessionId = data.session_id;
           const elapsed = Math.max(1, Math.round(performance.now() - startedAt));
           const detail = data.mode === 'slash-command' ? 'Command result' : `Librarian · ${(elapsed / 1000).toFixed(1)}s`;
-          setMessage(pending, data.reply || 'I am here.', detail);
+          if (data.ui?.type === 'approval') {
+            setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
+          } else {
+            setMessage(pending, data.reply || 'I am here.', detail);
+          }
           await refresh();
         } catch (error) {
           setMessage(pending, `Could not answer: ${error.message || error}`, 'System');
@@ -1382,7 +1493,7 @@ fn app_html(bind: &str, worker_concurrency: usize) -> String {
 
   <div class="overlay" id="map-overlay" role="dialog" aria-modal="true" aria-label="Project map">
     <div class="overlay-panel">
-      <div class="overlay-head"><div><h1>Project Map</h1><div class="muted tiny">A visual project tree from Librarian's project registry. Vault-backed project folders come next.</div></div><button type="button" class="secondary" onclick="closeOverlay('map-overlay')">Close</button></div>
+      <div class="overlay-head"><div><h1>Project Map</h1><div class="muted tiny">A visual project tree from Librarian's project registry. Knowledge-base project folders come next.</div></div><button type="button" class="secondary" onclick="closeOverlay('map-overlay')">Close</button></div>
       <div class="map-body">
         <div class="map-canvas" id="project-map"></div>
         <aside class="map-side"><h2>Project Model</h2><p class="muted">Librarian will keep long-lived project memory in Markdown project folders, and optionally attach each project to a real working directory for agent runs.</p><div class="card"><b>Default workspace</b><div class="muted">~/Librarian/Projects/{ProjectName}</div></div><div class="card"><b>Pattern to capture</b><div class="muted">When launched inside an unknown folder, Librarian should ask whether to register it as a working project and create/link a project memory folder.</div></div><div id="project-map-list"></div></aside>
@@ -1468,7 +1579,7 @@ fn app_html(bind: &str, worker_concurrency: usize) -> String {
         html += `<path d="M ${rootX + 210} ${centerY + 42} C ${rootX + 300} ${centerY + 42}, ${childX - 80} ${y + 42}, ${childX} ${y + 42}" stroke="#58c4a5" stroke-width="2" fill="none" opacity="0.65"/>`;
       });
       html += '</svg>';
-      html += `<div class="node root" style="left:${rootX}px;top:${centerY}px"><b>Librarian</b><br><span class="muted">Vault projects</span></div>`;
+      html += `<div class="node root" style="left:${rootX}px;top:${centerY}px"><b>Librarian</b><br><span class="muted">Knowledge projects</span></div>`;
       projects.forEach((p, index) => {
         const y = 80 + index * gap;
         html += `<div class="node" style="left:${childX}px;top:${y}px"><b>${escapeHtml(p.name)}</b><br><span class="muted">${escapeHtml(p.path)}</span></div>`;
@@ -1655,6 +1766,8 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/chat/sessions", get(chat_sessions))
         .route("/api/chat/sessions/:id/turns", get(chat_session_turns))
         .route("/api/chat", post(librarian_chat))
+        .route("/api/approvals/:id/approve", post(approve_tool_approval))
+        .route("/api/approvals/:id/reject", post(reject_tool_approval))
         .route("/api/agent-jobs", post(create_job))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -2700,6 +2813,26 @@ async fn chat_session_turns(
     })))
 }
 
+async fn approve_tool_approval(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    let (approval, output) = approve_and_execute_tool_approval(&state, &config, id).await?;
+    Ok(Json(serde_json::json!({
+        "approval": approval,
+        "output": output,
+    })))
+}
+
+async fn reject_tool_approval(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let approval = reject_tool_approval_by_id(&state, id).await?;
+    Ok(Json(serde_json::json!({ "approval": approval })))
+}
+
 async fn librarian_chat(
     State(state): State<AppState>,
     Json(input): Json<LibrarianChatRequest>,
@@ -2810,7 +2943,8 @@ async fn librarian_chat(
                 "durability": "transcript",
                 "mode": chat_result.mode,
                 "iterations": chat_result.iterations,
-                "trace": chat_result.trace,
+                "trace": chat_result.trace.clone(),
+                "ui": chat_result.ui.clone(),
             }),
         )
         .await?;
@@ -2827,6 +2961,7 @@ async fn librarian_chat(
                 "scope": if project.is_some() { "project" } else { "global" },
                 "mode": chat_result.mode,
                 "iterations": chat_result.iterations,
+                "ui": chat_result.ui.clone(),
             }),
         )
         .await?;
@@ -2853,9 +2988,10 @@ async fn librarian_chat(
         "session_id": chat_session.id,
         "reply": reply,
         "project": project.as_ref().map(|project| project.name.clone()),
-        "memory_hits": chat_result.memory_hits,
+        "memory_hits": chat_result.memory_hits.clone(),
         "mode": chat_result.mode,
         "iterations": chat_result.iterations,
+        "ui": chat_result.ui.clone(),
     })))
 }
 
@@ -3401,6 +3537,7 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
         memory_hits: Vec::new(),
         trace: vec![trace],
         mode: "slash-command",
+        ui: None,
     }
 }
 
@@ -4018,28 +4155,7 @@ async fn execute_approval_slash_command(
         }
         "approve" => {
             let id = slash_approval_id_arg(args, "/approval approve <approval-id>")?;
-            let approval = state
-                .db
-                .update_tool_approval_status(id, ToolApprovalStatus::Approved)
-                .await?;
-            let output = execute_approved_tool_approval(state, config, &approval).await?;
-            let approval = state
-                .db
-                .update_tool_approval_status(id, ToolApprovalStatus::Executed)
-                .await?;
-            state
-                .db
-                .add_system_event(
-                    "tool_approval",
-                    serde_json::json!({
-                        "action": "approve_and_execute",
-                        "approval_id": approval.id,
-                        "tool": approval.tool,
-                        "tool_action": approval.action,
-                        "output": output,
-                    }),
-                )
-                .await?;
+            let (approval, output) = approve_and_execute_tool_approval(state, config, id).await?;
             slash_reply(
                 &format!("Approved and executed tool proposal {}.", approval.id),
                 serde_json::json!({
@@ -4052,17 +4168,7 @@ async fn execute_approval_slash_command(
         }
         "reject" => {
             let id = slash_approval_id_arg(args, "/approval reject <approval-id>")?;
-            let approval = state
-                .db
-                .update_tool_approval_status(id, ToolApprovalStatus::Rejected)
-                .await?;
-            state
-                .db
-                .add_system_event(
-                    "tool_approval",
-                    serde_json::json!({ "action": "reject", "approval_id": approval.id }),
-                )
-                .await?;
+            let approval = reject_tool_approval_by_id(state, id).await?;
             slash_reply(
                 &format!("Rejected tool proposal {}.", approval.id),
                 serde_json::json!({ "tool": "approval", "command": command, "approval": approval }),
@@ -4113,6 +4219,54 @@ async fn execute_approval_slash_command(
     };
 
     Ok(result)
+}
+
+async fn approve_and_execute_tool_approval(
+    state: &AppState,
+    config: &Config,
+    id: Uuid,
+) -> Result<(crate::domain::ToolApproval, serde_json::Value)> {
+    let approval = state
+        .db
+        .update_tool_approval_status(id, ToolApprovalStatus::Approved)
+        .await?;
+    let output = execute_approved_tool_approval(state, config, &approval).await?;
+    let approval = state
+        .db
+        .update_tool_approval_status(id, ToolApprovalStatus::Executed)
+        .await?;
+    state
+        .db
+        .add_system_event(
+            "tool_approval",
+            serde_json::json!({
+                "action": "approve_and_execute",
+                "approval_id": approval.id,
+                "tool": approval.tool,
+                "tool_action": approval.action,
+                "output": output,
+            }),
+        )
+        .await?;
+    Ok((approval, output))
+}
+
+async fn reject_tool_approval_by_id(
+    state: &AppState,
+    id: Uuid,
+) -> Result<crate::domain::ToolApproval> {
+    let approval = state
+        .db
+        .update_tool_approval_status(id, ToolApprovalStatus::Rejected)
+        .await?;
+    state
+        .db
+        .add_system_event(
+            "tool_approval",
+            serde_json::json!({ "action": "reject", "approval_id": approval.id }),
+        )
+        .await?;
+    Ok(approval)
 }
 
 fn slash_approval_id_arg(args: &[String], usage: &str) -> Result<Uuid> {
@@ -6025,7 +6179,7 @@ fn index_html(bind: &str, worker_concurrency: usize) -> String {
             ${{payload.exit_code !== undefined ? `<div class="muted">Exit code: ${{payload.exit_code}}</div>` : ''}}
             ${{payload.line ? `<details><summary>Matched line</summary><pre>${{escapeHtml(payload.line)}}</pre></details>` : ''}}`;
         }} else if (event.kind === 'vault') {{
-          body = `<div><span class="pill">vault</span> run summary</div><pre>${{escapeHtml(payload.run_summary || '-')}}</pre>`;
+          body = `<div><span class="pill">knowledge base</span> run summary</div><pre>${{escapeHtml(payload.run_summary || '-')}}</pre>`;
         }} else if (event.kind === 'stdout' || event.kind === 'stderr') {{
           body = `<pre>${{escapeHtml(payload.line || '')}}</pre>`;
         }} else {{

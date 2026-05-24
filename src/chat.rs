@@ -22,6 +22,7 @@ pub(crate) struct LibrarianChatResult {
     pub(crate) memory_hits: Vec<MemoryHit>,
     pub(crate) trace: Vec<serde_json::Value>,
     pub(crate) mode: &'static str,
+    pub(crate) ui: Option<serde_json::Value>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -129,6 +130,7 @@ async fn run_librarian_chat_loop_with_runner(
                 memory_hits: combined_memory_hits(&context_packs),
                 trace,
                 mode: "codex-chat",
+                ui: None,
             });
         };
 
@@ -154,6 +156,7 @@ async fn run_librarian_chat_loop_with_runner(
                     memory_hits: combined_memory_hits(&context_packs),
                     trace,
                     mode: "codex-chat",
+                    ui: None,
                 });
             }
             "clarify" => {
@@ -177,6 +180,7 @@ async fn run_librarian_chat_loop_with_runner(
                     memory_hits: combined_memory_hits(&context_packs),
                     trace,
                     mode: "codex-chat",
+                    ui: None,
                 });
             }
             "search_memory" => {
@@ -203,6 +207,7 @@ async fn run_librarian_chat_loop_with_runner(
                         memory_hits: combined_memory_hits(&context_packs),
                         trace,
                         mode: "codex-chat",
+                        ui: None,
                     });
                 }
                 let context_pack = memory::retrieve_context_with_config(
@@ -267,13 +272,17 @@ async fn run_librarian_chat_loop_with_runner(
                 }));
                 return Ok(LibrarianChatResult {
                     reply: format!(
-                        "I prepared a tool proposal for approval: `{}` `{}`.\nApproval id: `{}`.\nReview it with `/approval list`, then use `/approval approve {}` to run it or `/approval reject {}`.",
-                        approval.tool, approval.action, approval.id, approval.id, approval.id
+                        "I prepared an action for approval: {} {}.",
+                        approval.tool, approval.action
                     ),
                     iterations: iteration,
                     memory_hits: combined_memory_hits(&context_packs),
                     trace,
                     mode: "codex-chat",
+                    ui: Some(serde_json::json!({
+                        "type": "approval",
+                        "approval": approval,
+                    })),
                 });
             }
             _ => {
@@ -291,6 +300,7 @@ async fn run_librarian_chat_loop_with_runner(
                     memory_hits: combined_memory_hits(&context_packs),
                     trace,
                     mode: "codex-chat",
+                    ui: None,
                 });
             }
         }
@@ -302,6 +312,7 @@ async fn run_librarian_chat_loop_with_runner(
         memory_hits: combined_memory_hits(&context_packs),
         trace,
         mode: "codex-chat",
+        ui: None,
     })
 }
 
@@ -332,6 +343,7 @@ fn chat_provider_unavailable_result(
         memory_hits,
         trace,
         mode: "chat-provider-unavailable",
+        ui: None,
     }
 }
 
