@@ -52,8 +52,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       --line: #303941;
       --accent: #62c7a8;
       --accent-2: #8fb7ff;
+      --chrome: #e4c16f;
+      --chrome-hover: #ffd98a;
       --danger: #c76f6f;
       --shadow: 0 18px 60px rgba(0, 0, 0, .38);
+      --edge-control-space: 68px;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -163,7 +166,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       place-items: center;
       background: transparent;
       border-color: transparent;
-      color: var(--muted);
+      color: var(--chrome);
       pointer-events: auto;
       transition: color .16s ease, transform .18s cubic-bezier(.2, 1.4, .4, 1);
     }
@@ -175,7 +178,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       font-weight: 700;
     }
     .icon-button:hover, .icon-button:focus-visible {
-      color: var(--accent);
+      color: var(--chrome-hover);
       background: transparent;
       border-color: transparent;
       transform: translateY(-2px) scale(1.08);
@@ -232,12 +235,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .chat-log {
       min-height: 0;
       overflow: auto;
-      padding: 86px 18px 28px;
+      padding: 86px clamp(12px, var(--edge-control-space), 72px) 28px;
       scroll-behavior: smooth;
     }
     .thread {
-      width: 100%;
-      margin: 0;
+      width: min(100%, calc(100vw - (var(--edge-control-space) * 2)));
+      margin: 0 auto;
       display: flex;
       flex-direction: column;
       gap: 14px;
@@ -474,6 +477,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .empty .card { text-align: left; }
     @media (max-width: 900px), (max-height: 600px) {
       html, body { min-width: 720px; min-height: 500px; }
+      :root { --edge-control-space: 12px; }
       .app { min-height: 500px; }
       .chat-log { padding: 78px 12px 18px; }
       .composer { padding: 10px 12px; }
