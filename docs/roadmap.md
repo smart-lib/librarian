@@ -807,6 +807,12 @@ readiness or a later planned milestone.
   be visually distinct.
 - Add richer message formatting for citations, quoted user history, agent
   summaries, documentation excerpts, and external-source snippets.
+- Add shell-like chat input ergonomics: when the input is empty or the caret is
+  at a sensible boundary, Up/Down should cycle previous submitted prompts and
+  commands; typing `/` should open discoverable slash-command suggestions with
+  arrow navigation and Tab completion. First browser-side pass adds local
+  per-page input history and a static slash palette; richer server-provided
+  command metadata and argument-aware completion remain.
 
 ## Scheduler and Worker Backlog
 

@@ -339,6 +339,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       border-top: 1px solid var(--line);
       background: rgba(18, 22, 25, .98);
       padding: 12px 14px 14px;
+      position: relative;
     }
     .composer-inner {
       width: 100%;
@@ -349,6 +350,41 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       height: 112px;
       max-height: 38vh;
       resize: vertical;
+    }
+    .slash-palette {
+      position: absolute;
+      left: 14px;
+      right: 14px;
+      bottom: calc(100% + 8px);
+      max-height: 260px;
+      overflow: auto;
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(18, 22, 25, .98);
+      box-shadow: var(--shadow);
+      padding: 8px;
+      z-index: 8;
+    }
+    .slash-palette.open { display: grid; gap: 4px; }
+    .slash-option {
+      min-height: 36px;
+      border-radius: 6px;
+      padding: 7px 9px;
+      display: grid;
+      grid-template-columns: minmax(150px, 240px) minmax(0, 1fr);
+      gap: 12px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .slash-option.active,
+    .slash-option:hover {
+      background: var(--panel-2);
+      color: var(--text);
+    }
+    .slash-option code {
+      color: var(--accent);
+      white-space: nowrap;
     }
     .overlay {
       position: fixed;
@@ -546,6 +582,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       </div>
     </main>
     <form id="chat-form" class="composer" autocomplete="off">
+      <div id="slash-palette" class="slash-palette" role="listbox" aria-label="Slash commands"></div>
       <div class="composer-inner">
         <textarea id="goal-input" name="goal" placeholder="Message Librarian" autocomplete="off" required></textarea>
       </div>
@@ -595,8 +632,38 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         providers: { catalog: [], states: [] },
         health: null,
         activeProject: '',
-        chatSessionId: null
+        chatSessionId: null,
+        inputHistory: [],
+        historyIndex: null,
+        draftInput: '',
+        slashIndex: 0,
+        slashOpen: false
       };
+      const slashCommands = [
+        ['/help', 'Show available command groups'],
+        ['/lib help', 'Knowledge base files and Markdown tools'],
+        ['/lib tree', 'Show the Library tree'],
+        ['/lib read ', 'Read a Markdown note'],
+        ['/lib append ', 'Append to a Markdown note'],
+        ['/lib replace-lines ', 'Replace a line range in a note'],
+        ['/lib replace-find ', 'Replace the first search match in a note'],
+        ['/work help', 'Project workspace folder tools'],
+        ['/work mkdir ', 'Create a workspace folder'],
+        ['/work touch ', 'Create an empty workspace file'],
+        ['/project help', 'Project records and attachments'],
+        ['/project list', 'List registered projects'],
+        ['/project create ', 'Create a library project'],
+        ['/project attach-workspace ', 'Attach an existing workspace directory'],
+        ['/mem help', 'Durable memory tools'],
+        ['/remember ', 'Remember a durable fact'],
+        ['/mem recent', 'Show recent durable memory'],
+        ['/approval list', 'Review pending approvals'],
+        ['/prompt blocks', 'List prompt blocks'],
+        ['/settings tool-permissions', 'Show tool permission policy'],
+        ['/agent list', 'List background agent jobs'],
+        ['/agent preflight ', 'Prepare a job command without running it'],
+        ['/agent launch ', 'Queue an explicit background agent job']
+      ];
       const el = id => document.getElementById(id);
       const qsa = selector => Array.from(document.querySelectorAll(selector));
       const htmlEscape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -995,6 +1062,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const input = el('goal-input');
         const goal = input.value.trim();
         if (!goal) return;
+        rememberInput(goal);
+        closeSlashPalette();
         appendMessage('user', goal);
         input.value = '';
         input.disabled = true;
@@ -1042,11 +1111,121 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       qsa('.tab-button').forEach(button => button.addEventListener('click', () => setTab(button.dataset.tab)));
       el('chat-form').addEventListener('submit', submitChat);
       el('goal-input').addEventListener('keydown', event => {
+        if (handleSlashKeys(event)) return;
+        if (handleHistoryKeys(event)) return;
         if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
           event.preventDefault();
           el('chat-form').requestSubmit();
         }
       });
+      el('goal-input').addEventListener('input', () => {
+        state.historyIndex = null;
+        updateSlashPalette();
+      });
+      el('goal-input').addEventListener('blur', () => {
+        window.setTimeout(closeSlashPalette, 120);
+      });
+      function rememberInput(value) {
+        if (!value) return;
+        if (state.inputHistory[state.inputHistory.length - 1] !== value) {
+          state.inputHistory.push(value);
+          if (state.inputHistory.length > 100) state.inputHistory.shift();
+        }
+        state.historyIndex = null;
+        state.draftInput = '';
+      }
+      function handleHistoryKeys(event) {
+        const input = el('goal-input');
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return false;
+        if (state.slashOpen) return false;
+        const atStart = input.selectionStart === 0 && input.selectionEnd === 0;
+        const atEnd = input.selectionStart === input.value.length && input.selectionEnd === input.value.length;
+        const empty = input.value.length === 0;
+        if (event.key === 'ArrowUp' && !(empty || atStart)) return false;
+        if (event.key === 'ArrowDown' && !(empty || atEnd || state.historyIndex !== null)) return false;
+        if (!state.inputHistory.length) return false;
+        event.preventDefault();
+        if (state.historyIndex === null) {
+          state.draftInput = input.value;
+          state.historyIndex = state.inputHistory.length;
+        }
+        if (event.key === 'ArrowUp') {
+          state.historyIndex = Math.max(0, state.historyIndex - 1);
+          input.value = state.inputHistory[state.historyIndex] || '';
+        } else {
+          state.historyIndex = Math.min(state.inputHistory.length, state.historyIndex + 1);
+          input.value = state.historyIndex === state.inputHistory.length ? state.draftInput : state.inputHistory[state.historyIndex];
+        }
+        window.requestAnimationFrame(() => input.setSelectionRange(input.value.length, input.value.length));
+        return true;
+      }
+      function matchingSlashCommands() {
+        const value = el('goal-input').value;
+        if (!value.startsWith('/')) return [];
+        const query = value.toLowerCase();
+        return slashCommands
+          .filter(([command]) => command.toLowerCase().startsWith(query) || command.toLowerCase().includes(query))
+          .slice(0, 8);
+      }
+      function updateSlashPalette() {
+        const palette = el('slash-palette');
+        const matches = matchingSlashCommands();
+        state.slashOpen = matches.length > 0;
+        state.slashIndex = Math.min(state.slashIndex, Math.max(0, matches.length - 1));
+        palette.classList.toggle('open', state.slashOpen);
+        palette.innerHTML = matches.map(([command, description], index) => `
+          <div class="slash-option ${index === state.slashIndex ? 'active' : ''}" role="option" data-slash-index="${index}">
+            <code>${htmlEscape(command)}</code><span>${htmlEscape(description)}</span>
+          </div>
+        `).join('');
+        Array.from(palette.querySelectorAll('[data-slash-index]')).forEach(option => {
+          option.addEventListener('mousedown', event => {
+            event.preventDefault();
+            applySlashCommand(matches[Number(option.dataset.slashIndex)]?.[0]);
+          });
+        });
+      }
+      function closeSlashPalette() {
+        state.slashOpen = false;
+        el('slash-palette').classList.remove('open');
+      }
+      function applySlashCommand(command) {
+        if (!command) return;
+        const input = el('goal-input');
+        input.value = command;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        closeSlashPalette();
+      }
+      function handleSlashKeys(event) {
+        updateSlashPalette();
+        if (!state.slashOpen) return false;
+        const matches = matchingSlashCommands();
+        if (!matches.length) return false;
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          state.slashIndex = (state.slashIndex + 1) % matches.length;
+          updateSlashPalette();
+          return true;
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          state.slashIndex = (state.slashIndex + matches.length - 1) % matches.length;
+          updateSlashPalette();
+          return true;
+        }
+        if (event.key === 'Tab') {
+          event.preventDefault();
+          applySlashCommand(matches[state.slashIndex]?.[0]);
+          return true;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeSlashPalette();
+          return true;
+        }
+        return false;
+      }
       refresh()
         .then(restoreLatestChatSession)
         .catch(error => appendMessage('system', `Admin data failed to load: ${error.message || error}`));
