@@ -260,6 +260,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .message.assistant, .message.system { align-self: flex-start; }
     .message.system { color: var(--muted); }
+    .message.command {
+      border-color: rgba(143, 183, 255, .5);
+      background: #171f29;
+      color: var(--text);
+    }
+    .message.command small { color: var(--accent-2); }
     .message.thinking {
       color: var(--muted);
       border-style: dashed;
@@ -762,6 +768,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const small = document.createElement('small');
           small.textContent = detail;
           article.appendChild(small);
+          article.title = detail;
         }
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
       }
@@ -1089,6 +1096,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           if (data.ui?.type === 'approval') {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
           } else {
+            if (data.mode === 'slash-command') pending.className = 'message system command';
             setMessage(pending, data.reply || 'I am here.', detail);
           }
           await refresh();
