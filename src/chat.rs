@@ -1,4 +1,8 @@
-use std::{collections::HashSet, process::Stdio, time::Duration};
+use std::{
+    collections::HashSet,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -83,6 +87,7 @@ async fn run_librarian_chat_loop_with_runner(
     let mut last_raw_reply = String::new();
 
     for iteration in 1..=max_iterations {
+        let iteration_started_at = Instant::now();
         let librarian_blocks = db.list_prompt_blocks(Some("librarian")).await?;
         let librarian_instruction_blocks = prompt::render_prompt_blocks(&librarian_blocks);
         let prompt = build_librarian_chat_prompt(
@@ -94,6 +99,7 @@ async fn run_librarian_chat_loop_with_runner(
             iteration,
             max_iterations,
         );
+        let prompt_chars = prompt.chars().count();
         let raw_reply = match runner.run(config, &prompt).await {
             Ok(reply) => reply,
             Err(error) => {
@@ -106,9 +112,17 @@ async fn run_librarian_chat_loop_with_runner(
                 ));
             }
         };
+        let provider_elapsed_ms = iteration_started_at.elapsed().as_millis();
         last_raw_reply = raw_reply.clone();
 
         let Some(directive) = parse_librarian_chat_directive(&raw_reply) else {
+            trace.push(serde_json::json!({
+                "iteration": iteration,
+                "action": "plain_answer",
+                "prompt_chars": prompt_chars,
+                "reply_chars": raw_reply.chars().count(),
+                "provider_elapsed_ms": provider_elapsed_ms,
+            }));
             return Ok(LibrarianChatResult {
                 reply: raw_reply,
                 iterations: iteration,
@@ -130,6 +144,9 @@ async fn run_librarian_chat_loop_with_runner(
                     "iteration": iteration,
                     "action": "answer",
                     "reason": directive.reason,
+                    "prompt_chars": prompt_chars,
+                    "reply_chars": reply.chars().count(),
+                    "provider_elapsed_ms": provider_elapsed_ms,
                 }));
                 return Ok(LibrarianChatResult {
                     reply,
@@ -150,6 +167,9 @@ async fn run_librarian_chat_loop_with_runner(
                     "iteration": iteration,
                     "action": "clarify",
                     "reason": directive.reason,
+                    "prompt_chars": prompt_chars,
+                    "reply_chars": reply.chars().count(),
+                    "provider_elapsed_ms": provider_elapsed_ms,
                 }));
                 return Ok(LibrarianChatResult {
                     reply,
@@ -170,6 +190,9 @@ async fn run_librarian_chat_loop_with_runner(
                     "action": "search_memory",
                     "query": query,
                     "reason": directive.reason,
+                    "prompt_chars": prompt_chars,
+                    "reply_chars": raw_reply.chars().count(),
+                    "provider_elapsed_ms": provider_elapsed_ms,
                 }));
                 if iteration == max_iterations {
                     return Ok(LibrarianChatResult {
@@ -238,6 +261,9 @@ async fn run_librarian_chat_loop_with_runner(
                     "tool": approval.tool,
                     "tool_action": approval.action,
                     "reason": directive.reason,
+                    "prompt_chars": prompt_chars,
+                    "reply_chars": raw_reply.chars().count(),
+                    "provider_elapsed_ms": provider_elapsed_ms,
                 }));
                 return Ok(LibrarianChatResult {
                     reply: format!(
@@ -251,6 +277,14 @@ async fn run_librarian_chat_loop_with_runner(
                 });
             }
             _ => {
+                trace.push(serde_json::json!({
+                    "iteration": iteration,
+                    "action": "unknown_directive",
+                    "directive_action": action,
+                    "prompt_chars": prompt_chars,
+                    "reply_chars": raw_reply.chars().count(),
+                    "provider_elapsed_ms": provider_elapsed_ms,
+                }));
                 return Ok(LibrarianChatResult {
                     reply: raw_reply,
                     iterations: iteration,

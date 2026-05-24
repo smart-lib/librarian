@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::Result;
 use axum::{
@@ -258,6 +258,29 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .message.assistant, .message.system { align-self: flex-start; }
     .message.system { color: var(--muted); }
+    .message.thinking {
+      color: var(--muted);
+      border-style: dashed;
+    }
+    .thinking-dots {
+      display: inline-flex;
+      gap: 4px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .thinking-dots i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: thinking-pulse 1s infinite ease-in-out;
+    }
+    .thinking-dots i:nth-child(2) { animation-delay: .15s; }
+    .thinking-dots i:nth-child(3) { animation-delay: .3s; }
+    @keyframes thinking-pulse {
+      0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+      40% { opacity: 1; transform: translateY(-3px); }
+    }
     .message small {
       display: block;
       margin-top: 8px;
@@ -549,7 +572,16 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
         return article;
       }
+      function appendThinkingMessage() {
+        const article = document.createElement('article');
+        article.className = 'message assistant thinking';
+        article.innerHTML = 'Thinking<span class="thinking-dots"><i></i><i></i><i></i></span>';
+        el('thread').appendChild(article);
+        el('chat-log').scrollTop = el('chat-log').scrollHeight;
+        return article;
+      }
       function setMessage(article, text, detail) {
+        article.classList.remove('thinking');
         article.textContent = text;
         if (detail !== undefined && detail !== null && detail !== '') {
           const small = document.createElement('small');
@@ -855,6 +887,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         if (!goal) return;
         appendMessage('user', goal);
         input.value = '';
+        input.disabled = true;
+        const startedAt = performance.now();
+        const pending = appendThinkingMessage();
         const project = activeProjectName();
         try {
           const response = await fetch('/api/chat', {
@@ -869,10 +904,15 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
           if (data.session_id) state.chatSessionId = data.session_id;
-          appendMessage('assistant', data.reply || 'I am here.', data.mode === 'slash-command' ? 'Command result' : 'Librarian');
+          const elapsed = Math.max(1, Math.round(performance.now() - startedAt));
+          const detail = data.mode === 'slash-command' ? 'Command result' : `Librarian · ${(elapsed / 1000).toFixed(1)}s`;
+          setMessage(pending, data.reply || 'I am here.', detail);
           await refresh();
         } catch (error) {
-          appendMessage('system', `Could not answer: ${error.message || error}`);
+          setMessage(pending, `Could not answer: ${error.message || error}`, 'System');
+        } finally {
+          input.disabled = false;
+          input.focus();
         }
       }
 
@@ -2660,6 +2700,7 @@ async fn librarian_chat(
     State(state): State<AppState>,
     Json(input): Json<LibrarianChatRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let started_at = Instant::now();
     let message = input.message.trim();
     if message.is_empty() {
         return Err(anyhow::anyhow!("message must not be empty").into());
@@ -2782,6 +2823,24 @@ async fn librarian_chat(
                 "scope": if project.is_some() { "project" } else { "global" },
                 "mode": chat_result.mode,
                 "iterations": chat_result.iterations,
+            }),
+        )
+        .await?;
+
+    let elapsed_ms = started_at.elapsed().as_millis();
+    state
+        .db
+        .add_system_event(
+            "chat_request",
+            serde_json::json!({
+                "session_id": chat_session.id,
+                "project": project.as_ref().map(|project| project.name.clone()),
+                "mode": chat_result.mode,
+                "iterations": chat_result.iterations,
+                "memory_hits": chat_result.memory_hits.len(),
+                "elapsed_ms": elapsed_ms,
+                "message_chars": gated.content.chars().count(),
+                "reply_chars": reply.chars().count(),
             }),
         )
         .await?;
@@ -4584,11 +4643,19 @@ fn is_visible_durable_memory_item(item: &crate::domain::MemoryItem) -> bool {
         item.kind,
         MemoryKind::UserMessage | MemoryKind::AssistantMessage
     ) {
-        return item
+        if item
             .metadata
             .get("memory_role")
             .and_then(serde_json::Value::as_str)
-            == Some("durable_memory");
+            == Some("durable_memory")
+        {
+            return true;
+        }
+        if item.source.as_deref() == Some("admin:librarian-chat")
+            || item.topic.as_deref() == Some("librarian-chat")
+        {
+            return false;
+        }
     }
     true
 }
@@ -6144,11 +6211,22 @@ mod tests {
                 MemoryKind::AssistantMessage,
                 Some("legacy-chat"),
                 "legacy assistant chat should stay out of /mem recent",
-                Some("test"),
+                Some("admin:librarian-chat"),
                 serde_json::json!({}),
             )
             .await
             .expect("legacy assistant memory");
+            db.add_memory_item(
+                None,
+                None,
+                MemoryKind::AssistantMessage,
+                Some("agent-note"),
+                "unclassified assistant note should remain visible",
+                Some("test"),
+                serde_json::json!({}),
+            )
+            .await
+            .expect("assistant note memory");
 
             execute_memory_slash_command(
                 &db,
@@ -6175,6 +6253,9 @@ mod tests {
                 .reply
                 .contains("durable memory should remain visible"));
             assert!(result.reply.contains("Fact"));
+            assert!(result
+                .reply
+                .contains("unclassified assistant note should remain visible"));
             assert!(!result.reply.contains("raw chat should stay out"));
             assert!(!result.reply.contains("legacy assistant chat"));
             assert_eq!(result.mode, "slash-command");

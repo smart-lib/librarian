@@ -447,11 +447,13 @@ Tool groups:
   `/remember <content>` as a fact shortcut, and `/mem recent [limit]` in the
   current chat scope. Durable remember now marks memory with
   `memory_role=durable_memory` and `durability=durable`; `/mem recent` filters
-  raw transcript turns and legacy chat UserMessage/AssistantMessage rows out of
-  the user-visible memory list, and shows memory ids so correction commands are
-  usable. First correction pass adds `/mem supersede <old-id> <kind> <content>` and
-  `/mem contradict <old-id> <kind> <content>` with linked durable memory records
-  and `memory_tool` audit events.
+  raw transcript turns and legacy rows known to come from `admin:librarian-chat`
+  out of the user-visible memory list without hiding unclassified
+  AssistantMessage/UserMessage notes, and shows memory ids so correction
+  commands are usable. First correction pass adds
+  `/mem supersede <old-id> <kind> <content>` and
+  `/mem contradict <old-id> <kind> <content>` with linked durable memory
+  records and `memory_tool` audit events.
 - Settings/prompt tools: inspect settings, propose changes, and apply only
   after explicit user approval. First settings slash pass supports
   `/settings tool-permissions` and guarded
@@ -783,6 +785,9 @@ readiness or a later planned milestone.
 - Add compact expandable action blocks in chat for command execution, task
   creation, agent launch, memory retrieval, scheduling decisions, and provider
   routing.
+- Keep chat latency visible: pending assistant messages should show an inline
+  thinking/loading state, and completed turns should have backend timing events
+  plus human-readable timing metadata in the UI.
 - Add per-message metadata affordances: hover/click tooltips for timestamp,
   generation time, iteration count, token/cost estimate where available, memory
   hits, tool calls, and technical ids. Keep normal message labels human-facing:
