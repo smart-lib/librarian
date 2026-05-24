@@ -22,6 +22,7 @@ pub struct Config {
     pub budget: BudgetConfig,
     pub broker: BrokerConfig,
     pub codex: CodexRuntimeConfig,
+    pub claude: ClaudeRuntimeConfig,
     pub third_eye: ThirdEyeConfig,
 }
 
@@ -117,6 +118,15 @@ pub struct CodexRuntimeConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClaudeRuntimeConfig {
+    pub host_home: Option<PathBuf>,
+    pub mount_host_home: bool,
+    pub mount_read_only: bool,
+    pub container_home: String,
+    pub instruction_file: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ThirdEyeConfig {
     pub enabled: bool,
     pub base_url: String,
@@ -131,6 +141,18 @@ impl Default for CodexRuntimeConfig {
             mount_host_home: false,
             mount_read_only: false,
             container_home: "/home/agent/.codex".to_string(),
+        }
+    }
+}
+
+impl Default for ClaudeRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            host_home: None,
+            mount_host_home: false,
+            mount_read_only: false,
+            container_home: "/home/agent/.claude".to_string(),
+            instruction_file: "CLAUDE.md".to_string(),
         }
     }
 }
@@ -251,11 +273,15 @@ impl Config {
             budget: BudgetConfig::default(),
             broker: BrokerConfig::default(),
             codex: CodexRuntimeConfig::default(),
+            claude: ClaudeRuntimeConfig::default(),
             third_eye: ThirdEyeConfig::default(),
             home,
         };
         if config.codex.host_home.is_none() {
             config.codex.host_home = Some(default_codex_home(&config.home));
+        }
+        if config.claude.host_home.is_none() {
+            config.claude.host_home = default_claude_home(&config.home);
         }
         config.third_eye.project_export_dir =
             stored_path(&config.home, config.third_eye.project_export_dir.clone());
@@ -291,6 +317,9 @@ impl Config {
         if let Some(path) = &self.codex.host_home {
             ensure_dir(path)?;
         }
+        if let Some(path) = &self.claude.host_home {
+            ensure_dir(path)?;
+        }
         Ok(())
     }
 
@@ -307,6 +336,7 @@ impl Config {
             budget: self.budget.clone(),
             broker: self.broker.clone(),
             codex: stored_codex_config(&self.home, &self.codex),
+            claude: stored_claude_config(&self.home, &self.claude),
             third_eye: stored_third_eye_config(&self.home, &self.third_eye),
             database_path: path_to_stored(&self.home, &self.database_path),
             vault_path: path_to_stored(&self.home, &self.vault_path),
@@ -332,6 +362,10 @@ impl Config {
         self.codex = stored.codex;
         if let Some(path) = self.codex.host_home.clone() {
             self.codex.host_home = Some(stored_path(&self.home, path));
+        }
+        self.claude = stored.claude;
+        if let Some(path) = self.claude.host_home.clone() {
+            self.claude.host_home = Some(stored_path(&self.home, path));
         }
         self.third_eye = stored.third_eye;
         self.third_eye.project_export_dir =
@@ -364,6 +398,8 @@ struct StoredConfig {
     broker: BrokerConfig,
     #[serde(default)]
     codex: CodexRuntimeConfig,
+    #[serde(default)]
+    claude: ClaudeRuntimeConfig,
     #[serde(default)]
     third_eye: ThirdEyeConfig,
     database_path: Option<PathBuf>,
@@ -432,6 +468,12 @@ fn default_codex_home(home: &Path) -> PathBuf {
         .unwrap_or_else(|| cfg_dir(home).join("codex-home"))
 }
 
+fn default_claude_home(home: &Path) -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| Some(cfg_dir(home).join("claude-home")))
+}
+
 fn default_mount_path_style() -> String {
     "host".to_string()
 }
@@ -454,6 +496,15 @@ fn path_to_stored(home: &Path, path: &Path) -> Option<PathBuf> {
 fn stored_codex_config(home: &Path, codex: &CodexRuntimeConfig) -> CodexRuntimeConfig {
     let mut stored = codex.clone();
     stored.host_home = codex
+        .host_home
+        .as_ref()
+        .and_then(|path| path_to_stored(home, path));
+    stored
+}
+
+fn stored_claude_config(home: &Path, claude: &ClaudeRuntimeConfig) -> ClaudeRuntimeConfig {
+    let mut stored = claude.clone();
+    stored.host_home = claude
         .host_home
         .as_ref()
         .and_then(|path| path_to_stored(home, path));
@@ -516,6 +567,9 @@ mod tests {
         assert!(stored.contains("host_home = "));
         assert!(stored.contains(".cfg"));
         assert!(stored.contains("codex-home"));
+        assert!(stored.contains("[claude]"));
+        assert!(stored.contains("claude-home"));
+        assert!(stored.contains("instruction_file = \"CLAUDE.md\""));
         assert!(stored.contains("[chat]"));
         assert!(stored.contains("assistant_name = \"Sage\""));
         assert!(stored.contains("codex_timeout_seconds = 42"));
@@ -536,6 +590,11 @@ mod tests {
         assert_eq!(reloaded.chat.assistant_name, "Sage");
         assert_eq!(reloaded.chat.memory_hit_limit, 7);
         assert_eq!(reloaded.chat.max_iterations, 5);
+        assert_eq!(reloaded.claude.instruction_file, "CLAUDE.md");
+        assert_eq!(
+            reloaded.claude.host_home,
+            Some(reloaded.home.join(".cfg").join("claude-home"))
+        );
         assert_eq!(
             reloaded.tool_permissions.library_delete,
             ToolPermissionPolicy::Deny
