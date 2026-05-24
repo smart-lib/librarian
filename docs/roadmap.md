@@ -785,6 +785,10 @@ readiness or a later planned milestone.
 - Add compact expandable action blocks in chat for command execution, task
   creation, agent launch, memory retrieval, scheduling decisions, and provider
   routing.
+- Replace raw approval slash output with first-class chat approval cards:
+  summarize the requested action in human language, show affected paths and
+  risk level, and provide Approve/Reject buttons. Keep approval ids available
+  only in technical details/tooltips.
 - Keep chat latency visible: pending assistant messages should show an inline
   thinking/loading state, and completed turns should have backend timing events
   plus human-readable timing metadata in the UI.

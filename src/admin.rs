@@ -3827,6 +3827,26 @@ fn project_folder_name(name: &str) -> String {
     }
 }
 
+fn project_workspace_folder_name(name: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in name.trim().chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "Project".to_string()
+    } else {
+        trimmed
+    }
+}
+
 fn format_project_summary(project: &Project) -> String {
     format!(
         "{} `{}` library={} workspace={}",
@@ -3998,16 +4018,32 @@ async fn execute_approval_slash_command(
                 .db
                 .update_tool_approval_status(id, ToolApprovalStatus::Approved)
                 .await?;
+            let output = execute_approved_tool_approval(state, config, &approval).await?;
+            let approval = state
+                .db
+                .update_tool_approval_status(id, ToolApprovalStatus::Executed)
+                .await?;
             state
                 .db
                 .add_system_event(
                     "tool_approval",
-                    serde_json::json!({ "action": "approve", "approval_id": approval.id }),
+                    serde_json::json!({
+                        "action": "approve_and_execute",
+                        "approval_id": approval.id,
+                        "tool": approval.tool,
+                        "tool_action": approval.action,
+                        "output": output,
+                    }),
                 )
                 .await?;
             slash_reply(
-                &format!("Approved tool proposal {}.", approval.id),
-                serde_json::json!({ "tool": "approval", "command": command, "approval": approval }),
+                &format!("Approved and executed tool proposal {}.", approval.id),
+                serde_json::json!({
+                    "tool": "approval",
+                    "command": command,
+                    "approval": approval,
+                    "output": output,
+                }),
             )
         }
         "reject" => {
@@ -4168,6 +4204,79 @@ async fn execute_approved_tool_approval(
             .await?;
             Ok(serde_json::json!({ "path": tool_path }))
         }
+        ("project", "create_starting_docs_and_project_folder" | "create_starting_docs") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.create",
+                config.tool_permissions.library_create,
+            )
+            .await?;
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "workspace.create",
+                config.tool_permissions.workspace_create,
+            )
+            .await?;
+
+            let library_path = approval_project_library_path(&approval.payload)?;
+            let name = approval_payload_optional_string(&approval.payload, "name")
+                .or_else(|| library_path.rsplit('/').next().map(ToOwned::to_owned))
+                .unwrap_or_else(|| "Project".to_string());
+            let workspace_relative =
+                approval_payload_optional_string(&approval.payload, "workspace_path")
+                    .map(|path| normalize_project_payload_path(&path))
+                    .transpose()?
+                    .unwrap_or_else(|| project_workspace_folder_name(&name));
+
+            let library_folder =
+                library_tools::create_folder(config, LibraryRoot::Library, &library_path)?;
+            let workspace_folder =
+                library_tools::create_folder(config, LibraryRoot::Projects, &workspace_relative)?;
+            let overview_path = format!("{}/Overview.md", library_path.trim_end_matches('/'));
+            let overview_content =
+                approval_starting_doc_content(&name, &approval.payload, &workspace_relative);
+            let overview_file =
+                library_tools::write_markdown(config, &overview_path, &overview_content)?;
+            let project = state
+                .db
+                .add_project(
+                    &name,
+                    &config.home.join("Projects").join(&workspace_relative),
+                )
+                .await?;
+            let project = state
+                .db
+                .attach_project_library_path(project.id, PathBuf::from(&library_path).as_path())
+                .await?;
+            log_project_event(
+                &state.db,
+                "create_starting_docs_and_project_folder",
+                serde_json::json!({
+                    "approval_id": approval.id,
+                    "project_id": project.id,
+                    "name": project.name,
+                    "library_path": project.library_path,
+                    "workspace_path": project.path,
+                    "overview": overview_file.path,
+                }),
+            )
+            .await?;
+            Ok(serde_json::json!({
+                "project": project,
+                "library_folder": library_folder,
+                "workspace_folder": workspace_folder,
+                "overview": overview_file,
+            }))
+        }
         ("memory", "remember" | "add") => {
             ensure_tool_permission(
                 &state.db,
@@ -4243,8 +4352,70 @@ fn approval_payload_string(payload: &serde_json::Value, key: &str) -> Result<Str
         .ok_or_else(|| anyhow::anyhow!("Approval payload must contain non-empty string `{key}`"))
 }
 
+fn approval_payload_optional_string(payload: &serde_json::Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn approval_project_library_path(payload: &serde_json::Value) -> Result<String> {
+    if let Some(path) = approval_payload_optional_string(payload, "library_path") {
+        return normalize_library_payload_path(&path);
+    }
+    if let Some(message) = approval_payload_optional_string(payload, "user_message")
+        .or_else(|| approval_payload_optional_string(payload, "summary"))
+    {
+        if let Some(path) = extract_librarian_path_hint(&message, "/Library/") {
+            return normalize_library_payload_path(&path);
+        }
+    }
+    anyhow::bail!("Approval payload must contain `library_path` for project documentation")
+}
+
+fn normalize_library_payload_path(path: &str) -> Result<String> {
+    let trimmed = path.trim().trim_matches('`').trim_matches('"').trim();
+    let relative = trimmed
+        .strip_prefix("/Library/")
+        .or_else(|| trimmed.strip_prefix("Library/"))
+        .unwrap_or(trimmed);
+    library_tools::normalize_tool_relative_path(relative.trim_matches('/'))
+}
+
+fn normalize_project_payload_path(path: &str) -> Result<String> {
+    let trimmed = path.trim().trim_matches('`').trim_matches('"').trim();
+    let relative = trimmed
+        .strip_prefix("/Projects/")
+        .or_else(|| trimmed.strip_prefix("Projects/"))
+        .unwrap_or(trimmed);
+    library_tools::normalize_tool_relative_path(relative.trim_matches('/'))
+}
+
+fn extract_librarian_path_hint(text: &str, prefix: &str) -> Option<String> {
+    let start = text.find(prefix)?;
+    let tail = &text[start..];
+    let end = tail
+        .find(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | ')' | ']' | '}'))
+        .unwrap_or(tail.len());
+    Some(tail[..end].trim_matches(['.', '`', '"', '\'']).to_string())
+}
+
+fn approval_starting_doc_content(
+    name: &str,
+    payload: &serde_json::Value,
+    workspace_relative: &str,
+) -> String {
+    let summary = approval_payload_optional_string(payload, "summary")
+        .unwrap_or_else(|| "Starting project documentation.".to_string());
+    format!(
+        "# {name}\n\n## Summary\n\n{summary}\n\n## Workspace\n\n`Projects/{workspace_relative}`\n\n## Notes\n\n- Initial documentation created from an approved Librarian chat proposal.\n"
+    )
+}
+
 fn approval_slash_help() -> &'static str {
-    "Approval commands live under /approval:\n/approval list [limit]\n/approval propose <tool> <action> <payload-json>\n/approval approve <approval-id>\n/approval reject <approval-id>\n/approval execute <approval-id>\n\nExecution uses a small whitelist and still passes through normal tool permissions."
+    "Approval commands live under /approval:\n/approval list [limit]\n/approval propose <tool> <action> <payload-json>\n/approval approve <approval-id>\n/approval reject <approval-id>\n/approval execute <approval-id>\n\n/approval approve approves and executes whitelisted actions. /approval execute is kept for already approved proposals."
 }
 
 async fn execute_prompt_slash_command(
@@ -6547,6 +6718,14 @@ mod tests {
         assert_eq!(project_folder_name("My Cool Project"), "my-cool-project");
         assert_eq!(project_folder_name("..."), "...");
         assert_eq!(project_folder_name("  "), "project");
+        assert_eq!(
+            project_workspace_folder_name("AdvenTableDays"),
+            "AdvenTableDays"
+        );
+        assert_eq!(
+            project_workspace_folder_name("My Cool Project"),
+            "My-Cool-Project"
+        );
     }
 
     #[test]
@@ -6564,6 +6743,81 @@ mod tests {
             "notes/test.md"
         );
         assert!(approval_payload_string(&payload, "content").is_err());
+    }
+
+    #[test]
+    fn normalizes_approval_library_paths_from_user_text() {
+        let payload = serde_json::json!({
+            "user_message": "Создай стартовую документацию в /Library/Games/AdvenTableDays/ и пустую папку проекта."
+        });
+        assert_eq!(
+            approval_project_library_path(&payload).expect("library path"),
+            "Games/AdvenTableDays"
+        );
+    }
+
+    #[tokio::test]
+    async fn approval_approve_executes_project_starting_docs_without_secret_key() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-approval-project-{}",
+            Uuid::new_v4()
+        ));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let approval = db
+                .create_tool_approval(
+                    "project",
+                    "create_starting_docs_and_project_folder",
+                    serde_json::json!({
+                        "summary": "Create starter docs for AdvenTable Days.",
+                        "user_message": "Создай стартовую документацию в /Library/Games/AdvenTableDays/ и пустую папку проекта."
+                    }),
+                )
+                .await
+                .expect("approval");
+            let state = AppState {
+                db: db.clone(),
+                config: Arc::new(RwLock::new(config.clone())),
+            };
+
+            let result = execute_approval_slash_command(
+                &state,
+                &config,
+                &["approve".to_string(), approval.id.to_string()],
+            )
+            .await
+            .expect("approve");
+
+            assert!(result.reply.contains("Approved and executed"));
+            assert!(home
+                .join("Library")
+                .join("Games")
+                .join("AdvenTableDays")
+                .join("Overview.md")
+                .is_file());
+            assert!(home.join("Projects").join("AdvenTableDays").is_dir());
+            let project = db
+                .get_project_by_name_or_id("AdvenTableDays")
+                .await
+                .expect("project");
+            assert_eq!(
+                project.library_path.as_deref(),
+                Some(std::path::Path::new("Games/AdvenTableDays"))
+            );
+            assert_eq!(
+                db.get_tool_approval(approval.id)
+                    .await
+                    .expect("approval")
+                    .status,
+                ToolApprovalStatus::Executed
+            );
+        }
+
+        std::fs::remove_dir_all(home).ok();
     }
 
     #[test]

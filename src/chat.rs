@@ -267,7 +267,7 @@ async fn run_librarian_chat_loop_with_runner(
                 }));
                 return Ok(LibrarianChatResult {
                     reply: format!(
-                        "I prepared a tool proposal for approval: `{}` `{}`.\nApproval id: `{}`.\nReview it with `/approval list`, then use `/approval approve {}` or `/approval reject {}`.",
+                        "I prepared a tool proposal for approval: `{}` `{}`.\nApproval id: `{}`.\nReview it with `/approval list`, then use `/approval approve {}` to run it or `/approval reject {}`.",
                         approval.tool, approval.action, approval.id, approval.id, approval.id
                     ),
                     iterations: iteration,
@@ -360,7 +360,7 @@ fn build_librarian_chat_prompt(
         prompt.push_str(instruction_blocks.trim());
         prompt.push_str("\n\n");
     }
-    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If the user asks you to perform a concrete tool action that should require approval, do not claim it is done; reply with {\"action\":\"propose_tool\",\"tool\":\"library|project|agent|prompt|settings\",\"tool_action\":\"specific action\",\"payload\":{\"summary\":\"what would be done\"},\"reason\":\"why approval is needed\"}. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
+    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If the user asks you to perform a concrete tool action that should require approval, do not claim it is done; reply with {\"action\":\"propose_tool\",\"tool\":\"library|project|agent|prompt|settings\",\"tool_action\":\"specific action\",\"payload\":{\"summary\":\"what would be done\",\"name\":\"human name when relevant\",\"library_path\":\"relative Library path when relevant\",\"workspace_path\":\"relative Projects path or existing absolute path when relevant\",\"files\":[{\"path\":\"relative Library markdown path\",\"content\":\"markdown content\"}]},\"reason\":\"why approval is needed\"}. The payload must be structured enough for the tool to execute after user approval. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
 
     prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));
     prompt.push_str(&format!(
