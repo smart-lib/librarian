@@ -2080,8 +2080,8 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
     ))
 }
 
-async fn slash_commands() -> impl IntoResponse {
-    Json(vec![
+async fn slash_commands(State(state): State<AppState>) -> impl IntoResponse {
+    let mut commands = vec![
         serde_json::json!({"command": "/help", "description": "Show available command groups", "group": "general"}),
         serde_json::json!({"command": "/lib help", "description": "Knowledge base files and Markdown tools", "group": "library"}),
         serde_json::json!({"command": "/lib tree", "description": "Show the Library tree", "group": "library"}),
@@ -2105,7 +2105,22 @@ async fn slash_commands() -> impl IntoResponse {
         serde_json::json!({"command": "/agent list", "description": "List background agent jobs", "group": "agent"}),
         serde_json::json!({"command": "/agent preflight ", "description": "Prepare a job command without running it", "group": "agent"}),
         serde_json::json!({"command": "/agent launch ", "description": "Queue an explicit background agent job", "group": "agent"}),
-    ])
+    ];
+    if let Ok(projects) = state.db.list_projects().await {
+        for project in projects.into_iter().take(20) {
+            commands.push(serde_json::json!({
+                "command": format!("/project status {}", project.name),
+                "description": "Show project library/workspace status",
+                "group": "project",
+            }));
+            commands.push(serde_json::json!({
+                "command": format!("/agent launch --project \"{}\" --goal ", project.name),
+                "description": "Queue an explicit agent job for this project",
+                "group": "agent",
+            }));
+        }
+    }
+    Json(commands)
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
