@@ -236,7 +236,8 @@ Tasks:
   project context, and durable memory links. First backend pass adds
   `chat_sessions` and `chat_turns`; `/api/chat` now creates or reuses a session,
   records ordered user/assistant turns, links them to memory ids, and returns
-  `session_id`.
+  `session_id`. Chat-first admin UI now keeps the returned session id across
+  messages and resets it when the active project changes.
 - Add a clear fallback when the chat provider is unavailable: actionable
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that

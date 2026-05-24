@@ -523,7 +523,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         jobs: [],
         providers: { catalog: [], states: [] },
         health: null,
-        activeProject: ''
+        activeProject: '',
+        chatSessionId: null
       };
       const el = id => document.getElementById(id);
       const qsa = selector => Array.from(document.querySelectorAll(selector));
@@ -752,6 +753,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         wireProjectForms();
         qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
           state.activeProject = button.dataset.project || '';
+          state.chatSessionId = null;
           renderProjects();
           renderContext();
           closeOverlay('projects-overlay');
@@ -843,11 +845,17 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const response = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ message: goal, project: project || null })
+            body: JSON.stringify({
+              message: goal,
+              project: project || null,
+              session_id: state.chatSessionId
+            })
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-          appendMessage('assistant', data.reply || 'I am here.', data.project ? `project: ${data.project}` : 'global library');
+          if (data.session_id) state.chatSessionId = data.session_id;
+          const scope = data.project ? `project: ${data.project}` : 'global library';
+          appendMessage('assistant', data.reply || 'I am here.', data.session_id ? `${scope} · session ${shortId(data.session_id)}` : scope);
           await refresh();
         } catch (error) {
           appendMessage('system', `Could not answer: ${error.message || error}`);
