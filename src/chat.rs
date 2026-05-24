@@ -712,6 +712,55 @@ mod tests {
         std::fs::remove_dir_all(home).ok();
     }
 
+    #[tokio::test]
+    async fn chat_loop_returns_approval_ui_metadata() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-chat-approval-ui-{}",
+            Uuid::new_v4()
+        ));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let initial_context = ContextPack {
+                query: "create docs".to_string(),
+                project_id: None,
+                activity_id: None,
+                generated_at: chrono::Utc::now(),
+                hits: Vec::new(),
+            };
+            let mut runner = MockChatRunner::new(vec![
+                r#"{"action":"propose_tool","tool":"project","tool_action":"create_starting_docs_and_project_folder","payload":{"summary":"Create starter docs.","name":"AdvenTableDays","library_path":"Games/AdvenTableDays","workspace_path":"AdvenTableDays"},"reason":"user asked to create a project"}"#,
+            ]);
+
+            let result = run_librarian_chat_loop_with_runner(
+                &db,
+                &config,
+                "Create AdvenTable Days docs.",
+                None,
+                &[],
+                initial_context,
+                &mut runner,
+            )
+            .await
+            .expect("chat loop");
+
+            assert!(result.reply.contains("prepared an action"));
+            let ui = result.ui.expect("ui metadata");
+            assert_eq!(ui["type"], "approval");
+            assert_eq!(ui["approval"]["tool"], "project");
+            assert_eq!(
+                ui["approval"]["payload"]["library_path"],
+                "Games/AdvenTableDays"
+            );
+            assert!(db.list_tool_approvals(10).await.expect("approvals").len() == 1);
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
     #[test]
     fn filters_placeholder_chat_memory_from_context_hits() {
         let pack = ContextPack {
