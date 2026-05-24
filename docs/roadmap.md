@@ -274,7 +274,9 @@ Tasks:
   reasoning remains opaque.
 - Add tests for internal JSON directives, fallback to plain text, and bounded
   memory-search iteration. Directive parsing and plain-text fallback have unit
-  coverage; bounded async loop coverage remains.
+  coverage; first bounded async loop test now uses a mock chat runner to verify
+  search-memory iteration stops at the configured budget and includes retrieved
+  memory in the next prompt.
 - Add admin controls/readout for chat iteration settings and optionally expose a
   compact developer trace when diagnostics are enabled.
 
@@ -692,6 +694,9 @@ Tasks:
 - Add tests for the explicit chat-to-agent boundary. First pass done: `/agent
   launch ... --yes` through `/api/chat` creates exactly one queued job and a
   `queued_from_chat` event.
+- Add tests for bounded iterative chat behavior. First pass done: mock-runner
+  coverage verifies that repeated `search_memory` directives stop at
+  `[chat].max_iterations` without calling the real provider.
 
 Dependencies:
 

@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::Result;
+use async_trait::async_trait;
 use axum::{
     extract::{Path as AxumPath, Query, State},
     response::{Html, IntoResponse},
@@ -5014,6 +5015,40 @@ async fn run_librarian_chat_loop(
     project: Option<&Project>,
     initial_context_pack: ContextPack,
 ) -> Result<LibrarianChatResult> {
+    let mut runner = CodexLibrarianChatRunner;
+    run_librarian_chat_loop_with_runner(
+        db,
+        config,
+        message,
+        project,
+        initial_context_pack,
+        &mut runner,
+    )
+    .await
+}
+
+#[async_trait]
+trait LibrarianChatRunner: Send {
+    async fn run(&mut self, config: &Config, prompt: &str) -> Result<String>;
+}
+
+struct CodexLibrarianChatRunner;
+
+#[async_trait]
+impl LibrarianChatRunner for CodexLibrarianChatRunner {
+    async fn run(&mut self, config: &Config, prompt: &str) -> Result<String> {
+        run_librarian_codex_chat(config, prompt).await
+    }
+}
+
+async fn run_librarian_chat_loop_with_runner(
+    db: &Database,
+    config: &Config,
+    message: &str,
+    project: Option<&Project>,
+    initial_context_pack: ContextPack,
+    runner: &mut (dyn LibrarianChatRunner + Send),
+) -> Result<LibrarianChatResult> {
     let project_id = project.map(|project| project.id);
     let max_iterations = config.chat.max_iterations.clamp(1, 100);
     let mut context_packs = vec![initial_context_pack];
@@ -5031,7 +5066,7 @@ async fn run_librarian_chat_loop(
             iteration,
             max_iterations,
         );
-        let raw_reply = run_librarian_codex_chat(config, &prompt).await?;
+        let raw_reply = runner.run(config, &prompt).await?;
         last_raw_reply = raw_reply.clone();
 
         let Some(directive) = parse_librarian_chat_directive(&raw_reply) else {
@@ -6338,6 +6373,74 @@ mod tests {
         std::fs::remove_dir_all(home).ok();
     }
 
+    #[tokio::test]
+    async fn chat_loop_stops_memory_search_at_iteration_budget() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-chat-loop-{}", Uuid::new_v4()));
+
+        {
+            let mut config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.chat.max_iterations = 2;
+            config.chat.memory_hit_limit = 3;
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let memory_item = db
+                .add_memory_item(
+                    None,
+                    None,
+                    MemoryKind::Fact,
+                    Some("loop-test"),
+                    "The project map should be represented as a library tree.",
+                    Some("test"),
+                    serde_json::json!({}),
+                )
+                .await
+                .expect("memory");
+            memory::embed_item(&db, &config, &memory_item)
+                .await
+                .expect("embedding");
+            let initial_context = ContextPack {
+                query: "how should project maps look?".to_string(),
+                project_id: None,
+                activity_id: None,
+                generated_at: chrono::Utc::now(),
+                hits: Vec::new(),
+            };
+            let mut runner = MockChatRunner::new(vec![
+                r#"{"action":"search_memory","query":"library tree project map","reason":"need durable context"}"#,
+                r#"{"action":"search_memory","query":"more project map detail","reason":"still checking"}"#,
+            ]);
+
+            let result = run_librarian_chat_loop_with_runner(
+                &db,
+                &config,
+                "how should project maps look?",
+                None,
+                initial_context,
+                &mut runner,
+            )
+            .await
+            .expect("chat loop");
+
+            assert_eq!(result.iterations, 2);
+            assert_eq!(runner.calls, 2);
+            assert!(result
+                .reply
+                .contains("The next thing I would look for is: more project map detail"));
+            assert_eq!(result.trace.len(), 2);
+            assert_eq!(result.trace[0]["action"], "search_memory");
+            assert_eq!(result.trace[1]["query"], "more project map detail");
+            assert!(runner.prompts[0].contains("Iteration 1 of 2"));
+            assert!(runner.prompts[1].contains("Iteration 2 of 2"));
+            assert!(runner.prompts[1].contains("This is the final allowed iteration"));
+            assert!(runner.prompts[1].contains("library tree"));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
     #[test]
     fn filters_placeholder_chat_memory_from_context_hits() {
         let pack = ContextPack {
@@ -6406,6 +6509,33 @@ mod tests {
             recency_score: 0.0,
             scope_score: 0.0,
             reason: "test".to_string(),
+        }
+    }
+
+    struct MockChatRunner {
+        replies: std::collections::VecDeque<String>,
+        prompts: Vec<String>,
+        calls: usize,
+    }
+
+    impl MockChatRunner {
+        fn new(replies: Vec<&str>) -> Self {
+            Self {
+                replies: replies.into_iter().map(str::to_string).collect(),
+                prompts: Vec::new(),
+                calls: 0,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LibrarianChatRunner for MockChatRunner {
+        async fn run(&mut self, _config: &Config, prompt: &str) -> Result<String> {
+            self.calls += 1;
+            self.prompts.push(prompt.to_string());
+            self.replies
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("mock chat runner exhausted"))
         }
     }
 
