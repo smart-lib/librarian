@@ -1889,6 +1889,8 @@ async fn run_doctor(config: &Config) -> Result<()> {
     );
     checks.push(host_codex_check().await);
     checks.push(codex_profile_check(config));
+    checks.push(host_claude_check().await);
+    checks.push(claude_profile_check(config));
 
     let overall = if checks
         .iter()
@@ -2187,6 +2189,70 @@ fn codex_profile_has_auth_artifacts(path: &std::path::Path) -> bool {
     has_named_file_within(path, &names, 3)
 }
 
+fn claude_profile_check(config: &Config) -> DoctorCheck {
+    let Some(path) = &config.claude.host_home else {
+        return DoctorCheck::warn(
+            "claude profile",
+            "not configured",
+            "Set `[claude].host_home` or CLAUDE_HOME, then enable the container mount before Claude Code jobs.",
+        );
+    };
+    if !path.exists() {
+        let severity = if config.claude.mount_host_home {
+            DoctorSeverity::Error
+        } else {
+            DoctorSeverity::Warn
+        };
+        return DoctorCheck {
+            severity,
+            label: "claude profile".to_string(),
+            detail: format!("missing {}", path.display()),
+            next_step: Some(
+                "Create/sign in to a Claude profile, or set `[claude].host_home` to the existing profile path.".to_string(),
+            ),
+        };
+    }
+    if !config.claude.mount_host_home {
+        return DoctorCheck::warn(
+            "claude profile",
+            format!("present at {}, container mount disabled", path.display()),
+            "Enable `[claude].mount_host_home` before containerized Claude Code runs.",
+        );
+    }
+    if claude_profile_has_auth_artifacts(path) {
+        return DoctorCheck::ok(
+            "claude profile",
+            format!(
+                "present at {}, mount enabled, instruction file={}",
+                path.display(),
+                config.claude.instruction_file
+            ),
+        );
+    }
+    DoctorCheck::warn(
+        "claude profile",
+        format!(
+            "present at {}, but no common Claude auth/config file found",
+            path.display()
+        ),
+        "Run Claude Code with this profile path if supported, or point `[claude].host_home` at the signed-in host profile.",
+    )
+}
+
+fn claude_profile_has_auth_artifacts(path: &std::path::Path) -> bool {
+    let names = [
+        ".credentials.json",
+        "credentials.json",
+        "settings.json",
+        "config.json",
+        "claude.json",
+    ];
+    if names.iter().any(|name| path.join(name).exists()) {
+        return true;
+    }
+    has_named_file_within(path, &names, 3)
+}
+
 fn has_named_file_within(path: &std::path::Path, names: &[&str], depth: usize) -> bool {
     if depth == 0 {
         return false;
@@ -2216,6 +2282,23 @@ async fn host_codex_check() -> DoctorCheck {
         command_check("host codex", "where.exe", &["codex"]).await
     } else {
         command_check("host codex", "sh", &["-lc", "command -v codex"]).await
+    }
+}
+
+async fn host_claude_check() -> DoctorCheck {
+    if cfg!(windows) {
+        optional_command_check("host claude", "where.exe", &["claude"]).await
+    } else {
+        optional_command_check("host claude", "sh", &["-lc", "command -v claude"]).await
+    }
+}
+
+async fn optional_command_check(label: &str, program: &str, args: &[&str]) -> DoctorCheck {
+    let check = command_check(label, program, args).await;
+    if check.severity == DoctorSeverity::Error {
+        DoctorCheck::warn(label, check.detail, command_next_step(label, ""))
+    } else {
+        check
     }
 }
 
@@ -2272,6 +2355,7 @@ fn command_next_step(label: &str, detail: &str) -> &'static str {
         }
         "agent image" => "Run `librarian runtime build-agent-image`.",
         "host codex" => "Install Codex CLI on the host; use Librarian's local CODEX_HOME when signing in for portability.",
+        "host claude" => "Install Claude Code on the host and sign in before enabling containerized Claude jobs.",
         _ => "Check that the command is installed and available in PATH.",
     }
 }
