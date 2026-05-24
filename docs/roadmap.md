@@ -17,7 +17,10 @@ the product direction.
 
 - MVP chat provider: Codex CLI on the host profile already configured through
   Librarian auth. Background coding agents also use Codex CLI first.
-- Containers have no network access by default.
+- Non-provider containers have no network access by default. Provider-backed
+  agent jobs, such as Codex CLI runs, use provider network by default so the
+  model endpoint is reachable; explicit `--allow-network` remains the broader
+  open-network opt-in.
 - Project mounts are read-write by default, configurable per run/project.
 - No required paid or proprietary external secret service.
 - Localhost admin UI is the default interaction path.
@@ -565,7 +568,10 @@ Tasks:
 
 - Register a test project and run a real containerized Codex job with the
   mounted portable Codex profile. `librarian runtime smoke-plan` now prints the
-  exact WSL/Ubuntu command sequence for this disposable smoke flow.
+  exact WSL/Ubuntu command sequence for this disposable smoke flow. First
+  validation fixed portable profile permissions and provider network defaults;
+  next manual smoke should confirm a complete `codex exec` response inside the
+  agent container.
 - Verify `codex exec` works in the agent image and diagnose auth/profile issues
   without inspecting undocumented auth files.
 - Keep background runs non-blocking from the chat perspective: chat records

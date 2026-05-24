@@ -30,9 +30,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use db::Database;
 use docker_runner::DockerRunner;
-use domain::{
-    JobStatus, MemoryKind, MountMode, NetworkMode, ProviderKind, ScheduleKind, ScheduleStatus,
-};
+use domain::{JobStatus, MemoryKind, MountMode, ProviderKind, ScheduleKind, ScheduleStatus};
 use secrets::SecretVault;
 use serde_json::json;
 use tokio::process::Command as TokioCommand;
@@ -867,11 +865,12 @@ async fn main() -> Result<()> {
             } else {
                 MountMode::ReadWrite
             };
-            let network_mode = if allow_network || secret_grant_token.is_some() {
-                NetworkMode::Open
-            } else {
-                NetworkMode::None
-            };
+            let provider_kind: ProviderKind = provider.into();
+            let network_mode = router::default_network_mode_for_provider(
+                &provider_kind,
+                allow_network,
+                secret_grant_token.is_some(),
+            );
             let gated = gates::process_user_prompt(&db, &config, &goal, "cli-run").await?;
             let goal_memory = db
                 .add_memory_item(
@@ -899,7 +898,7 @@ async fn main() -> Result<()> {
             let job = db
                 .create_job(
                     project.id,
-                    provider.into(),
+                    provider_kind,
                     &gated.content,
                     mount_mode,
                     network_mode,
@@ -1729,6 +1728,7 @@ fn print_runtime_smoke_plan(config: &Config, project: &str) {
     println!();
     println!("3. Queue and run one explicit background agent job:");
     println!("   {binary} --home \"{home}\" run --project \"{project}\" --goal \"Reply with a one paragraph smoke-test summary and do not edit files\" --read-only");
+    println!("   Codex jobs now use provider network by default; pass --allow-network only when a job needs broader network access.");
     println!("   {binary} --home \"{home}\" worker --once");
     println!();
     println!("4. Inspect results:");

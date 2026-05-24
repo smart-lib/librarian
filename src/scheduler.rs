@@ -6,7 +6,7 @@ use crate::{
     config::Config,
     db::Database,
     docker_runner::DockerRunner,
-    domain::{JobStatus, MountMode, NetworkMode, Schedule, ScheduleKind},
+    domain::{JobStatus, MountMode, Schedule, ScheduleKind},
     router,
 };
 
@@ -166,25 +166,19 @@ async fn run_agent_task_schedule(db: &Database, schedule: &Schedule) -> Result<(
     } else {
         MountMode::ReadWrite
     };
-    let network_mode = if schedule
-        .payload
-        .get("allow_network")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
-        || schedule
-            .payload
-            .get("secret_grant_token")
-            .and_then(|value| value.as_str())
-            .is_some()
-    {
-        NetworkMode::Open
-    } else {
-        NetworkMode::None
-    };
     let secret_grant_token = schedule
         .payload
         .get("secret_grant_token")
         .and_then(|value| value.as_str());
+    let network_mode = router::default_network_mode_for_provider(
+        &provider,
+        schedule
+            .payload
+            .get("allow_network")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false),
+        secret_grant_token.is_some(),
+    );
 
     let job = db
         .create_job(

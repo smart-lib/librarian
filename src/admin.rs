@@ -17,8 +17,7 @@ use crate::{
     config::{Config, ToolPermissionPolicy, ToolPermissionsConfig},
     db::Database,
     domain::{
-        JobStatus, MemoryKind, MountMode, NetworkMode, Project, ScheduleKind, ScheduleStatus,
-        ToolApprovalStatus,
+        JobStatus, MemoryKind, MountMode, Project, ScheduleKind, ScheduleStatus, ToolApprovalStatus,
     },
     gates, library_tools,
     library_tools::LibraryRoot,
@@ -3009,13 +3008,12 @@ async fn create_job(
     } else {
         MountMode::ReadWrite
     };
-    let network_mode = if input.allow_network.unwrap_or(false) {
-        NetworkMode::Open
-    } else if input.secret_grant_token.is_some() {
-        NetworkMode::Open
-    } else {
-        NetworkMode::None
-    };
+    let provider = router::parse_provider_kind(input.provider.as_deref().unwrap_or("codex"))?;
+    let network_mode = router::default_network_mode_for_provider(
+        &provider,
+        input.allow_network.unwrap_or(false),
+        input.secret_grant_token.is_some(),
+    );
     let config = state.config.read().await.clone();
     let gated = gates::process_user_prompt(&state.db, &config, &input.goal, "admin-chat").await?;
     let user_memory = state
@@ -3046,7 +3044,7 @@ async fn create_job(
         .db
         .create_job(
             project.id,
-            router::parse_provider_kind(input.provider.as_deref().unwrap_or("codex"))?,
+            provider,
             &gated.content,
             mount_mode,
             network_mode,
@@ -5491,11 +5489,11 @@ async fn execute_agent_slash_command(
                 ));
             }
             let project = state.db.get_project_by_name_or_id(&request.project).await?;
-            let network_mode = if request.allow_network || request.secret_grant_token.is_some() {
-                NetworkMode::Open
-            } else {
-                NetworkMode::None
-            };
+            let network_mode = router::default_network_mode_for_provider(
+                &request.provider,
+                request.allow_network,
+                request.secret_grant_token.is_some(),
+            );
             let mount_mode = if request.read_only {
                 MountMode::ReadOnly
             } else {
@@ -6995,7 +6993,10 @@ mod tests {
             assert_eq!(jobs[0].project_id, project.id);
             assert!(matches!(jobs[0].status, JobStatus::Queued));
             assert!(matches!(jobs[0].mount_mode, MountMode::ReadOnly));
-            assert!(matches!(jobs[0].network_mode, NetworkMode::None));
+            assert!(matches!(
+                jobs[0].network_mode,
+                crate::domain::NetworkMode::Provider
+            ));
             assert_eq!(jobs[0].goal, "summarize state");
             let events = db.list_job_events(jobs[0].id).await.expect("events");
             assert!(events.iter().any(|event| event.kind == "queued_from_chat"));

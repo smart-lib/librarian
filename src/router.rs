@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::Config,
     db::Database,
-    domain::{Job, ProviderKind},
+    domain::{Job, NetworkMode, ProviderKind},
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -40,6 +40,27 @@ pub fn parse_provider_kind(value: &str) -> Result<ProviderKind> {
         "ClaudeCode" | "claude-code" | "claude_code" => Ok(ProviderKind::ClaudeCode),
         _ => bail!("Unknown provider `{value}`"),
     }
+}
+
+pub fn default_network_mode_for_provider(
+    provider: &ProviderKind,
+    allow_open_network: bool,
+    has_secret_grant: bool,
+) -> NetworkMode {
+    if allow_open_network || has_secret_grant {
+        NetworkMode::Open
+    } else if provider_requires_provider_network(provider) {
+        NetworkMode::Provider
+    } else {
+        NetworkMode::None
+    }
+}
+
+pub fn provider_requires_provider_network(provider: &ProviderKind) -> bool {
+    matches!(
+        provider,
+        ProviderKind::Codex | ProviderKind::OpenRouter | ProviderKind::ClaudeCode
+    )
 }
 
 pub fn model_catalog() -> Vec<ModelMetadata> {
@@ -259,6 +280,21 @@ pub fn detect_provider_diagnostic(job: &Job, text: &str) -> Option<serde_json::V
                 "next_step": "Upgrade Librarian and retry. The Docker runner should launch Codex with the host profile owner UID/GID on Unix hosts.",
             }));
         }
+        if lower.contains("failed to lookup address information")
+            || lower.contains("failed to connect to websocket")
+            || lower.contains("stream disconnected before completion")
+                && lower.contains("chatgpt.com")
+            || lower.contains("error sending request for url") && lower.contains("chatgpt.com")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "codex_provider_network_unavailable",
+                "severity": "error",
+                "message": "Codex started, but the agent container could not reach ChatGPT/OpenAI endpoints.",
+                "next_step": "Upgrade Librarian and retry. Codex-backed jobs should use provider network by default; use `--allow-network` only for broader job network access.",
+            }));
+        }
         if lower.contains("401 missing bearer")
             || lower.contains("missing bearer")
             || lower.contains("no bearer token")
@@ -405,6 +441,28 @@ mod tests {
         )
         .expect("diagnostic");
         assert_eq!(diagnostic["code"], "codex_profile_permission_denied");
+    }
+
+    #[test]
+    fn codex_defaults_to_provider_network() {
+        assert!(matches!(
+            default_network_mode_for_provider(&ProviderKind::Codex, false, false),
+            NetworkMode::Provider
+        ));
+        assert!(matches!(
+            default_network_mode_for_provider(&ProviderKind::Codex, true, false),
+            NetworkMode::Open
+        ));
+    }
+
+    #[test]
+    fn detects_codex_provider_network_unavailable() {
+        let diagnostic = detect_provider_diagnostic(
+            &codex_job(),
+            "failed to connect to websocket: failed to lookup address information, url: wss://chatgpt.com/backend-api/codex/responses",
+        )
+        .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "codex_provider_network_unavailable");
     }
 
     #[test]
