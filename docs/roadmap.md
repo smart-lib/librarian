@@ -838,7 +838,8 @@ readiness or a later planned milestone.
 - Replace raw approval slash output with first-class chat approval cards:
   summarize the requested action in human language, show affected paths and
   risk level, and provide Approve/Reject buttons. Keep approval ids available
-  only in technical details/tooltips.
+  only in technical details/tooltips. First card pass is active for chat-created
+  approvals; slash list output now shows compact summaries instead of raw JSON.
 - Keep chat latency visible: pending assistant messages should show an inline
   thinking/loading state, and completed turns should have backend timing events
   plus human-readable timing metadata in the UI. First UI pass now shows

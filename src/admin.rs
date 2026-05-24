@@ -4800,10 +4800,7 @@ async fn execute_approval_slash_command(
             let approvals = state.db.list_tool_approvals(limit).await?;
             let mut reply = format!("Tool approvals: {} item(s).", approvals.len());
             for approval in &approvals {
-                reply.push_str(&format!(
-                    "\n{} {:?} {}.{} {}",
-                    approval.id, approval.status, approval.tool, approval.action, approval.payload
-                ));
+                reply.push_str(&format!("\n{}", approval_summary_line(approval)));
             }
             slash_reply(
                 &reply,
@@ -4964,6 +4961,30 @@ fn slash_approval_id_arg(args: &[String], usage: &str) -> Result<Uuid> {
 
 fn parse_json_payload(value: &str) -> Result<serde_json::Value> {
     serde_json::from_str(value).map_err(|error| anyhow::anyhow!("Invalid JSON payload: {error}"))
+}
+
+fn approval_summary_line(approval: &crate::domain::ToolApproval) -> String {
+    let summary = approval
+        .payload
+        .get("summary")
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            approval
+                .payload
+                .get("path")
+                .and_then(|value| value.as_str())
+        })
+        .or_else(|| {
+            approval
+                .payload
+                .get("library_path")
+                .and_then(|value| value.as_str())
+        })
+        .unwrap_or("No summary");
+    format!(
+        "{} {:?} {}.{} - {}",
+        approval.id, approval.status, approval.tool, approval.action, summary
+    )
 }
 
 async fn execute_approved_tool_approval(
