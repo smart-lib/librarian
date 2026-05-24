@@ -193,6 +193,8 @@ enum RuntimeCommand {
     BuildAgentImage {
         #[arg(long)]
         no_codex: bool,
+        #[arg(long)]
+        no_claude: bool,
     },
     SmokePlan {
         #[arg(long, default_value = "LibrarianSmoke")]
@@ -583,7 +585,7 @@ async fn run_setup(
     }
 
     if build_agent_image {
-        build_agent_image_with_config(&config, false).await?;
+        build_agent_image_with_config(&config, false, false).await?;
     } else {
         println!("Agent image build skipped. Run `librarian runtime build-agent-image` when the runtime is ready.");
     }
@@ -634,13 +636,19 @@ async fn wsl_podman_available(distro: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn build_agent_image_with_config(config: &Config, no_codex: bool) -> Result<()> {
+async fn build_agent_image_with_config(
+    config: &Config,
+    no_codex: bool,
+    no_claude: bool,
+) -> Result<()> {
     let install_codex = if no_codex { "false" } else { "true" };
+    let install_claude = if no_claude { "false" } else { "true" };
     println!(
-        "Building {} from Dockerfile.agent (INSTALL_CODEX={install_codex})",
+        "Building {} from Dockerfile.agent (INSTALL_CODEX={install_codex}, INSTALL_CLAUDE={install_claude})",
         config.docker.agent_image
     );
-    let build_arg = format!("INSTALL_CODEX={install_codex}");
+    let codex_build_arg = format!("INSTALL_CODEX={install_codex}");
+    let claude_build_arg = format!("INSTALL_CLAUDE={install_claude}");
     let mut args = config.docker.runtime_args.clone();
     args.extend(
         [
@@ -648,7 +656,9 @@ async fn build_agent_image_with_config(config: &Config, no_codex: bool) -> Resul
             "-t",
             &config.docker.agent_image,
             "--build-arg",
-            &build_arg,
+            &codex_build_arg,
+            "--build-arg",
+            &claude_build_arg,
             "-f",
             "Dockerfile.agent",
             ".",
@@ -766,8 +776,11 @@ async fn main() -> Result<()> {
                 config.save()?;
                 println!("Runtime set to {}", runtime_display(&config));
             }
-            RuntimeCommand::BuildAgentImage { no_codex } => {
-                build_agent_image_with_config(&config, no_codex).await?;
+            RuntimeCommand::BuildAgentImage {
+                no_codex,
+                no_claude,
+            } => {
+                build_agent_image_with_config(&config, no_codex, no_claude).await?;
             }
             RuntimeCommand::SmokePlan { project } => {
                 print_runtime_smoke_plan(&config, &project);

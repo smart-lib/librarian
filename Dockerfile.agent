@@ -1,6 +1,7 @@
 FROM alpine:3.20
 
 ARG INSTALL_CODEX=true
+ARG INSTALL_CLAUDE=true
 
 RUN apk add --no-cache \
     bash \
@@ -15,6 +16,7 @@ RUN apk add --no-cache \
     tini
 
 RUN if [ "$INSTALL_CODEX" = "true" ]; then npm install -g @openai/codex; fi
+RUN if [ "$INSTALL_CLAUDE" = "true" ]; then npm install -g @anthropic-ai/claude-code; fi
 
 RUN addgroup -S agent && adduser -S agent -G agent
 

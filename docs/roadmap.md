@@ -786,8 +786,9 @@ Tasks:
   provider-specific way, run Claude from the mounted project directory, pass the
   task prompt as the normal Claude launch prompt, and ensure `CLAUDE.md` is
   present when Claude starts. First implementation pass adds `[claude]` runtime
-  config, optional profile mount, `CLAUDE.md` run-layer mount, and `claude -p`
-  launch from `/workspace/project`.
+  config, optional profile mount, `CLAUDE.md` run-layer mount, `claude -p`
+  launch from `/workspace/project`, and default Claude Code installation in
+  `Dockerfile.agent` / `runtime build-agent-image`.
 - Add provider-specific launch-shape metadata. Codex expects `codex exec` plus
   `CODEX_HOME`; Claude should behave as if launched normally in a directory
   containing `CLAUDE.md`; future providers may need different identity files,

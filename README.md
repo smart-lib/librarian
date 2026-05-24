@@ -189,6 +189,10 @@ sg docker -c '"$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" runt
 "$HOME/Librarian/.app/bin/librarian" --home "$HOME/Librarian" doctor
 ```
 
+The agent image installs Codex and Claude Code by default. Use
+`runtime build-agent-image --no-claude` or `--no-codex` only for a deliberately
+smaller provider-specific image.
+
 On some Ubuntu/WSL installations, Docker group membership is not active until
 the next login. The bootstrap tries to use a fresh `docker` group session for
 the image build; if the system refuses, log out/in or rerun:
