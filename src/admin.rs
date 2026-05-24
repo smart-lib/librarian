@@ -599,6 +599,23 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         renderProjects();
         renderContext();
       }
+      async function restoreLatestChatSession() {
+        if (state.chatSessionId) return;
+        const sessions = await loadJson('/api/chat/sessions?limit=1', []);
+        if (!Array.isArray(sessions) || !sessions.length) return;
+        const session = sessions[0];
+        const transcript = await loadJson(`/api/chat/sessions/${encodeURIComponent(session.id)}/turns`, null);
+        if (!transcript || !Array.isArray(transcript.turns)) return;
+        state.chatSessionId = session.id;
+        const thread = el('thread');
+        thread.innerHTML = '';
+        for (const turn of transcript.turns) {
+          appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? `session ${shortId(session.id)}` : '');
+        }
+        if (!transcript.turns.length) {
+          appendMessage('system', `Restored empty chat session ${shortId(session.id)}.`);
+        }
+      }
       function renderContext() {
         el('context-line').textContent = 'Smart. Silent. Steady.';
       }
@@ -873,7 +890,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           el('chat-form').requestSubmit();
         }
       });
-      refresh().catch(error => appendMessage('system', `Admin data failed to load: ${error.message || error}`));
+      refresh()
+        .then(restoreLatestChatSession)
+        .catch(error => appendMessage('system', `Admin data failed to load: ${error.message || error}`));
     })();
   </script>
 </body>
