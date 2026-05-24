@@ -546,7 +546,9 @@ Tasks:
   a Prompt tab in settings for adding blocks, enabling/disabling blocks, and
   rendering target previews. Second UI/API pass adds edit, delete, position
   moves, and export proposals that create approvals instead of writing files
-  directly.
+  directly. Third UI pass groups blocks by target, adds inline textarea editing,
+  markdown toggles, and position editing so the builder is usable without
+  browser prompt dialogs.
 - Support presets for Librarian identity, operating principles, memory policy,
   tool permissions, git policy, Obsidian/knowledge-base behavior, task planning style,
   project goals, and provider caveats.

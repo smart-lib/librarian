@@ -481,6 +481,16 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       align-items: end;
     }
     .form-grid .wide { grid-column: span 2; }
+    .prompt-block {
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+    .prompt-block textarea {
+      min-height: 118px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+    }
     .project-stage {
       min-height: 0;
       overflow: auto;
@@ -1036,30 +1046,43 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
       function renderPromptBuilder() {
         const blocks = state.promptBlocks;
-        const targets = Array.from(new Set(blocks.map(block => block.target))).sort();
-        const targetOptions = targets.length ? targets.map(target => `<option value="${htmlEscape(target)}">${htmlEscape(target)}</option>`).join('') : '<option value="librarian">librarian</option><option value="agents">agents</option><option value="AGENTS.md">AGENTS.md</option><option value="CLAUDE.md">CLAUDE.md</option>';
+        const targets = Array.from(new Set(['librarian', 'agents', 'AGENTS.md', 'CLAUDE.md', ...blocks.map(block => block.target)])).sort();
+        const targetOptions = targets.map(target => `<option value="${htmlEscape(target)}">${htmlEscape(target)}</option>`).join('');
         const form = `<form id="prompt-block-form" class="card stack">
           <h3>Add block</h3>
           <div class="form-grid">
             <div><label for="prompt-target">Target</label><input id="prompt-target" list="prompt-targets" value="librarian"><datalist id="prompt-targets">${targetOptions}</datalist></div>
             <div><label for="prompt-name">Name</label><input id="prompt-name" required placeholder="identity"></div>
-            <div class="wide"><label for="prompt-content">Content</label><input id="prompt-content" required placeholder="You are Librarian..."></div>
+            <label><input id="prompt-markdown" type="checkbox" checked> markdown</label>
+            <div class="wide"><label for="prompt-content">Content</label><textarea id="prompt-content" required rows="6" placeholder="You are Librarian..."></textarea></div>
             <button type="submit">Add</button>
           </div>
         </form>`;
-        const list = blocks.length ? blocks.map(block => `<div class="card">
-          <h3>${htmlEscape(block.name)} <span class="muted tiny">[${htmlEscape(block.target)} #${block.position}]</span></h3>
-          <div class="muted tiny">${htmlEscape(block.content)}</div>
+        const byTarget = targets
+          .map(target => [target, blocks.filter(block => block.target === target).sort((a, b) => a.position - b.position)])
+          .filter(([, items]) => items.length);
+        const list = byTarget.length ? byTarget.map(([target, items]) => `<section class="card stack">
+          <h3>${htmlEscape(target)} <span class="muted tiny">${items.filter(item => item.enabled).length}/${items.length} enabled</span></h3>
           <div class="row">
-            <button type="button" class="secondary" data-render-prompt="${htmlEscape(block.target)}">Preview target</button>
-            <button type="button" data-toggle-prompt="${htmlEscape(block.id)}" data-enabled="${block.enabled ? 'false' : 'true'}">${block.enabled ? 'Disable' : 'Enable'}</button>
-            <button type="button" class="secondary" data-edit-prompt="${htmlEscape(block.id)}">Edit</button>
-            <button type="button" class="secondary" data-move-prompt="${htmlEscape(block.id)}" data-position="${block.position - 1}">Up</button>
-            <button type="button" class="secondary" data-move-prompt="${htmlEscape(block.id)}" data-position="${block.position + 1}">Down</button>
-            <button type="button" class="danger" data-delete-prompt="${htmlEscape(block.id)}">Delete</button>
-            <button type="button" class="secondary" data-export-prompt="${htmlEscape(block.target)}">Export proposal</button>
+            <button type="button" class="secondary" data-render-prompt="${htmlEscape(target)}">Preview target</button>
+            <button type="button" class="secondary" data-export-prompt="${htmlEscape(target)}">Export proposal</button>
           </div>
-        </div>`).join('') : '<div class="card muted">No prompt blocks yet.</div>';
+          ${items.map(block => `<div class="prompt-block ${block.enabled ? '' : 'muted'}">
+            <div class="form-grid">
+              <div><label>Name</label><input id="prompt-name-${htmlEscape(block.id)}" value="${htmlEscape(block.name)}"></div>
+              <div><label>Position</label><input id="prompt-position-${htmlEscape(block.id)}" type="number" value="${block.position}"></div>
+              <label><input id="prompt-markdown-${htmlEscape(block.id)}" type="checkbox" ${block.markdown ? 'checked' : ''}> markdown</label>
+              <div class="wide"><label>Content</label><textarea id="prompt-content-${htmlEscape(block.id)}" rows="7">${htmlEscape(block.content)}</textarea></div>
+            </div>
+            <div class="row">
+              <button type="button" data-save-prompt="${htmlEscape(block.id)}">Save</button>
+              <button type="button" data-toggle-prompt="${htmlEscape(block.id)}" data-enabled="${block.enabled ? 'false' : 'true'}">${block.enabled ? 'Disable' : 'Enable'}</button>
+              <button type="button" class="secondary" data-move-prompt="${htmlEscape(block.id)}" data-position="${block.position - 1}">Up</button>
+              <button type="button" class="secondary" data-move-prompt="${htmlEscape(block.id)}" data-position="${block.position + 1}">Down</button>
+              <button type="button" class="danger" data-delete-prompt="${htmlEscape(block.id)}">Delete</button>
+            </div>
+          </div>`).join('')}
+        </section>`).join('') : '<div class="card muted">No prompt blocks yet.</div>';
         el('prompt-builder').innerHTML = `${form}<div id="prompt-preview" class="card muted">Choose preview target from any block.</div>${list}`;
         el('prompt-block-form').addEventListener('submit', createPromptBlockFromUi);
         qsa('[data-toggle-prompt]').forEach(button => button.addEventListener('click', async () => {
@@ -1067,7 +1090,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           await refresh();
         }));
         qsa('[data-render-prompt]').forEach(button => button.addEventListener('click', () => renderPromptPreview(button.dataset.renderPrompt)));
-        qsa('[data-edit-prompt]').forEach(button => button.addEventListener('click', () => editPromptBlock(button.dataset.editPrompt)));
+        qsa('[data-save-prompt]').forEach(button => button.addEventListener('click', () => savePromptBlock(button.dataset.savePrompt)));
         qsa('[data-move-prompt]').forEach(button => button.addEventListener('click', () => updatePromptBlock(button.dataset.movePrompt, { position: Number(button.dataset.position) })));
         qsa('[data-delete-prompt]').forEach(button => button.addEventListener('click', () => deletePromptBlock(button.dataset.deletePrompt)));
         qsa('[data-export-prompt]').forEach(button => button.addEventListener('click', () => proposePromptExport(button.dataset.exportPrompt)));
@@ -1078,21 +1101,20 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           target: el('prompt-target').value,
           name: el('prompt-name').value,
           content: el('prompt-content').value,
-          markdown: true
+          markdown: el('prompt-markdown').checked
         });
       }
       async function renderPromptPreview(target) {
         const data = await loadJson(`/api/prompt-blocks/render?target=${encodeURIComponent(target)}`, null);
         el('prompt-preview').innerHTML = data ? `<h3>${htmlEscape(target)}</h3><pre>${htmlEscape(data.rendered || '')}</pre>` : 'Could not render prompt.';
       }
-      async function editPromptBlock(id) {
-        const block = state.promptBlocks.find(item => item.id === id);
-        if (!block) return;
-        const name = prompt('Block name', block.name);
-        if (name === null) return;
-        const content = prompt('Block content', block.content);
-        if (content === null) return;
-        await updatePromptBlock(id, { name, content });
+      async function savePromptBlock(id) {
+        await updatePromptBlock(id, {
+          name: el(`prompt-name-${id}`).value,
+          content: el(`prompt-content-${id}`).value,
+          position: Number(el(`prompt-position-${id}`).value || 0),
+          markdown: el(`prompt-markdown-${id}`).checked
+        });
       }
       async function updatePromptBlock(id, body) {
         const response = await fetch(`/api/prompt-blocks/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
