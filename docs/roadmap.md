@@ -231,7 +231,10 @@ Tasks:
 - Add persisted chat runtime settings for Codex timeout, memory hit limit, and
   future max iterations. First pass done in `[chat]`.
 - Save useful user and assistant turns into memory, but distinguish raw chat
-  transcript from durable facts/decisions/instructions.
+  transcript from durable facts/decisions/instructions. First pass marks chat
+  user/assistant memory with `chat_session_id`, `memory_role=raw_chat_turn`,
+  and `durability=transcript`; durable facts/decisions remain separate memory
+  kinds/tools.
 - Add a small chat transcript model: session/thread id, ordered turns, selected
   project context, and durable memory links. First backend pass adds
   `chat_sessions` and `chat_turns`; `/api/chat` now creates or reuses a session,

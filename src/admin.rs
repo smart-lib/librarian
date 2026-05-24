@@ -2701,6 +2701,9 @@ async fn librarian_chat(
             serde_json::json!({
                 "project": project.as_ref().map(|project| project.name.clone()),
                 "scope": if project.is_some() { "project" } else { "global" },
+                "chat_session_id": chat_session.id,
+                "memory_role": "raw_chat_turn",
+                "durability": "transcript",
             }),
         )
         .await?;
@@ -2758,6 +2761,9 @@ async fn librarian_chat(
             serde_json::json!({
                 "project": project.as_ref().map(|project| project.name.clone()),
                 "scope": if project.is_some() { "project" } else { "global" },
+                "chat_session_id": chat_session.id,
+                "memory_role": "raw_chat_turn",
+                "durability": "transcript",
                 "mode": chat_result.mode,
                 "iterations": chat_result.iterations,
                 "trace": chat_result.trace,
@@ -5940,6 +5946,18 @@ mod tests {
                         .get("mode")
                         .and_then(serde_json::Value::as_str)
                         == Some("slash-command")
+            }));
+            let session_id_text = session_id.to_string();
+            assert!(recent_memory.iter().all(|item| {
+                item.metadata
+                    .get("chat_session_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(session_id_text.as_str())
+                    && item
+                        .metadata
+                        .get("durability")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("transcript")
             }));
             let turns = db.list_chat_turns(session_id).await.expect("chat turns");
             assert_eq!(turns.len(), 2);
