@@ -6214,6 +6214,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn memory_contradict_suppresses_old_item_from_retrieval() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-memory-contradict-{}",
+            Uuid::new_v4()
+        ));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let old = db
+                .add_memory_item(
+                    None,
+                    None,
+                    MemoryKind::Fact,
+                    Some("atlas"),
+                    "Atlas color is red",
+                    Some("test"),
+                    serde_json::json!({ "durability": "durable" }),
+                )
+                .await
+                .expect("old memory");
+            memory::embed_item(&db, &config, &old)
+                .await
+                .expect("old embed");
+
+            execute_memory_slash_command(
+                &db,
+                &config,
+                None,
+                &[
+                    "contradict".to_string(),
+                    old.id.to_string(),
+                    "fact".to_string(),
+                    "Atlas color is green".to_string(),
+                ],
+            )
+            .await
+            .expect("contradict");
+            let pack = memory::retrieve_context_with_config(
+                &db,
+                Some(&config),
+                memory::RetrievalRequest {
+                    query: "atlas color".to_string(),
+                    project_id: None,
+                    activity_id: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("context");
+
+            assert!(!pack.hits.iter().any(|hit| hit.item.id == old.id));
+            assert!(pack
+                .hits
+                .iter()
+                .any(|hit| hit.item.contradicts_id == Some(old.id)));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
     async fn explicit_agent_slash_command_creates_one_queued_job() {
         let home = std::env::current_dir()
             .expect("current dir")

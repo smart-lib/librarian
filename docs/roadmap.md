@@ -730,7 +730,8 @@ Tasks:
 - Add tests for raw transcript separation from durable memory. First pass covers
   durable retrieval filtering and `/mem recent` hiding raw chat turns.
 - Add tests for durable memory correction links. First pass covers
-  `/mem supersede` creating a new durable item linked through `supersedes_id`.
+  `/mem supersede` creating a new durable item linked through `supersedes_id`
+  and `/mem contradict` suppressing the older contradicted item from retrieval.
 
 Dependencies:
 
