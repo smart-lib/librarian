@@ -92,6 +92,7 @@ async fn run_librarian_chat_loop_with_runner(
         let librarian_blocks = db.list_prompt_blocks(Some("librarian")).await?;
         let librarian_instruction_blocks = prompt::render_prompt_blocks(&librarian_blocks);
         let prompt = build_librarian_chat_prompt(
+            config,
             message,
             project,
             recent_turns,
@@ -348,6 +349,7 @@ fn chat_provider_unavailable_result(
 }
 
 fn build_librarian_chat_prompt(
+    config: &Config,
     message: &str,
     project: Option<&Project>,
     recent_turns: &[ChatTurn],
@@ -359,8 +361,16 @@ fn build_librarian_chat_prompt(
     let scope = project
         .map(|project| format!("project `{}`", project.name))
         .unwrap_or_else(|| "global conversation".to_string());
+    let assistant_name = config.chat.assistant_name.trim();
+    let assistant_name = if assistant_name.is_empty() {
+        "Librarian"
+    } else {
+        assistant_name
+    };
     let mut prompt = String::new();
-    prompt.push_str("You are Librarian: a calm, practical assistant for organizing ideas, projects, memory, and work.\n");
+    prompt.push_str(&format!(
+        "You are {assistant_name}: a calm, practical assistant for organizing ideas, projects, memory, and work.\n"
+    ));
     prompt.push_str("You are speaking directly with the user in the admin chat.\n");
     prompt.push_str("You are not a background coding agent in this conversation.\n");
     prompt.push_str("Do not claim to have launched agents, edited files, changed settings, or used tools unless the provided context explicitly says so.\n");
@@ -799,6 +809,13 @@ mod tests {
 
     #[test]
     fn chat_prompt_includes_recent_conversation_turns() {
+        let mut config = Config::load_or_default(Some(
+            std::env::current_dir()
+                .expect("current dir")
+                .join(format!(".librarian-test-chat-prompt-{}", Uuid::new_v4())),
+        ))
+        .expect("config");
+        config.chat.assistant_name = "Sage".to_string();
         let session_id = Uuid::new_v4();
         let recent_turns = vec![
             test_chat_turn(session_id, 1, "user", "We are designing a library map."),
@@ -810,6 +827,7 @@ mod tests {
             ),
         ];
         let prompt = build_librarian_chat_prompt(
+            &config,
             "What should the next UI step be?",
             None,
             &recent_turns,
@@ -826,6 +844,7 @@ mod tests {
         );
 
         assert!(prompt.contains("## Recent Conversation"));
+        assert!(prompt.contains("You are Sage:"));
         assert!(prompt.contains("user: We are designing a library map."));
         assert!(prompt.contains("assistant: Use shelves for folders and books for notes."));
         assert!(prompt.contains("## User Message"));

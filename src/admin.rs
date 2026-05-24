@@ -827,9 +827,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const thread = el('thread');
         thread.innerHTML = '';
         for (const turn of transcript.turns) {
-          const article = appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? 'Librarian' : '');
+          const article = appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? assistantName() : '');
           if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'approval') {
-            setApprovalCard(article, turn.metadata.ui.approval, turn.content, 'Librarian');
+            setApprovalCard(article, turn.metadata.ui.approval, turn.content, assistantName());
           }
         }
         if (!transcript.turns.length) {
@@ -837,7 +837,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
       }
       function renderContext() {
+        document.querySelector('.brand').firstChild.nodeValue = assistantName();
         el('context-line').textContent = 'Smart. Silent. Steady.';
+      }
+      function assistantName() {
+        const name = state.health?.chat?.assistant_name || 'Librarian';
+        return String(name).trim() || 'Librarian';
       }
       function renderOverview() {
         const health = state.health || {};
@@ -847,7 +852,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const secrets = health.secrets || {};
         el('overview').innerHTML = [
           card('Worker', `queued=${worker.queued_jobs ?? 0}<br>running=${worker.running_jobs ?? 0}<br>slots=${worker.available_slots ?? '__WORKER_CONCURRENCY__'}`),
-          card('Chat', `timeout=${chat.codex_timeout_seconds ?? 180}s<br>memory hits=${chat.memory_hit_limit ?? 12}<br>max iterations=${chat.max_iterations ?? 6}`),
+          card('Chat', `name=${htmlEscape(chat.assistant_name || 'Librarian')}<br>timeout=${chat.codex_timeout_seconds ?? 180}s<br>memory hits=${chat.memory_hit_limit ?? 12}<br>max iterations=${chat.max_iterations ?? 6}`),
           card('Memory', `items=${memory.items ?? 0}<br>embedded=${memory.embedded_items ?? 0}<br>missing=${memory.missing_embeddings ?? 0}`),
           card('Knowledge base', `${htmlEscape(health.vault_path || 'Library')}<br><span class="muted">${htmlEscape(health.database_path || '.mdb/librarian.db')}</span>`),
           card('Secrets', `${htmlEscape(secrets.status || 'unknown')}<br><span class="muted">${htmlEscape(secrets.location || '')}</span>`)
@@ -1138,7 +1143,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
           if (data.session_id) state.chatSessionId = data.session_id;
           const elapsed = Math.max(1, Math.round(performance.now() - startedAt));
-          const detail = data.mode === 'slash-command' ? 'Command result' : `Librarian · ${(elapsed / 1000).toFixed(1)}s`;
+          const detail = data.mode === 'slash-command' ? 'Command result' : `${assistantName()} · ${(elapsed / 1000).toFixed(1)}s`;
           if (data.ui?.type === 'approval') {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
           } else {
@@ -1159,7 +1164,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       el('new-chat').addEventListener('click', () => {
         state.chatSessionId = null;
         el('thread').innerHTML = '';
-        appendMessage('assistant', 'New chat started.', 'Librarian');
+        appendMessage('assistant', 'New chat started.', assistantName());
         el('goal-input').focus();
       });
       qsa('[data-close]').forEach(button => button.addEventListener('click', () => closeOverlay(button.dataset.close)));
@@ -2089,10 +2094,11 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
                 "queued_jobs": queued_jobs,
                 "available_slots": available_slots,
             },
-        "chat": {
-            "codex_timeout_seconds": config.chat.codex_timeout_seconds,
-            "memory_hit_limit": config.chat.memory_hit_limit,
-            "max_iterations": config.chat.max_iterations,
+            "chat": {
+                "assistant_name": config.chat.assistant_name,
+                "codex_timeout_seconds": config.chat.codex_timeout_seconds,
+                "memory_hit_limit": config.chat.memory_hit_limit,
+                "max_iterations": config.chat.max_iterations,
         },
         "tool_permissions": config.tool_permissions,
         "routing": {

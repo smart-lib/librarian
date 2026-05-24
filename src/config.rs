@@ -47,9 +47,15 @@ pub struct WorkerConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ChatConfig {
+    #[serde(default = "default_assistant_name")]
+    pub assistant_name: String,
     pub codex_timeout_seconds: u64,
     pub memory_hit_limit: usize,
     pub max_iterations: usize,
+}
+
+fn default_assistant_name() -> String {
+    "Librarian".to_string()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -162,6 +168,7 @@ impl Default for MemoryConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self {
+            assistant_name: default_assistant_name(),
             codex_timeout_seconds: 180,
             memory_hit_limit: 12,
             max_iterations: 6,
@@ -493,6 +500,7 @@ mod tests {
         config.budget.daily_total_usd = Some(5.0);
         config.budget.daily_provider_usd = Some(3.0);
         config.budget.daily_project_usd = Some(2.0);
+        config.chat.assistant_name = "Sage".to_string();
         config.chat.codex_timeout_seconds = 42;
         config.chat.memory_hit_limit = 7;
         config.chat.max_iterations = 5;
@@ -509,6 +517,7 @@ mod tests {
         assert!(stored.contains(".cfg"));
         assert!(stored.contains("codex-home"));
         assert!(stored.contains("[chat]"));
+        assert!(stored.contains("assistant_name = \"Sage\""));
         assert!(stored.contains("codex_timeout_seconds = 42"));
         assert!(stored.contains("[tool_permissions]"));
         assert!(stored.contains("library_delete = \"deny\""));
@@ -524,6 +533,7 @@ mod tests {
         assert_eq!(reloaded.budget.daily_provider_usd, Some(3.0));
         assert_eq!(reloaded.budget.daily_project_usd, Some(2.0));
         assert_eq!(reloaded.chat.codex_timeout_seconds, 42);
+        assert_eq!(reloaded.chat.assistant_name, "Sage");
         assert_eq!(reloaded.chat.memory_hit_limit, 7);
         assert_eq!(reloaded.chat.max_iterations, 5);
         assert_eq!(
