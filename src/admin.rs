@@ -1189,7 +1189,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
           if (data.session_id) state.chatSessionId = data.session_id;
           const elapsed = Math.max(1, Math.round(performance.now() - startedAt));
-          const detail = data.mode === 'slash-command' ? 'Command result' : `${assistantName()} · ${(elapsed / 1000).toFixed(1)}s`;
+          const memoryCount = Array.isArray(data.memory_hits) ? data.memory_hits.length : 0;
+          const iterationCount = data.iterations ?? 1;
+          const detail = data.mode === 'slash-command'
+            ? 'Command result'
+            : `${assistantName()} · ${(elapsed / 1000).toFixed(1)}s · ${iterationCount} it · ${memoryCount} memory`;
           if (data.ui?.type === 'approval') {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
           } else {
