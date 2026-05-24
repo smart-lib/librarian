@@ -57,8 +57,15 @@ pub struct JobPreflightReport {
     pub project_path: String,
     pub context_hits: usize,
     pub prompt_chars: usize,
+    pub instruction_files: Vec<InstructionFileReport>,
     pub command: Vec<String>,
     pub budget_checks: Vec<router::BudgetCheck>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InstructionFileReport {
+    pub filename: String,
+    pub chars: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -87,6 +94,7 @@ pub async fn preflight_job(
             "project_path": &report.project_path,
             "context_hits": report.context_hits,
             "prompt_chars": report.prompt_chars,
+            "instruction_files": &report.instruction_files,
             "command": &report.command,
             "budget_checks": &report.budget_checks,
             "launched": false,
@@ -486,6 +494,14 @@ async fn prepare_job(
         project_path: project.path.display().to_string(),
         context_hits: context_pack.hits.len(),
         prompt_chars: prompt_len,
+        instruction_files: spec
+            .instruction_files
+            .iter()
+            .map(|file| InstructionFileReport {
+                filename: file.filename.clone(),
+                chars: file.content.chars().count(),
+            })
+            .collect(),
         command,
         budget_checks,
     })
