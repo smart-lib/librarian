@@ -609,6 +609,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     <div class="overlay-body">
       <nav class="tabs">
         <button class="tab-button active" type="button" data-tab="overview">Overview</button>
+        <button class="tab-button" type="button" data-tab="chats">Chats</button>
         <button class="tab-button" type="button" data-tab="providers">Providers</button>
         <button class="tab-button" type="button" data-tab="jobs">Jobs</button>
         <button class="tab-button" type="button" data-tab="prompt">Prompt</button>
@@ -616,6 +617,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       </nav>
       <div class="tab-content">
         <section class="tab-pane active" data-pane="overview"><h2>Overview</h2><div id="overview" class="grid"></div></section>
+        <section class="tab-pane" data-pane="chats"><h2>Chats</h2><div id="chat-sessions" class="stack"></div></section>
         <section class="tab-pane" data-pane="providers"><h2>Providers</h2><div id="providers" class="grid"></div></section>
         <section class="tab-pane" data-pane="jobs"><h2>Jobs</h2><div id="jobs" class="stack"></div></section>
         <section class="tab-pane" data-pane="prompt"><h2>Prompt Blocks</h2><div id="prompt-builder" class="stack"></div></section>
@@ -640,6 +642,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         projectMap: null,
         promptBlocks: [],
         jobs: [],
+        chatSessions: [],
         providers: { catalog: [], states: [] },
         health: null,
         activeProject: '',
@@ -790,12 +793,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
       }
       async function refresh() {
-        const [health, projects, projectMap, promptBlocks, jobs, providers, events] = await Promise.all([
+        const [health, projects, projectMap, promptBlocks, jobs, chatSessions, providers, events] = await Promise.all([
           loadJson('/api/health', null),
           loadJson('/api/projects', []),
           loadJson('/api/project-map', null),
           loadJson('/api/prompt-blocks', []),
           loadJson('/api/jobs', []),
+          loadJson('/api/chat/sessions?limit=20', []),
           loadJson('/api/providers', { catalog: [], states: [] }),
           loadJson('/api/system-events', [])
         ]);
@@ -804,11 +808,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         state.projectMap = projectMap;
         state.promptBlocks = Array.isArray(promptBlocks) ? promptBlocks : [];
         state.jobs = Array.isArray(jobs) ? jobs : [];
+        state.chatSessions = Array.isArray(chatSessions) ? chatSessions : [];
         state.providers = providers || { catalog: [], states: [] };
         if (!state.projects.some(project => project.name === state.activeProject)) {
           state.activeProject = '';
         }
         renderOverview();
+        renderChatSessions();
         renderProviders();
         renderJobs();
         renderPromptBuilder();
@@ -820,10 +826,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         if (state.chatSessionId) return;
         const sessions = await loadJson('/api/chat/sessions?limit=1', []);
         if (!Array.isArray(sessions) || !sessions.length) return;
-        const session = sessions[0];
-        const transcript = await loadJson(`/api/chat/sessions/${encodeURIComponent(session.id)}/turns`, null);
+        await restoreChatSession(sessions[0].id, false);
+      }
+      async function restoreChatSession(sessionId, announce) {
+        if (!sessionId) return;
+        const transcript = await loadJson(`/api/chat/sessions/${encodeURIComponent(sessionId)}/turns`, null);
         if (!transcript || !Array.isArray(transcript.turns)) return;
-        state.chatSessionId = session.id;
+        state.chatSessionId = transcript.session?.id || sessionId;
         const thread = el('thread');
         thread.innerHTML = '';
         for (const turn of transcript.turns) {
@@ -832,8 +841,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             setApprovalCard(article, turn.metadata.ui.approval, turn.content, assistantName());
           }
         }
-        if (!transcript.turns.length) {
-          appendMessage('system', `Restored empty chat session ${shortId(session.id)}.`);
+        if (!transcript.turns.length && announce) {
+          appendMessage('system', `Restored empty chat session ${shortId(state.chatSessionId)}.`);
+        } else if (announce) {
+          appendMessage('system', `Restored chat session ${shortId(state.chatSessionId)}.`);
         }
       }
       function renderContext() {
@@ -878,6 +889,20 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           memory_hit_limit: Number(el('chat-memory-hit-limit').value || 12),
           max_iterations: Number(el('chat-max-iterations').value || 6)
         });
+      }
+      function renderChatSessions() {
+        el('chat-sessions').innerHTML = state.chatSessions.length ? state.chatSessions.map(session => {
+          const active = session.id === state.chatSessionId ? ' active' : '';
+          return `<div class="card${active}">
+            <h3>${htmlEscape(session.title || 'Chat')} <span class="muted tiny">${shortId(session.id)}</span></h3>
+            <div class="muted tiny">turns=${session.turn_count ?? 0} updated=${htmlEscape(session.updated_at || '')}</div>
+            <div class="row"><button type="button" data-restore-chat="${htmlEscape(session.id)}">Restore</button></div>
+          </div>`;
+        }).join('') : '<div class="card muted">No saved chat sessions yet.</div>';
+        qsa('[data-restore-chat]').forEach(button => button.addEventListener('click', async () => {
+          await restoreChatSession(button.dataset.restoreChat, true);
+          closeOverlay('settings-overlay');
+        }));
       }
       function renderProviders() {
         const states = new Map((state.providers.states || []).map(item => [`${item.provider}:${item.model || ''}`, item]));
