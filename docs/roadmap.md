@@ -780,6 +780,10 @@ Tasks:
 - Add per-job secret grant selection when queueing a job. First pass done for
   persisted grant tokens in CLI/admin/scheduled jobs.
 - Verify OpenRouter through the host broker/proxy path.
+- Extend integration smoke coverage to API-proxy providers. First pass lets
+  `librarian smoke mvp --provider open-router --secret-grant-token <token>
+  --run-agent` carry an existing grant into the same disposable project and
+  preflight/run flow used by Codex and Claude.
 - Add provider-specific proxy policies for allowed paths and HTTP methods.
 - Keep Codex CLI as the primary chat and agent path until the basic flows work.
 - Add OpenRouter as the first API provider once chat/agent boundaries are

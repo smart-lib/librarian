@@ -218,6 +218,8 @@ enum SmokeCommand {
         run_agent: bool,
         #[arg(long)]
         allow_network: bool,
+        #[arg(long)]
+        secret_grant_token: Option<String>,
         #[arg(long, default_value = "LibrarianSmoke")]
         name: String,
     },
@@ -762,6 +764,7 @@ async fn main() -> Result<()> {
                     smoke_provider.into(),
                     smoke_run_agent,
                     false,
+                    None,
                     "LibrarianDoctorSmoke",
                 )
                 .await?;
@@ -813,9 +816,18 @@ async fn main() -> Result<()> {
                 provider,
                 run_agent,
                 allow_network,
+                secret_grant_token,
                 name,
             } => {
-                run_mvp_smoke(&config, provider.into(), run_agent, allow_network, &name).await?;
+                run_mvp_smoke(
+                    &config,
+                    provider.into(),
+                    run_agent,
+                    allow_network,
+                    secret_grant_token.as_deref(),
+                    &name,
+                )
+                .await?;
             }
         },
         Command::Auth { command } => match command {
@@ -1821,6 +1833,7 @@ async fn run_mvp_smoke(
     provider: ProviderKind,
     run_agent: bool,
     allow_network: bool,
+    secret_grant_token: Option<&str>,
     name: &str,
 ) -> Result<()> {
     config.ensure_layout()?;
@@ -1935,7 +1948,11 @@ async fn run_mvp_smoke(
     println!("   OK: {}", memory_item.id);
 
     println!("4. Queueing provider job and running preflight...");
-    let network_mode = router::default_network_mode_for_provider(&provider, allow_network, false);
+    let network_mode = router::default_network_mode_for_provider(
+        &provider,
+        allow_network,
+        secret_grant_token.is_some(),
+    );
     let goal = "Reply with one short MVP smoke-test summary. Do not edit files.";
     let job = db
         .create_job(
@@ -1944,7 +1961,7 @@ async fn run_mvp_smoke(
             goal,
             MountMode::ReadOnly,
             network_mode,
-            None,
+            secret_grant_token,
         )
         .await?;
     let context_pack = memory::retrieve_context_with_config(

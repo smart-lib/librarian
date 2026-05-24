@@ -124,6 +124,13 @@ The same preflight smoke can also run through doctor:
 librarian --home "$HOME/Librarian" doctor --smoke
 ```
 
+API-proxy providers such as OpenRouter can use the same smoke runner after a
+secret grant exists:
+
+```bash
+librarian --home "$HOME/Librarian" smoke mvp --provider open-router --secret-grant-token <grant-token> --run-agent
+```
+
 Print the expanded WSL/Ubuntu smoke-test sequence with:
 
 ```bash
