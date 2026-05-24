@@ -16,6 +16,7 @@ pub struct CreateJobRequest {
 pub struct LibrarianChatRequest {
     pub message: String,
     pub project: Option<String>,
+    pub session_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Deserialize)]

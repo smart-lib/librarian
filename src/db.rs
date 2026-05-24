@@ -12,10 +12,10 @@ use uuid::Uuid;
 use crate::{
     config::Config,
     domain::{
-        AutonomyMode, GitPolicy, Job, JobEvent, JobStatus, MemoryEmbedding, MemoryItem, MemoryKind,
-        MountMode, NetworkMode, Project, PromptBlock, ProviderKind, ProviderState, Schedule,
-        ScheduleKind, ScheduleStatus, SecretAuditEvent, SecretGrant, SecretRecord, SystemEvent,
-        ToolApproval, ToolApprovalStatus, UsageObservation,
+        AutonomyMode, ChatSession, ChatTurn, GitPolicy, Job, JobEvent, JobStatus, MemoryEmbedding,
+        MemoryItem, MemoryKind, MountMode, NetworkMode, Project, PromptBlock, ProviderKind,
+        ProviderState, Schedule, ScheduleKind, ScheduleStatus, SecretAuditEvent, SecretGrant,
+        SecretRecord, SystemEvent, ToolApproval, ToolApprovalStatus, UsageObservation,
     },
 };
 
@@ -133,6 +133,40 @@ impl Database {
                 markdown INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS chat_turns (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                turn_index INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                memory_id TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
+                FOREIGN KEY(memory_id) REFERENCES memory_items(id)
             )
             "#,
         )
@@ -357,6 +391,16 @@ impl Database {
         .await?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_prompt_blocks_target_position ON prompt_blocks(target, position)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_updated ON chat_sessions(project_id, updated_at DESC)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_turns_session_index ON chat_turns(session_id, turn_index)",
         )
         .execute(&self.pool)
         .await?;
@@ -684,6 +728,123 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn create_chat_session(
+        &self,
+        project_id: Option<Uuid>,
+        title: &str,
+    ) -> Result<ChatSession> {
+        let now = Utc::now();
+        let session = ChatSession {
+            id: Uuid::new_v4(),
+            project_id,
+            title: title.trim().chars().take(80).collect::<String>(),
+            created_at: now,
+            updated_at: now,
+        };
+        let title = if session.title.is_empty() {
+            "New chat".to_string()
+        } else {
+            session.title.clone()
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO chat_sessions (id, project_id, title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(session.id.to_string())
+        .bind(session.project_id.map(|id| id.to_string()))
+        .bind(&title)
+        .bind(session.created_at.to_rfc3339())
+        .bind(session.updated_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(ChatSession { title, ..session })
+    }
+
+    pub async fn get_chat_session(&self, id: Uuid) -> Result<ChatSession> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, project_id, title, created_at, updated_at
+            FROM chat_sessions
+            WHERE id = ?
+            LIMIT 1
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => row_to_chat_session(row),
+            None => bail!("Chat session `{id}` was not found"),
+        }
+    }
+
+    pub async fn add_chat_turn(
+        &self,
+        session_id: Uuid,
+        role: &str,
+        content: &str,
+        memory_id: Option<Uuid>,
+        metadata: serde_json::Value,
+    ) -> Result<ChatTurn> {
+        let now = Utc::now();
+        let row = sqlx::query(
+            "SELECT COALESCE(MAX(turn_index), 0) + 1 AS next_index FROM chat_turns WHERE session_id = ?",
+        )
+        .bind(session_id.to_string())
+        .fetch_one(&self.pool)
+        .await?;
+        let turn = ChatTurn {
+            id: Uuid::new_v4(),
+            session_id,
+            turn_index: row.get("next_index"),
+            role: role.to_string(),
+            content: content.to_string(),
+            memory_id,
+            metadata,
+            created_at: now,
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO chat_turns
+                (id, session_id, turn_index, role, content, memory_id, metadata, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(turn.id.to_string())
+        .bind(turn.session_id.to_string())
+        .bind(turn.turn_index)
+        .bind(&turn.role)
+        .bind(&turn.content)
+        .bind(turn.memory_id.map(|id| id.to_string()))
+        .bind(turn.metadata.to_string())
+        .bind(turn.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        sqlx::query("UPDATE chat_sessions SET updated_at = ? WHERE id = ?")
+            .bind(now.to_rfc3339())
+            .bind(session_id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(turn)
+    }
+
+    pub async fn list_chat_turns(&self, session_id: Uuid) -> Result<Vec<ChatTurn>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, session_id, turn_index, role, content, memory_id, metadata, created_at
+            FROM chat_turns
+            WHERE session_id = ?
+            ORDER BY turn_index ASC
+            "#,
+        )
+        .bind(session_id.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_chat_turn).collect()
     }
 
     pub async fn get_prompt_block(&self, id: Uuid) -> Result<PromptBlock> {
@@ -2166,6 +2327,29 @@ fn row_to_prompt_block(row: sqlx::sqlite::SqliteRow) -> Result<PromptBlock> {
         markdown: row.get("markdown"),
         created_at: parse_time(row.get::<String, _>("created_at").as_str())?,
         updated_at: parse_time(row.get::<String, _>("updated_at").as_str())?,
+    })
+}
+
+fn row_to_chat_session(row: sqlx::sqlite::SqliteRow) -> Result<ChatSession> {
+    Ok(ChatSession {
+        id: Uuid::parse_str(row.get::<String, _>("id").as_str())?,
+        project_id: parse_optional_uuid(row.get::<Option<String>, _>("project_id"))?,
+        title: row.get("title"),
+        created_at: parse_time(row.get::<String, _>("created_at").as_str())?,
+        updated_at: parse_time(row.get::<String, _>("updated_at").as_str())?,
+    })
+}
+
+fn row_to_chat_turn(row: sqlx::sqlite::SqliteRow) -> Result<ChatTurn> {
+    Ok(ChatTurn {
+        id: Uuid::parse_str(row.get::<String, _>("id").as_str())?,
+        session_id: Uuid::parse_str(row.get::<String, _>("session_id").as_str())?,
+        turn_index: row.get("turn_index"),
+        role: row.get("role"),
+        content: row.get("content"),
+        memory_id: parse_optional_uuid(row.get::<Option<String>, _>("memory_id"))?,
+        metadata: serde_json::from_str(row.get::<String, _>("metadata").as_str())?,
+        created_at: parse_time(row.get::<String, _>("created_at").as_str())?,
     })
 }
 

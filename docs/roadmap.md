@@ -231,7 +231,10 @@ Tasks:
 - Save useful user and assistant turns into memory, but distinguish raw chat
   transcript from durable facts/decisions/instructions.
 - Add a small chat transcript model: session/thread id, ordered turns, selected
-  project context, and durable memory links.
+  project context, and durable memory links. First backend pass adds
+  `chat_sessions` and `chat_turns`; `/api/chat` now creates or reuses a session,
+  records ordered user/assistant turns, links them to memory ids, and returns
+  `session_id`.
 - Add a clear fallback when the chat provider is unavailable: actionable
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that
@@ -703,6 +706,9 @@ Tasks:
 - Add tests for unavailable chat-provider fallback. First pass done: mock-runner
   failure returns an actionable Codex setup response instead of an endpoint
   error or memory dump.
+- Add tests for chat transcript persistence. First pass extends the chat
+  endpoint slash-flow test to assert returned `session_id`, ordered user and
+  assistant turns, and memory links.
 
 Dependencies:
 

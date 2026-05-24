@@ -2621,6 +2621,15 @@ async fn librarian_chat(
     let project_id = project.as_ref().map(|project| project.id);
     let config = state.config.read().await.clone();
     let gated = gates::process_user_prompt(&state.db, &config, message, "librarian-chat").await?;
+    let chat_session = match input.session_id {
+        Some(session_id) => state.db.get_chat_session(session_id).await?,
+        None => {
+            state
+                .db
+                .create_chat_session(project_id, chat_session_title(&gated.content))
+                .await?
+        }
+    };
 
     let user_memory = state
         .db
@@ -2638,6 +2647,19 @@ async fn librarian_chat(
         )
         .await?;
     memory::embed_item(&state.db, &config, &user_memory).await?;
+    state
+        .db
+        .add_chat_turn(
+            chat_session.id,
+            "user",
+            &gated.content,
+            Some(user_memory.id),
+            serde_json::json!({
+                "project": project.as_ref().map(|project| project.name.clone()),
+                "scope": if project.is_some() { "project" } else { "global" },
+            }),
+        )
+        .await?;
 
     let chat_result = if let Some(result) =
         execute_slash_command(&state, &config, project.as_ref(), &gated.content).await?
@@ -2684,14 +2706,34 @@ async fn librarian_chat(
         )
         .await?;
     memory::embed_item(&state.db, &config, &assistant_memory).await?;
+    state
+        .db
+        .add_chat_turn(
+            chat_session.id,
+            "assistant",
+            &reply,
+            Some(assistant_memory.id),
+            serde_json::json!({
+                "project": project.as_ref().map(|project| project.name.clone()),
+                "scope": if project.is_some() { "project" } else { "global" },
+                "mode": chat_result.mode,
+                "iterations": chat_result.iterations,
+            }),
+        )
+        .await?;
 
     Ok(Json(serde_json::json!({
+        "session_id": chat_session.id,
         "reply": reply,
         "project": project.as_ref().map(|project| project.name.clone()),
         "memory_hits": chat_result.memory_hits,
         "mode": chat_result.mode,
         "iterations": chat_result.iterations,
     })))
+}
+
+fn chat_session_title(message: &str) -> &str {
+    message.lines().next().unwrap_or("New chat").trim()
 }
 
 async fn create_job(
@@ -6315,6 +6357,7 @@ mod tests {
                 Json(LibrarianChatRequest {
                     message: "/help".to_string(),
                     project: None,
+                    session_id: None,
                 }),
             )
             .await
@@ -6328,6 +6371,8 @@ mod tests {
             let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
             assert_eq!(payload["mode"], "slash-command");
             assert_eq!(payload["iterations"], 0);
+            let session_id = Uuid::parse_str(payload["session_id"].as_str().expect("session id"))
+                .expect("session uuid");
             assert!(payload["reply"]
                 .as_str()
                 .expect("reply")
@@ -6350,6 +6395,15 @@ mod tests {
                         .and_then(serde_json::Value::as_str)
                         == Some("slash-command")
             }));
+            let turns = db.list_chat_turns(session_id).await.expect("chat turns");
+            assert_eq!(turns.len(), 2);
+            assert_eq!(turns[0].turn_index, 1);
+            assert_eq!(turns[0].role, "user");
+            assert_eq!(turns[0].content, "/help");
+            assert_eq!(turns[1].turn_index, 2);
+            assert_eq!(turns[1].role, "assistant");
+            assert!(turns[0].memory_id.is_some());
+            assert!(turns[1].memory_id.is_some());
         }
 
         std::fs::remove_dir_all(home).ok();
@@ -6383,6 +6437,7 @@ mod tests {
                     message: r#"/agent launch "Launch Test" "summarize state" --provider codex --read-only --yes"#
                         .to_string(),
                     project: None,
+                    session_id: None,
                 }),
             )
             .await

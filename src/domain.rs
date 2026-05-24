@@ -162,6 +162,27 @@ pub struct PromptBlock {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChatSession {
+    pub id: Uuid,
+    pub project_id: Option<Uuid>,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChatTurn {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub turn_index: i64,
+    pub role: String,
+    pub content: String,
+    pub memory_id: Option<Uuid>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SecretRecord {
     pub id: Uuid,
     pub name: String,
