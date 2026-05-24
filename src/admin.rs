@@ -3171,12 +3171,23 @@ async fn chat_sessions(
     State(state): State<AppState>,
     Query(query): Query<ChatSessionsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(
-        state
-            .db
-            .list_chat_sessions(query.limit.unwrap_or(20))
-            .await?,
-    ))
+    let sessions = state
+        .db
+        .list_chat_sessions(query.limit.unwrap_or(20))
+        .await?;
+    let mut output = Vec::new();
+    for session in sessions {
+        let turn_count = state.db.list_chat_turns(session.id).await?.len();
+        output.push(serde_json::json!({
+            "id": session.id,
+            "project_id": session.project_id,
+            "title": session.title,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "turn_count": turn_count,
+        }));
+    }
+    Ok(Json(output))
 }
 
 async fn chat_session_turns(
