@@ -83,6 +83,32 @@ impl DockerRunner {
                 self.config.codex.mount_read_only,
             ));
         }
+        if matches!(spec.provider, ProviderKind::ClaudeCode) && self.config.claude.mount_host_home {
+            let Some(host_home) = &self.config.claude.host_home else {
+                bail!("claude.mount_host_home is enabled but claude.host_home is not configured");
+            };
+            if !host_home.exists() {
+                bail!(
+                    "Configured Claude home does not exist: {}",
+                    host_home.display()
+                );
+            }
+            if let Some(user) = container_user_for_host_path(host_home)? {
+                parts.push("--user".to_string());
+                parts.push(user);
+            }
+            parts.push("--env".to_string());
+            parts.push(format!("CLAUDE_HOME={}", self.config.claude.container_home));
+            parts.push("--env".to_string());
+            parts.push("HOME=/home/agent".to_string());
+            parts.push("--mount".to_string());
+            parts.push(provider_home_mount(
+                &self.config,
+                host_home,
+                &self.config.claude.container_home,
+                self.config.claude.mount_read_only,
+            ));
+        }
 
         parts.push("--mount".to_string());
         parts.push(run_mount(&self.config, &run_dir));
@@ -168,6 +194,21 @@ fn runtime_prefix(config: &Config) -> Vec<String> {
 }
 
 fn codex_home_mount(
+    config: &Config,
+    host_home: &std::path::Path,
+    container_home: &str,
+    read_only: bool,
+) -> String {
+    let readonly = if read_only { ",readonly" } else { "" };
+    format!(
+        "type=bind,source={},target={}{}",
+        mount_source(config, host_home),
+        container_home,
+        readonly
+    )
+}
+
+fn provider_home_mount(
     config: &Config,
     host_home: &std::path::Path,
     container_home: &str,
@@ -352,6 +393,51 @@ mod tests {
             assert!(command.iter().any(|part| {
                 part.contains("target=/workspace/project/CLAUDE.md") && part.contains("readonly")
             }));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn claude_profile_mount_uses_configured_home() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-claude-home-{}", Uuid::new_v4()));
+
+        {
+            let mut config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let claude_home = home.join(".cfg").join("claude-home");
+            std::fs::create_dir_all(&claude_home).expect("claude home");
+            config.claude.host_home = Some(claude_home);
+            config.claude.mount_host_home = true;
+            let project = home.join("Projects").join("Smoke");
+            std::fs::create_dir_all(&project).expect("project");
+            let spec = AgentRunSpec {
+                job_id: Uuid::new_v4(),
+                project_path: project,
+                provider: ProviderKind::ClaudeCode,
+                goal: "test".to_string(),
+                prompt: "test".to_string(),
+                instruction_files: vec![crate::domain::AgentInstructionFile {
+                    filename: "CLAUDE.md".to_string(),
+                    content: "Use the library context.".to_string(),
+                }],
+                mount_mode: MountMode::ReadOnly,
+                network_mode: NetworkMode::Provider,
+                secret_grant_token: None,
+            };
+
+            let command = DockerRunner::new(config)
+                .docker_command_parts(&spec)
+                .await
+                .expect("command");
+            assert!(command
+                .iter()
+                .any(|part| part == "CLAUDE_HOME=/home/agent/.claude"));
+            assert!(command
+                .iter()
+                .any(|part| part.contains("target=/home/agent/.claude")));
         }
 
         std::fs::remove_dir_all(home).ok();
