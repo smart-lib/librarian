@@ -907,10 +907,33 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function renderProviders() {
         const states = new Map((state.providers.states || []).map(item => [`${item.provider}:${item.model || ''}`, item]));
         const models = state.providers.catalog || [];
-        el('providers').innerHTML = models.length ? models.map(model => {
+        const runtime = state.providers.runtime || {};
+        const cards = models.length ? models.map(model => {
           const current = states.get(`${model.provider}:${model.model}`) || states.get(`${model.provider}:`) || {};
-          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="muted">${htmlEscape(current.status || 'Ready')}</span>`);
+          const providerRuntime = runtime[model.provider] || {};
+          const runtimeLines = Object.keys(providerRuntime).length
+            ? `<br><span class="muted tiny">host profile: ${htmlEscape(providerRuntime.host_home || '-')}</span><br><span class="muted tiny">mount: ${providerRuntime.mount_host_home ? 'enabled' : 'disabled'}${providerRuntime.host_home_exists === false ? ' · missing profile' : ''}</span>`
+            : '';
+          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="muted">${htmlEscape(current.status || 'Not paused')}</span>${runtimeLines}`);
         }).join('') : '<div class="card muted">No providers reported.</div>';
+        const claude = runtime['claude-code'] || {};
+        const providerTools = `<div class="card">
+          <h3>Provider Setup</h3>
+          <div class="muted tiny">Codex and Claude auth are still completed in the host shell. This panel now shows real stored config; action buttons are next.</div>
+          <div class="row">
+            <button type="button" class="secondary" data-provider-command="codex">Codex auth command</button>
+            <button type="button" class="secondary" data-provider-command="claude">Claude setup note</button>
+          </div>
+          <div class="muted tiny">Claude instruction file: ${htmlEscape(claude.instruction_file || 'CLAUDE.md')}</div>
+        </div>`;
+        el('providers').innerHTML = providerTools + cards;
+        qsa('[data-provider-command]').forEach(button => button.addEventListener('click', () => {
+          if (button.dataset.providerCommand === 'codex') {
+            appendMessage('system', 'Run Codex auth from the host shell, then enable the mount: librarian auth codex --enable-container-mount');
+          } else {
+            appendMessage('system', 'Claude Code support now expects a signed-in host profile path in [claude].host_home and [claude].mount_host_home=true. UI bootstrap is next.');
+          }
+        }));
       }
       function renderJobs() {
         el('jobs').innerHTML = state.jobs.length ? state.jobs.slice(0, 12).map(job => {
@@ -2753,9 +2776,27 @@ async fn system_events(State(state): State<AppState>) -> Result<impl IntoRespons
 async fn providers_status(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
     let states = state.db.list_provider_states().await?;
     let catalog = router::model_catalog();
+    let config = state.config.read().await;
     Ok(Json(serde_json::json!({
         "catalog": catalog,
         "states": states,
+        "runtime": {
+            "codex": {
+                "host_home": config.codex.host_home.as_ref().map(|path| path.display().to_string()),
+                "host_home_exists": config.codex.host_home.as_ref().map(|path| path.exists()),
+                "mount_host_home": config.codex.mount_host_home,
+                "mount_read_only": config.codex.mount_read_only,
+                "container_home": config.codex.container_home,
+            },
+            "claude-code": {
+                "host_home": config.claude.host_home.as_ref().map(|path| path.display().to_string()),
+                "host_home_exists": config.claude.host_home.as_ref().map(|path| path.exists()),
+                "mount_host_home": config.claude.mount_host_home,
+                "mount_read_only": config.claude.mount_read_only,
+                "container_home": config.claude.container_home,
+                "instruction_file": config.claude.instruction_file,
+            },
+        },
     })))
 }
 
