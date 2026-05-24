@@ -247,7 +247,9 @@ Tasks:
   adds `/api/chat/sessions` and `/api/chat/sessions/{id}/turns` for restoring
   transcript state. Chat-first admin UI now restores the latest session and
   thread on page load, and exposes a lightweight new-chat control that clears
-  the active session without touching history.
+  the active session without touching history. First admin history pass adds a
+  Chats settings tab that lists recent sessions with turn counts and restores a
+  selected session into the chat thread.
 - Add a clear fallback when the chat provider is unavailable: actionable
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that
@@ -801,7 +803,8 @@ readiness or a later planned milestone.
   only in technical details/tooltips.
 - Keep chat latency visible: pending assistant messages should show an inline
   thinking/loading state, and completed turns should have backend timing events
-  plus human-readable timing metadata in the UI.
+  plus human-readable timing metadata in the UI. First UI pass now shows
+  elapsed time, iteration count, and memory-hit count on completed model turns.
 - Add per-message metadata affordances: hover/click tooltips for timestamp,
   generation time, iteration count, token/cost estimate where available, memory
   hits, tool calls, and technical ids. Keep normal message labels human-facing:
