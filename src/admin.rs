@@ -25,8 +25,8 @@ use crate::{
     config::{Config, ToolPermissionPolicy, ToolPermissionsConfig},
     db::Database,
     domain::{
-        ContextPack, JobStatus, MemoryKind, MountMode, NetworkMode, Project, ScheduleKind,
-        ScheduleStatus, ToolApprovalStatus,
+        ChatTurn, ContextPack, JobStatus, MemoryKind, MountMode, NetworkMode, Project,
+        ScheduleKind, ScheduleStatus, ToolApprovalStatus,
     },
     gates, library_tools,
     library_tools::LibraryRoot,
@@ -2630,6 +2630,7 @@ async fn librarian_chat(
                 .await?
         }
     };
+    let previous_turns = state.db.list_chat_turns(chat_session.id).await?;
 
     let user_memory = state
         .db
@@ -2682,6 +2683,7 @@ async fn librarian_chat(
             &config,
             &gated.content,
             project.as_ref(),
+            &previous_turns,
             initial_context_pack,
         )
         .await?
@@ -5055,6 +5057,7 @@ async fn run_librarian_chat_loop(
     config: &Config,
     message: &str,
     project: Option<&Project>,
+    recent_turns: &[ChatTurn],
     initial_context_pack: ContextPack,
 ) -> Result<LibrarianChatResult> {
     let mut runner = CodexLibrarianChatRunner;
@@ -5063,6 +5066,7 @@ async fn run_librarian_chat_loop(
         config,
         message,
         project,
+        recent_turns,
         initial_context_pack,
         &mut runner,
     )
@@ -5088,6 +5092,7 @@ async fn run_librarian_chat_loop_with_runner(
     config: &Config,
     message: &str,
     project: Option<&Project>,
+    recent_turns: &[ChatTurn],
     initial_context_pack: ContextPack,
     runner: &mut (dyn LibrarianChatRunner + Send),
 ) -> Result<LibrarianChatResult> {
@@ -5103,6 +5108,7 @@ async fn run_librarian_chat_loop_with_runner(
         let prompt = build_librarian_chat_prompt(
             message,
             project,
+            recent_turns,
             &context_packs,
             &librarian_instruction_blocks,
             iteration,
@@ -5318,6 +5324,7 @@ fn chat_provider_unavailable_result(
 fn build_librarian_chat_prompt(
     message: &str,
     project: Option<&Project>,
+    recent_turns: &[ChatTurn],
     context_packs: &[ContextPack],
     instruction_blocks: &str,
     iteration: usize,
@@ -5347,6 +5354,24 @@ fn build_librarian_chat_prompt(
     ));
     if iteration >= max_iterations {
         prompt.push_str("This is the final allowed iteration. Do not request another memory search; answer with the available context or ask one clarifying question.\n\n");
+    }
+    prompt.push_str("## Recent Conversation\n\n");
+    let recent_turns = recent_turns
+        .iter()
+        .rev()
+        .take(10)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    if recent_turns.is_empty() {
+        prompt.push_str("No prior turns in this chat session.\n\n");
+    } else {
+        for turn in recent_turns {
+            prompt.push_str(&format!("{}: ", turn.role));
+            prompt.push_str(turn.content.trim());
+            prompt.push_str("\n\n");
+        }
     }
     prompt.push_str("## Retrieved Memory\n\n");
     let hits = filtered_memory_hits(context_packs);
@@ -6514,6 +6539,7 @@ mod tests {
                 &config,
                 "how should project maps look?",
                 None,
+                &[],
                 initial_context,
                 &mut runner,
             )
@@ -6562,6 +6588,7 @@ mod tests {
                 &config,
                 "hello",
                 None,
+                &[],
                 initial_context,
                 &mut runner,
             )
@@ -6616,6 +6643,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn chat_prompt_includes_recent_conversation_turns() {
+        let session_id = Uuid::new_v4();
+        let recent_turns = vec![
+            test_chat_turn(session_id, 1, "user", "We are designing a library map."),
+            test_chat_turn(
+                session_id,
+                2,
+                "assistant",
+                "Use shelves for folders and books for notes.",
+            ),
+        ];
+        let prompt = build_librarian_chat_prompt(
+            "What should the next UI step be?",
+            None,
+            &recent_turns,
+            &[ContextPack {
+                query: "library map".to_string(),
+                project_id: None,
+                activity_id: None,
+                generated_at: chrono::Utc::now(),
+                hits: Vec::new(),
+            }],
+            "",
+            1,
+            5,
+        );
+
+        assert!(prompt.contains("## Recent Conversation"));
+        assert!(prompt.contains("user: We are designing a library map."));
+        assert!(prompt.contains("assistant: Use shelves for folders and books for notes."));
+        assert!(prompt.contains("## User Message"));
+        assert!(prompt.contains("What should the next UI step be?"));
+    }
+
     fn test_memory_hit(
         content: &str,
         metadata: serde_json::Value,
@@ -6648,6 +6710,19 @@ mod tests {
             recency_score: 0.0,
             scope_score: 0.0,
             reason: "test".to_string(),
+        }
+    }
+
+    fn test_chat_turn(session_id: Uuid, turn_index: i64, role: &str, content: &str) -> ChatTurn {
+        ChatTurn {
+            id: Uuid::new_v4(),
+            session_id,
+            turn_index,
+            role: role.to_string(),
+            content: content.to_string(),
+            memory_id: None,
+            metadata: serde_json::json!({}),
+            created_at: chrono::Utc::now(),
         }
     }
 

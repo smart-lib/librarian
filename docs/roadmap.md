@@ -222,6 +222,8 @@ Tasks:
 - Build a dedicated Librarian chat prompt, separate from coding-agent prompts.
   Inputs: identity/instructions, user message, recent conversation turns,
   global memory, selected project memory when explicit, and compact citations.
+  First chat prompt pass now includes recent ordered turns from the current
+  transcript session.
 - Keep `/api/chat` as conversation only. It must not create background jobs or
   wait for agent execution.
 - Remove current self-echo behavior: placeholder assistant replies are filtered
@@ -709,6 +711,9 @@ Tasks:
 - Add tests for chat transcript persistence. First pass extends the chat
   endpoint slash-flow test to assert returned `session_id`, ordered user and
   assistant turns, and memory links.
+- Add tests that recent transcript turns are included in the Librarian prompt.
+  First pass covers prompt construction for prior user/assistant turns plus the
+  new user message.
 
 Dependencies:
 
