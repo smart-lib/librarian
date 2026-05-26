@@ -16,6 +16,8 @@ pub struct CreateJobRequest {
 pub struct LibrarianChatRequest {
     pub message: String,
     pub project: Option<String>,
+    #[serde(default)]
+    pub project_context: Option<Vec<String>>,
     pub session_id: Option<uuid::Uuid>,
 }
 

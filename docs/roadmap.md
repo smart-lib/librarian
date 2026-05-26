@@ -252,6 +252,16 @@ Tasks:
   the active session without touching history. First admin history pass adds a
   Chats settings tab that lists recent sessions with turn counts and restores a
   selected session into the chat thread.
+- Upgrade selected project context from a single project to an explicit
+  multi-project context. First backend/UI pass accepts `project_context` in
+  `/api/chat`, resolves it to project records, stores context metadata on raw
+  user/assistant memory and chat turns, returns a human context label, and shows
+  that context in the top chat badge plus each message.
+- Add permissioned dialogue-aware context switching. The `context_switch`
+  policy controls whether Librarian may infer/switch context automatically:
+  `deny` keeps the current/global context, `ask` is the default and should lead
+  to approval UI before changing context, and `auto` allows high-confidence
+  project-name/path matches to switch context.
 - Add a clear fallback when the chat provider is unavailable: actionable
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that
@@ -406,6 +416,13 @@ Project tree model:
   - a focused path selected by user command;
   - automatic project selection from the current dialogue when confidence is
     high, otherwise ask the user.
+- Chat context can contain several project nodes at once. Retrieval should
+  merge and deduplicate memory hits from all selected nodes, with the selected
+  context visible to the user so the assistant never silently changes the
+  frame of a conversation.
+- Project names shown in the UI should be normalized from filesystem-ish names
+  into readable titles: path separators are removed, separators/camel-case are
+  expanded, Markdown suffixes are hidden, and acronyms/numbers remain legible.
 - A project may optionally attach a workspace/implementation folder. That
   workspace can be the default `Librarian/Projects/{ProjectName}` or an
   existing external directory chosen by the user. The library tree remains the
@@ -449,6 +466,8 @@ Acceptance criteria for the finished Library UI:
 - Every visible item maps to a real `Library` path and can be selected as a
   project context.
 - The selected context is reflected in chat and memory retrieval.
+- The active chat context appears in the top identity badge, and every message
+  carries a faint per-message context label for later debugging/history.
 - Parent/child project scopes are testable with memory searches over a subtree.
 - Attached workspace is visible and editable from the selected node details.
 - The design works at the MVP minimum viewport without browser-level scrolling.
@@ -489,6 +508,9 @@ Tasks:
 - Add dialogue-aware context selection: Librarian should automatically infer
   the likely project/library node from the conversation when confidence is
   high, otherwise ask the user or accept an explicit command.
+- Add approval UX for context switching when the policy is `ask`: proposed
+  context changes should appear as normal chat cards with accept/reject buttons,
+  not as raw ids or hidden backend state.
 - Add project creation/linking from the admin UI: create the memory folder,
   optionally create the working directory under the default projects root, or
   attach an existing directory. First slash-command pass adds `/project list`,
@@ -546,7 +568,10 @@ Tool groups:
 - Settings/prompt tools: inspect settings, propose changes, and apply only
   after explicit user approval. First settings slash pass supports
   `/settings tool-permissions` and guarded
-  `/settings set-tool-permission <key> <auto|ask|deny> --yes`.
+  `/settings set-tool-permission <key> <auto|ask|deny> --yes`. Permission
+  package presets are now part of the model: `balanced`, `autopilot`, `confirm`,
+  and `locked_down` apply all tool policies at once; changing one policy
+  manually marks the package `custom` until the user reapplies a preset.
 - Background agent tools: create project-scoped agent jobs, preflight them, run
   worker actions, cancel/retry, and report results back into chat without
   blocking the conversation. First explicit slash pass adds `/agent list`,
@@ -567,6 +592,9 @@ Permission model:
 - Settings, prompt changes, auth, provider config, and background agent launch
   default to `ask`. Tool-permission changes require both the `settings_change`
   gate and an explicit slash confirmation flag.
+- Context switching is a first-class permission with the same `auto/ask/deny`
+  policy shape. The default is `ask`; automatic inference should be enabled
+  only when the user chooses a permissive package or changes the setting.
 - Background agent launch, retry, and cancel pass through the `agent_launch`
   gate. Normal chat still never creates jobs.
 - Assistant-initiated tool calls that need confirmation should create pending

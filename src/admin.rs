@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::{
     admin_models::*,
     chat::{self, LibrarianChatResult},
-    config::{Config, ToolPermissionPolicy, ToolPermissionsConfig},
+    config::{Config, ToolPermissionPolicy, ToolPermissionPreset, ToolPermissionsConfig},
     db::Database,
     domain::{
         JobStatus, MemoryKind, MountMode, Project, ScheduleKind, ScheduleStatus, ToolApprovalStatus,
@@ -31,6 +31,38 @@ use crate::{
 struct AppState {
     db: Database,
     config: Arc<RwLock<Config>>,
+}
+
+#[derive(Clone, Debug)]
+struct ChatProjectContext {
+    projects: Vec<Project>,
+    source: &'static str,
+}
+
+impl ChatProjectContext {
+    fn primary_project(&self) -> Option<&Project> {
+        self.projects.first()
+    }
+
+    fn primary_project_id(&self) -> Option<Uuid> {
+        self.primary_project().map(|project| project.id)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.projects.is_empty()
+    }
+
+    fn label(&self) -> String {
+        context_label_for_projects(&self.projects)
+    }
+
+    fn metadata(&self) -> serde_json::Value {
+        serde_json::json!({
+            "source": self.source,
+            "label": self.label(),
+            "projects": self.projects.iter().map(project_context_metadata).collect::<Vec<_>>(),
+        })
+    }
 }
 
 fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
@@ -153,6 +185,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       color: var(--accent);
       font-size: 11px;
       font-weight: 700;
+    }
+    .brand .context {
+      color: var(--muted);
+      font-size: 10px;
+      font-style: italic;
+      font-weight: 500;
     }
     .icon-button {
       position: absolute;
@@ -593,7 +631,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
   <div class="app">
     <header class="topbar">
       <button id="settings-open" class="icon-button" type="button" aria-label="Settings" title="Settings"><span class="settings-icon"></span></button>
-      <div class="brand">Librarian<span id="context-line">Smart. Silent. Steady.</span></div>
+      <div class="brand">Librarian<span id="motto-line">Smart. Silent. Steady.</span><span id="context-line" class="context">Context: Global conversation</span></div>
       <button id="new-chat" class="icon-button" type="button" aria-label="New chat" title="New chat">+</button>
       <button id="projects-open" class="icon-button" type="button" aria-label="Projects" title="Projects"><span class="map-icon"></span></button>
     </header>
@@ -656,6 +694,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         providers: { catalog: [], states: [] },
         health: null,
         activeProject: '',
+        activeContext: [],
         chatSessionId: null,
         inputHistory: [],
         historyIndex: null,
@@ -693,6 +732,42 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       const qsa = selector => Array.from(document.querySelectorAll(selector));
       const htmlEscape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
       const shortId = value => value ? String(value).slice(0, 8) : '';
+      function humanProjectName(value) {
+        return String(value || '')
+          .replace(/\.md$/i, '')
+          .replace(/[\\/]/g, ' ')
+          .replace(/[_-]+/g, ' ')
+          .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+          .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+          .replace(/([A-Za-z])([0-9])/g, '$1 $2')
+          .replace(/([0-9])([A-Za-z])/g, '$1 $2')
+          .split(/\s+/)
+          .filter(Boolean)
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(' ');
+      }
+      function projectDisplayName(project) {
+        if (!project) return '';
+        const source = project.library_path || project.name || '';
+        const last = String(source).split(/[\\/]/).filter(Boolean).pop() || project.name;
+        return humanProjectName(last);
+      }
+      function contextLabelFromProjects(projects) {
+        return Array.isArray(projects) && projects.length
+          ? projects.map(projectDisplayName).join(' + ')
+          : 'Global conversation';
+      }
+      function currentContextProjects() {
+        if (state.activeContext.length) return state.activeContext;
+        const active = state.projects.find(project => project.name === state.activeProject);
+        return active ? [active] : [];
+      }
+      function currentContextLabel() {
+        return contextLabelFromProjects(currentContextProjects());
+      }
+      function turnContextLabel(turn) {
+        return turn?.metadata?.context?.label || (turn?.metadata?.project ? humanProjectName(turn.metadata.project) : 'Global conversation');
+      }
 
       function openOverlay(id) {
         el(id).classList.add('open');
@@ -706,10 +781,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         qsa('.tab-button').forEach(button => button.classList.toggle('active', button.dataset.tab === name));
         qsa('.tab-pane').forEach(pane => pane.classList.toggle('active', pane.dataset.pane === name));
       }
-      function appendMessage(role, text, detail) {
+      function appendMessage(role, text, detail, contextLabel) {
         const article = document.createElement('article');
         article.className = `message ${role}`;
-        setMessage(article, text, detail);
+        setMessage(article, text, detail, contextLabel);
         el('thread').appendChild(article);
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
         return article;
@@ -779,14 +854,21 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           buttons.forEach(button => button.disabled = false);
         }
       }
-      function setMessage(article, text, detail) {
+      function setMessage(article, text, detail, contextLabel) {
         article.classList.remove('thinking');
         article.textContent = text;
+        const context = contextLabel || currentContextLabel();
         if (detail !== undefined && detail !== null && detail !== '') {
           const small = document.createElement('small');
-          small.textContent = detail;
+          small.textContent = `${detail} - context: ${context}`;
           article.appendChild(small);
-          article.title = detail;
+          article.title = `${detail} - context: ${context}`;
+        } else if (context) {
+          const small = document.createElement('small');
+          small.textContent = `context: ${context}`;
+          small.style.fontStyle = 'italic';
+          article.appendChild(small);
+          article.title = `context: ${context}`;
         }
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
       }
@@ -823,6 +905,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         if (!state.projects.some(project => project.name === state.activeProject)) {
           state.activeProject = '';
         }
+        state.activeContext = state.activeContext.filter(active =>
+          state.projects.some(project => project.id === active.id || project.name === active.name)
+        );
         renderOverview();
         renderChatSessions();
         renderProviders();
@@ -846,7 +931,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const thread = el('thread');
         thread.innerHTML = '';
         for (const turn of transcript.turns) {
-          const article = appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? assistantName() : '');
+          const contextLabel = turnContextLabel(turn);
+          const article = appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? assistantName() : '', contextLabel);
           if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'approval') {
             setApprovalCard(article, turn.metadata.ui.approval, turn.content, assistantName());
           }
@@ -859,7 +945,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
       function renderContext() {
         document.querySelector('.brand').firstChild.nodeValue = assistantName();
-        el('context-line').textContent = 'Smart. Silent. Steady.';
+        el('context-line').textContent = `Context: ${currentContextLabel()}`;
       }
       function assistantName() {
         const name = state.health?.chat?.assistant_name || 'Librarian';
@@ -1180,6 +1266,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         wireProjectForms();
         qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
           state.activeProject = button.dataset.project || '';
+          const project = state.projects.find(project => project.name === state.activeProject);
+          state.activeContext = project ? [project] : [];
           state.chatSessionId = null;
           renderProjects();
           renderContext();
@@ -1267,7 +1355,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         if (!goal) return;
         rememberInput(goal);
         closeSlashPalette();
-        appendMessage('user', goal);
+        const contextProjects = currentContextProjects();
+        const contextLabel = contextLabelFromProjects(contextProjects);
+        appendMessage('user', goal, '', contextLabel);
         input.value = '';
         input.disabled = true;
         const startedAt = performance.now();
@@ -1280,23 +1370,34 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             body: JSON.stringify({
               message: goal,
               project: project || null,
+              project_context: contextProjects.map(project => project.name),
               session_id: state.chatSessionId
             })
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
           if (data.session_id) state.chatSessionId = data.session_id;
+          if (data.context?.projects?.length) {
+            state.activeContext = data.context.projects.map(project => ({
+              id: project.id,
+              name: project.name,
+              library_path: project.library_path,
+              path: project.workspace_path
+            }));
+            state.activeProject = state.activeContext[0]?.name || '';
+            renderContext();
+          }
           const elapsed = Math.max(1, Math.round(performance.now() - startedAt));
           const memoryCount = Array.isArray(data.memory_hits) ? data.memory_hits.length : 0;
           const iterationCount = data.iterations ?? 1;
           const detail = data.mode === 'slash-command'
             ? 'Command result'
-            : `${assistantName()} · ${(elapsed / 1000).toFixed(1)}s · ${iterationCount} it · ${memoryCount} memory`;
+            : `${assistantName()} - ${(elapsed / 1000).toFixed(1)}s - ${iterationCount} it - ${memoryCount} memory`;
           if (data.ui?.type === 'approval') {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
           } else {
             if (data.mode === 'slash-command') pending.className = 'message system command';
-            setMessage(pending, data.reply || 'I am here.', detail);
+            setMessage(pending, data.reply || 'I am here.', detail, data.context_label || contextLabel);
           }
           await refresh();
         } catch (error) {
@@ -3508,6 +3609,242 @@ async fn reject_tool_approval(
     Ok(Json(serde_json::json!({ "approval": approval })))
 }
 
+async fn resolve_chat_project_context(
+    state: &AppState,
+    config: &Config,
+    input: &LibrarianChatRequest,
+    message: &str,
+) -> Result<ChatProjectContext> {
+    let mut requested = Vec::new();
+    if let Some(values) = &input.project_context {
+        requested.extend(values.iter().map(String::as_str));
+    }
+    if let Some(value) = input.project.as_deref() {
+        requested.push(value);
+    }
+
+    let mut projects = Vec::new();
+    for value in requested {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let project = state.db.get_project_by_name_or_id(value).await?;
+        if !projects
+            .iter()
+            .any(|existing: &Project| existing.id == project.id)
+        {
+            projects.push(project);
+        }
+    }
+    if !projects.is_empty() {
+        return Ok(ChatProjectContext {
+            projects,
+            source: "explicit",
+        });
+    }
+
+    if config.tool_permissions.context_switch != ToolPermissionPolicy::Auto {
+        return Ok(ChatProjectContext {
+            projects,
+            source: "global",
+        });
+    }
+
+    let message_key = normalized_project_lookup_key(message);
+    let mut matches = state
+        .db
+        .list_projects()
+        .await?
+        .into_iter()
+        .filter(|project| {
+            let name_key = normalized_project_lookup_key(&project.name);
+            let path_key = project
+                .library_path
+                .as_ref()
+                .map(|path| normalized_project_lookup_key(&path.to_string_lossy()))
+                .unwrap_or_default();
+            !name_key.is_empty()
+                && (message_key.contains(&name_key)
+                    || (!path_key.is_empty() && message_key.contains(&path_key)))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| left.name.cmp(&right.name));
+    if matches.len() == 1 {
+        Ok(ChatProjectContext {
+            projects: matches,
+            source: "auto",
+        })
+    } else {
+        Ok(ChatProjectContext {
+            projects: Vec::new(),
+            source: "global",
+        })
+    }
+}
+
+fn context_label_for_projects(projects: &[Project]) -> String {
+    if projects.is_empty() {
+        "Global conversation".to_string()
+    } else {
+        projects
+            .iter()
+            .map(project_display_label)
+            .collect::<Vec<_>>()
+            .join(" + ")
+    }
+}
+
+fn project_context_metadata(project: &Project) -> serde_json::Value {
+    serde_json::json!({
+        "id": project.id,
+        "name": project.name,
+        "display_name": project_display_label(project),
+        "library_path": project.library_path.as_ref().map(|path| path.to_string_lossy().to_string()),
+        "workspace_path": project.path.to_string_lossy().to_string(),
+    })
+}
+
+fn project_display_label(project: &Project) -> String {
+    project
+        .library_path
+        .as_ref()
+        .and_then(|path| path.file_stem().or_else(|| path.file_name()))
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| project.name.clone())
+        .trim_end_matches(".md")
+        .split(['/', '\\'])
+        .next_back()
+        .map(humanize_project_name)
+        .unwrap_or_else(|| humanize_project_name(&project.name))
+}
+
+fn humanize_project_name(value: &str) -> String {
+    let mut out = String::new();
+    let normalized = value
+        .trim_end_matches(".md")
+        .trim_end_matches(".MD")
+        .replace(['_', '-', '/', '\\'], " ");
+    let chars = normalized.chars().collect::<Vec<_>>();
+    let mut previous_lowercase_or_digit = false;
+    let mut previous_uppercase = false;
+    let mut previous_alpha = false;
+    let mut previous_digit = false;
+    for (index, character) in chars.iter().copied().enumerate() {
+        let next_lowercase = chars
+            .get(index + 1)
+            .copied()
+            .map(|next| next.is_ascii_lowercase())
+            .unwrap_or(false);
+        if character.is_ascii_uppercase()
+            && (previous_lowercase_or_digit || (previous_uppercase && next_lowercase))
+        {
+            out.push(' ');
+        } else if character.is_ascii_digit() && previous_alpha && !previous_digit {
+            out.push(' ');
+        } else if character.is_ascii_alphabetic() && previous_digit {
+            out.push(' ');
+        }
+        if character == '.' {
+            out.push(' ');
+            previous_lowercase_or_digit = false;
+            previous_uppercase = false;
+            previous_alpha = false;
+            previous_digit = false;
+            continue;
+        }
+        previous_lowercase_or_digit = character.is_ascii_lowercase() || character.is_ascii_digit();
+        previous_uppercase = character.is_ascii_uppercase();
+        previous_alpha = character.is_ascii_alphabetic();
+        previous_digit = character.is_ascii_digit();
+        out.push(character);
+    }
+    out.split_whitespace()
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!(
+                    "{}{}",
+                    first.to_uppercase().collect::<String>(),
+                    chars.collect::<String>()
+                ),
+                None => String::new(),
+            }
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalized_project_lookup_key(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+async fn retrieve_chat_context_pack(
+    db: &Database,
+    config: &Config,
+    query: &str,
+    projects: &[Project],
+) -> Result<crate::domain::ContextPack> {
+    if projects.is_empty() {
+        return memory::retrieve_context_with_config(
+            db,
+            Some(config),
+            memory::RetrievalRequest {
+                query: query.to_string(),
+                project_id: None,
+                activity_id: None,
+                limit: config.chat.memory_hit_limit,
+            },
+        )
+        .await;
+    }
+
+    let mut packs = Vec::new();
+    for project in projects {
+        packs.push(
+            memory::retrieve_context_with_config(
+                db,
+                Some(config),
+                memory::RetrievalRequest {
+                    query: query.to_string(),
+                    project_id: Some(project.id),
+                    activity_id: None,
+                    limit: config.chat.memory_hit_limit,
+                },
+            )
+            .await?,
+        );
+    }
+
+    let mut hits = Vec::new();
+    for pack in &packs {
+        hits.extend(pack.hits.clone());
+    }
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|hit| seen.insert(hit.item.id));
+    hits.truncate(config.chat.memory_hit_limit.max(1));
+
+    Ok(crate::domain::ContextPack {
+        query: query.to_string(),
+        project_id: projects.first().map(|project| project.id),
+        activity_id: None,
+        generated_at: chrono::Utc::now(),
+        hits,
+    })
+}
+
 async fn librarian_chat(
     State(state): State<AppState>,
     Json(input): Json<LibrarianChatRequest>,
@@ -3518,17 +3855,12 @@ async fn librarian_chat(
         return Err(anyhow::anyhow!("message must not be empty").into());
     }
 
-    let project = match input
-        .project
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        Some(value) => Some(state.db.get_project_by_name_or_id(value).await?),
-        None => None,
-    };
-    let project_id = project.as_ref().map(|project| project.id);
     let config = state.config.read().await.clone();
+    let chat_context = resolve_chat_project_context(&state, &config, &input, message).await?;
+    let project = chat_context.primary_project();
+    let project_id = chat_context.primary_project_id();
+    let context_metadata = chat_context.metadata();
+    let context_label = chat_context.label();
     let gated = gates::process_user_prompt(&state.db, &config, message, "librarian-chat").await?;
     let chat_session = match input.session_id {
         Some(session_id) => state.db.get_chat_session(session_id).await?,
@@ -3551,8 +3883,9 @@ async fn librarian_chat(
             &gated.content,
             Some("admin:librarian-chat"),
             serde_json::json!({
-                "project": project.as_ref().map(|project| project.name.clone()),
-                "scope": if project.is_some() { "project" } else { "global" },
+                "project": project.map(|project| project.name.clone()),
+                "scope": if chat_context.is_empty() { "global" } else { "project_context" },
+                "context": context_metadata.clone(),
                 "chat_session_id": chat_session.id,
                 "memory_role": "raw_chat_turn",
                 "durability": "transcript",
@@ -3568,33 +3901,26 @@ async fn librarian_chat(
             &gated.content,
             Some(user_memory.id),
             serde_json::json!({
-                "project": project.as_ref().map(|project| project.name.clone()),
-                "scope": if project.is_some() { "project" } else { "global" },
+                "project": project.map(|project| project.name.clone()),
+                "scope": if chat_context.is_empty() { "global" } else { "project_context" },
+                "context": context_metadata.clone(),
             }),
         )
         .await?;
 
     let chat_result = if let Some(result) =
-        execute_slash_command(&state, &config, project.as_ref(), &gated.content).await?
+        execute_slash_command(&state, &config, project, &gated.content).await?
     {
         result
     } else {
-        let initial_context_pack = memory::retrieve_context_with_config(
-            &state.db,
-            Some(&config),
-            memory::RetrievalRequest {
-                query: gated.content.clone(),
-                project_id,
-                activity_id: None,
-                limit: config.chat.memory_hit_limit,
-            },
-        )
-        .await?;
+        let initial_context_pack =
+            retrieve_chat_context_pack(&state.db, &config, &gated.content, &chat_context.projects)
+                .await?;
         chat::run_librarian_chat_loop(
             &state.db,
             &config,
             &gated.content,
-            project.as_ref(),
+            project,
             &previous_turns,
             initial_context_pack,
         )
@@ -3611,8 +3937,9 @@ async fn librarian_chat(
             &reply,
             Some("admin:librarian-chat"),
             serde_json::json!({
-                "project": project.as_ref().map(|project| project.name.clone()),
-                "scope": if project.is_some() { "project" } else { "global" },
+                "project": project.map(|project| project.name.clone()),
+                "scope": if chat_context.is_empty() { "global" } else { "project_context" },
+                "context": context_metadata.clone(),
                 "chat_session_id": chat_session.id,
                 "memory_role": "raw_chat_turn",
                 "durability": "transcript",
@@ -3632,8 +3959,9 @@ async fn librarian_chat(
             &reply,
             Some(assistant_memory.id),
             serde_json::json!({
-                "project": project.as_ref().map(|project| project.name.clone()),
-                "scope": if project.is_some() { "project" } else { "global" },
+                "project": project.map(|project| project.name.clone()),
+                "scope": if chat_context.is_empty() { "global" } else { "project_context" },
+                "context": context_metadata.clone(),
                 "mode": chat_result.mode,
                 "iterations": chat_result.iterations,
                 "ui": chat_result.ui.clone(),
@@ -3648,7 +3976,8 @@ async fn librarian_chat(
             "chat_request",
             serde_json::json!({
                 "session_id": chat_session.id,
-                "project": project.as_ref().map(|project| project.name.clone()),
+                "project": project.map(|project| project.name.clone()),
+                "context": context_metadata.clone(),
                 "mode": chat_result.mode,
                 "iterations": chat_result.iterations,
                 "memory_hits": chat_result.memory_hits.len(),
@@ -3662,7 +3991,9 @@ async fn librarian_chat(
     Ok(Json(serde_json::json!({
         "session_id": chat_session.id,
         "reply": reply,
-        "project": project.as_ref().map(|project| project.name.clone()),
+        "project": project.map(|project| project.name.clone()),
+        "context": context_metadata,
+        "context_label": context_label,
         "memory_hits": chat_result.memory_hits.clone(),
         "mode": chat_result.mode,
         "iterations": chat_result.iterations,
@@ -5953,6 +6284,60 @@ async fn execute_settings_slash_command(
                 "tool_permissions": config.tool_permissions,
             }),
         ),
+        "set-permission-preset" | "permission-preset" | "preset" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            if args.len() < 2 {
+                anyhow::bail!(
+                    "Usage: /settings permission-preset <balanced|autopilot|confirm|locked_down> --yes"
+                );
+            }
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                return Ok(slash_reply(
+                    "Settings changes require explicit confirmation. Use: /settings permission-preset <balanced|autopilot|confirm|locked_down> --yes",
+                    serde_json::json!({
+                        "tool": "settings",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                    }),
+                ));
+            }
+            let preset = parse_tool_permission_preset(&args[1])?;
+            let config_path = {
+                let mut writable_config = state.config.write().await;
+                apply_tool_permission_preset(&mut writable_config.tool_permissions, preset);
+                writable_config.save()?;
+                writable_config.config_path.clone()
+            };
+            state
+                .db
+                .add_system_event(
+                    "settings_tool",
+                    serde_json::json!({
+                        "action": "set_tool_permission_preset",
+                        "source": "slash-command",
+                        "preset": preset,
+                        "config_path": config_path,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!(
+                    "Updated tool permissions preset to `{}`.",
+                    preset_label(preset)
+                ),
+                serde_json::json!({
+                    "tool": "settings",
+                    "command": command,
+                    "preset": preset,
+                }),
+            )
+        }
         "set-tool-permission" | "set-permission" => {
             ensure_tool_permission(
                 &state.db,
@@ -6018,12 +6403,13 @@ async fn execute_settings_slash_command(
 }
 
 fn settings_slash_help() -> &'static str {
-    "Settings commands live under /settings:\n/settings tool-permissions - show current tool permission policies\n/settings set-tool-permission <key> <auto|ask|deny> --yes - update one permission\n\nPermission keys: library_read, library_create, library_edit_markdown, library_move, library_delete, workspace_create, workspace_move, workspace_delete, memory_write, settings_change, agent_launch."
+    "Settings commands live under /settings:\n/settings tool-permissions - show current tool permission policies\n/settings permission-preset <balanced|autopilot|confirm|locked_down> --yes - apply a whole permission package\n/settings set-tool-permission <key> <auto|ask|deny> --yes - update one permission and mark the package custom\n\nPermission keys: library_read, library_create, library_edit_markdown, library_move, library_delete, workspace_create, workspace_move, workspace_delete, memory_write, settings_change, agent_launch, context_switch."
 }
 
 fn format_tool_permissions(permissions: &ToolPermissionsConfig) -> String {
     format!(
         "Tool permissions:\n\
+preset = {}\n\
 library_read = {}\n\
 library_create = {}\n\
 library_edit_markdown = {}\n\
@@ -6034,7 +6420,9 @@ workspace_move = {}\n\
 workspace_delete = {}\n\
 memory_write = {}\n\
 settings_change = {}\n\
-agent_launch = {}",
+agent_launch = {}\n\
+context_switch = {}",
+        preset_label(permissions.preset),
         policy_label(permissions.library_read),
         policy_label(permissions.library_create),
         policy_label(permissions.library_edit_markdown),
@@ -6046,7 +6434,21 @@ agent_launch = {}",
         policy_label(permissions.memory_write),
         policy_label(permissions.settings_change),
         policy_label(permissions.agent_launch),
+        policy_label(permissions.context_switch),
     )
+}
+
+fn parse_tool_permission_preset(value: &str) -> Result<ToolPermissionPreset> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "balanced" => Ok(ToolPermissionPreset::Balanced),
+        "autopilot" | "auto" => Ok(ToolPermissionPreset::Autopilot),
+        "confirm" | "ask" => Ok(ToolPermissionPreset::Confirm),
+        "locked_down" | "lockeddown" | "locked" | "deny" => Ok(ToolPermissionPreset::LockedDown),
+        "custom" => Ok(ToolPermissionPreset::Custom),
+        _ => anyhow::bail!(
+            "Tool permission preset must be balanced, autopilot, confirm, or locked_down"
+        ),
+    }
 }
 
 fn parse_tool_permission_policy(value: &str) -> Result<ToolPermissionPolicy> {
@@ -6075,9 +6477,80 @@ fn set_tool_permission(
         "memory_write" => permissions.memory_write = policy,
         "settings_change" => permissions.settings_change = policy,
         "agent_launch" => permissions.agent_launch = policy,
+        "context_switch" => permissions.context_switch = policy,
         _ => anyhow::bail!("Unknown tool permission key `{key}`. Try /settings tool-permissions."),
     }
+    permissions.preset = ToolPermissionPreset::Custom;
     Ok(())
+}
+
+fn apply_tool_permission_preset(
+    permissions: &mut ToolPermissionsConfig,
+    preset: ToolPermissionPreset,
+) {
+    *permissions = match preset {
+        ToolPermissionPreset::Balanced => ToolPermissionsConfig::default(),
+        ToolPermissionPreset::Autopilot => ToolPermissionsConfig {
+            preset,
+            library_read: ToolPermissionPolicy::Auto,
+            library_create: ToolPermissionPolicy::Auto,
+            library_edit_markdown: ToolPermissionPolicy::Auto,
+            library_move: ToolPermissionPolicy::Auto,
+            library_delete: ToolPermissionPolicy::Ask,
+            workspace_create: ToolPermissionPolicy::Auto,
+            workspace_move: ToolPermissionPolicy::Auto,
+            workspace_delete: ToolPermissionPolicy::Ask,
+            memory_write: ToolPermissionPolicy::Auto,
+            settings_change: ToolPermissionPolicy::Ask,
+            agent_launch: ToolPermissionPolicy::Auto,
+            context_switch: ToolPermissionPolicy::Auto,
+        },
+        ToolPermissionPreset::Confirm => ToolPermissionsConfig {
+            preset,
+            library_read: ToolPermissionPolicy::Auto,
+            library_create: ToolPermissionPolicy::Ask,
+            library_edit_markdown: ToolPermissionPolicy::Ask,
+            library_move: ToolPermissionPolicy::Ask,
+            library_delete: ToolPermissionPolicy::Ask,
+            workspace_create: ToolPermissionPolicy::Ask,
+            workspace_move: ToolPermissionPolicy::Ask,
+            workspace_delete: ToolPermissionPolicy::Ask,
+            memory_write: ToolPermissionPolicy::Ask,
+            settings_change: ToolPermissionPolicy::Ask,
+            agent_launch: ToolPermissionPolicy::Ask,
+            context_switch: ToolPermissionPolicy::Ask,
+        },
+        ToolPermissionPreset::LockedDown => ToolPermissionsConfig {
+            preset,
+            library_read: ToolPermissionPolicy::Auto,
+            library_create: ToolPermissionPolicy::Deny,
+            library_edit_markdown: ToolPermissionPolicy::Deny,
+            library_move: ToolPermissionPolicy::Deny,
+            library_delete: ToolPermissionPolicy::Deny,
+            workspace_create: ToolPermissionPolicy::Deny,
+            workspace_move: ToolPermissionPolicy::Deny,
+            workspace_delete: ToolPermissionPolicy::Deny,
+            memory_write: ToolPermissionPolicy::Ask,
+            settings_change: ToolPermissionPolicy::Ask,
+            agent_launch: ToolPermissionPolicy::Deny,
+            context_switch: ToolPermissionPolicy::Deny,
+        },
+        ToolPermissionPreset::Custom => {
+            let mut custom = permissions.clone();
+            custom.preset = ToolPermissionPreset::Custom;
+            custom
+        }
+    };
+}
+
+fn preset_label(preset: ToolPermissionPreset) -> &'static str {
+    match preset {
+        ToolPermissionPreset::Balanced => "balanced",
+        ToolPermissionPreset::Autopilot => "autopilot",
+        ToolPermissionPreset::Confirm => "confirm",
+        ToolPermissionPreset::LockedDown => "locked_down",
+        ToolPermissionPreset::Custom => "custom",
+    }
 }
 
 fn policy_label(policy: ToolPermissionPolicy) -> &'static str {
@@ -7345,6 +7818,7 @@ mod tests {
                 Json(LibrarianChatRequest {
                     message: "/help".to_string(),
                     project: None,
+                    project_context: None,
                     session_id: None,
                 }),
             )
@@ -7679,6 +8153,7 @@ mod tests {
                     message: r#"/agent launch "Launch Test" "summarize state" --provider codex --read-only --yes"#
                         .to_string(),
                     project: None,
+                    project_context: None,
                     session_id: None,
                 }),
             )
@@ -7750,6 +8225,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_tool_permission_preset_tokens() {
+        assert_eq!(
+            parse_tool_permission_preset("balanced").expect("balanced"),
+            ToolPermissionPreset::Balanced
+        );
+        assert_eq!(
+            parse_tool_permission_preset("locked-down").expect("locked"),
+            ToolPermissionPreset::LockedDown
+        );
+        assert!(parse_tool_permission_preset("maybe").is_err());
+    }
+
+    #[test]
     fn sets_tool_permission_by_key() {
         let mut permissions = ToolPermissionsConfig::default();
         set_tool_permission(
@@ -7762,12 +8250,44 @@ mod tests {
             permissions.library_edit_markdown,
             ToolPermissionPolicy::Auto
         );
+        assert_eq!(permissions.preset, ToolPermissionPreset::Custom);
         assert!(set_tool_permission(
             &mut permissions,
             "unknown_permission",
             ToolPermissionPolicy::Deny,
         )
         .is_err());
+    }
+
+    #[test]
+    fn applies_permission_presets() {
+        let mut permissions = ToolPermissionsConfig::default();
+        set_tool_permission(
+            &mut permissions,
+            "context_switch",
+            ToolPermissionPolicy::Auto,
+        )
+        .expect("set custom");
+        assert_eq!(permissions.preset, ToolPermissionPreset::Custom);
+
+        apply_tool_permission_preset(&mut permissions, ToolPermissionPreset::LockedDown);
+        assert_eq!(permissions.preset, ToolPermissionPreset::LockedDown);
+        assert_eq!(permissions.context_switch, ToolPermissionPolicy::Deny);
+        assert_eq!(permissions.library_create, ToolPermissionPolicy::Deny);
+
+        apply_tool_permission_preset(&mut permissions, ToolPermissionPreset::Balanced);
+        assert_eq!(permissions.preset, ToolPermissionPreset::Balanced);
+        assert_eq!(permissions.context_switch, ToolPermissionPolicy::Ask);
+    }
+
+    #[test]
+    fn humanizes_project_names_for_context_labels() {
+        assert_eq!(humanize_project_name("AdvenTableDays"), "Adven Table Days");
+        assert_eq!(
+            humanize_project_name("games/adventable-days/overview.md"),
+            "Games Adventable Days Overview"
+        );
+        assert_eq!(humanize_project_name("AIResearch2026"), "AI Research 2026");
     }
 
     #[test]

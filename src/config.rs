@@ -69,6 +69,8 @@ pub enum ToolPermissionPolicy {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ToolPermissionsConfig {
+    #[serde(default)]
+    pub preset: ToolPermissionPreset,
     pub library_read: ToolPermissionPolicy,
     pub library_create: ToolPermissionPolicy,
     pub library_edit_markdown: ToolPermissionPolicy,
@@ -80,6 +82,28 @@ pub struct ToolPermissionsConfig {
     pub memory_write: ToolPermissionPolicy,
     pub settings_change: ToolPermissionPolicy,
     pub agent_launch: ToolPermissionPolicy,
+    #[serde(default = "default_context_switch_policy")]
+    pub context_switch: ToolPermissionPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPermissionPreset {
+    Balanced,
+    Autopilot,
+    Confirm,
+    LockedDown,
+    Custom,
+}
+
+impl Default for ToolPermissionPreset {
+    fn default() -> Self {
+        Self::Balanced
+    }
+}
+
+fn default_context_switch_policy() -> ToolPermissionPolicy {
+    ToolPermissionPolicy::Ask
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -201,6 +225,7 @@ impl Default for ChatConfig {
 impl Default for ToolPermissionsConfig {
     fn default() -> Self {
         Self {
+            preset: ToolPermissionPreset::Balanced,
             library_read: ToolPermissionPolicy::Auto,
             library_create: ToolPermissionPolicy::Auto,
             library_edit_markdown: ToolPermissionPolicy::Ask,
@@ -212,6 +237,7 @@ impl Default for ToolPermissionsConfig {
             memory_write: ToolPermissionPolicy::Auto,
             settings_change: ToolPermissionPolicy::Ask,
             agent_launch: ToolPermissionPolicy::Ask,
+            context_switch: ToolPermissionPolicy::Ask,
         }
     }
 }
@@ -574,7 +600,9 @@ mod tests {
         assert!(stored.contains("assistant_name = \"Sage\""));
         assert!(stored.contains("codex_timeout_seconds = 42"));
         assert!(stored.contains("[tool_permissions]"));
+        assert!(stored.contains("preset = \"balanced\""));
         assert!(stored.contains("library_delete = \"deny\""));
+        assert!(stored.contains("context_switch = \"ask\""));
 
         let reloaded = Config::load_or_default(Some(home.clone())).expect("reload");
         assert!(reloaded.routing.fallback_enabled);
@@ -598,6 +626,14 @@ mod tests {
         assert_eq!(
             reloaded.tool_permissions.library_delete,
             ToolPermissionPolicy::Deny
+        );
+        assert_eq!(
+            reloaded.tool_permissions.preset,
+            ToolPermissionPreset::Balanced
+        );
+        assert_eq!(
+            reloaded.tool_permissions.context_switch,
+            ToolPermissionPolicy::Ask
         );
         std::fs::remove_dir_all(home).ok();
     }
