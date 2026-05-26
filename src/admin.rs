@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use anyhow::Result;
 use axum::{
@@ -69,13 +74,6 @@ impl ChatProjectContext {
 
     fn has_suggestion(&self) -> bool {
         !self.suggested_nodes.is_empty()
-    }
-
-    fn projects(&self) -> Vec<Project> {
-        self.nodes
-            .iter()
-            .filter_map(|node| node.project.clone())
-            .collect()
     }
 
     fn metadata(&self) -> serde_json::Value {
@@ -3955,9 +3953,10 @@ async fn retrieve_chat_context_pack(
     db: &Database,
     config: &Config,
     query: &str,
-    projects: &[Project],
+    chat_context: &ChatProjectContext,
 ) -> Result<crate::domain::ContextPack> {
-    if projects.is_empty() {
+    let project_ids = context_project_ids_for_retrieval(db, chat_context).await?;
+    if project_ids.is_empty() {
         return memory::retrieve_context_with_config(
             db,
             Some(config),
@@ -3972,14 +3971,14 @@ async fn retrieve_chat_context_pack(
     }
 
     let mut packs = Vec::new();
-    for project in projects {
+    for project_id in &project_ids {
         packs.push(
             memory::retrieve_context_with_config(
                 db,
                 Some(config),
                 memory::RetrievalRequest {
                     query: query.to_string(),
-                    project_id: Some(project.id),
+                    project_id: Some(*project_id),
                     activity_id: None,
                     limit: config.chat.memory_hit_limit,
                 },
@@ -4004,11 +4003,42 @@ async fn retrieve_chat_context_pack(
 
     Ok(crate::domain::ContextPack {
         query: query.to_string(),
-        project_id: projects.first().map(|project| project.id),
+        project_id: project_ids.first().copied(),
         activity_id: None,
         generated_at: chrono::Utc::now(),
         hits,
     })
+}
+
+async fn context_project_ids_for_retrieval(
+    db: &Database,
+    chat_context: &ChatProjectContext,
+) -> Result<Vec<Uuid>> {
+    let all_projects = db.list_projects().await?;
+    let mut ids = Vec::new();
+    for node in &chat_context.nodes {
+        if let Some(project) = &node.project {
+            ids.push(project.id);
+        }
+        if let Some(library_path) = &node.library_path {
+            for project in &all_projects {
+                if project
+                    .library_path
+                    .as_ref()
+                    .is_some_and(|project_path| library_path_contains(library_path, project_path))
+                {
+                    ids.push(project.id);
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+fn library_path_contains(parent: &Path, candidate: &Path) -> bool {
+    candidate == parent || candidate.starts_with(parent)
 }
 
 async fn librarian_chat(
@@ -4099,13 +4129,8 @@ async fn librarian_chat(
     {
         result
     } else {
-        let initial_context_pack = retrieve_chat_context_pack(
-            &state.db,
-            &config,
-            &gated.content,
-            &chat_context.projects(),
-        )
-        .await?;
+        let initial_context_pack =
+            retrieve_chat_context_pack(&state.db, &config, &gated.content, &chat_context).await?;
         chat::run_librarian_chat_loop(
             &state.db,
             &config,
@@ -8610,6 +8635,22 @@ mod tests {
             "Games Adventable Days Overview"
         );
         assert_eq!(humanize_project_name("AIResearch2026"), "AI Research 2026");
+    }
+
+    #[test]
+    fn library_context_paths_include_descendants() {
+        assert!(library_path_contains(
+            Path::new("Games"),
+            Path::new("Games/AdvenTableDays")
+        ));
+        assert!(library_path_contains(
+            Path::new("Games"),
+            Path::new("Games")
+        ));
+        assert!(!library_path_contains(
+            Path::new("Games"),
+            Path::new("GameTools")
+        ));
     }
 
     #[test]
