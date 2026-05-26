@@ -118,6 +118,12 @@ local/preflight part without calling the model:
 librarian --home "$HOME/Librarian" smoke mvp --provider codex
 ```
 
+Run the context/tree-memory smoke without calling a provider:
+
+```bash
+librarian --home "$HOME/Librarian" smoke context
+```
+
 The same preflight smoke can also run through doctor:
 
 ```bash

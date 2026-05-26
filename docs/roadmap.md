@@ -382,6 +382,10 @@ Tasks:
   operations, writes searchable memory, runs job preflight, and optionally runs
   that exact provider job. `doctor --smoke` runs the same preflight smoke from
   the readiness command.
+- Context/tree memory smoke now exposes `librarian smoke context`, which creates
+  a disposable parent/child Library context pair, writes child memory, and
+  verifies that a parent subtree scan can find the child memory without a
+  provider call.
 
 ## Priority 1B: Literal Project Library and Friendly Admin UX
 

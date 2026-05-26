@@ -223,6 +223,10 @@ enum SmokeCommand {
         #[arg(long, default_value = "LibrarianSmoke")]
         name: String,
     },
+    Context {
+        #[arg(long, default_value = "LibrarianContextSmoke")]
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -828,6 +832,9 @@ async fn main() -> Result<()> {
                     &name,
                 )
                 .await?;
+            }
+            SmokeCommand::Context { name } => {
+                run_context_smoke(&config, &name).await?;
             }
         },
         Command::Auth { command } => match command {
@@ -2040,6 +2047,114 @@ async fn run_mvp_smoke(
     Ok(())
 }
 
+async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+
+    let started_at = Utc::now();
+    let slug = smoke_slug(name, started_at);
+    let parent_library = format!("context-smoke/{slug}");
+    let child_library = format!("{parent_library}/ChildProject");
+    let parent_workspace = config.home.join("Projects").join("_smoke").join(&slug);
+    let child_workspace = parent_workspace.join("ChildProject");
+
+    println!("Librarian context smoke");
+    println!("  root: {}", config.home.display());
+    println!("  library context: {parent_library}");
+
+    library_tools::create_folder(config, library_tools::LibraryRoot::Library, &child_library)?;
+    fs::create_dir_all(&child_workspace)
+        .with_context(|| format!("Failed to create {}", child_workspace.display()))?;
+    let parent_workspace = parent_workspace
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", parent_workspace.display()))?;
+    let child_workspace = child_workspace
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", child_workspace.display()))?;
+
+    let parent = db
+        .add_project(
+            &format!("{} Parent", smoke_display_name(name)),
+            &parent_workspace,
+        )
+        .await?;
+    let parent = db
+        .attach_project_library_path(parent.id, Path::new(&parent_library))
+        .await?;
+    let child = db
+        .add_project(
+            &format!("{} Child", smoke_display_name(name)),
+            &child_workspace,
+        )
+        .await?;
+    let child = db
+        .attach_project_library_path(child.id, Path::new(&child_library))
+        .await?;
+
+    let marker = format!("context smoke marker {slug}");
+    let memory_item = db
+        .add_memory_item(
+            Some(child.id),
+            None,
+            MemoryKind::Fact,
+            Some("context-smoke"),
+            &format!("{marker}: child memory must be visible from parent subtree context."),
+            Some("cli:smoke-context"),
+            json!({
+                "context_path": child_library,
+                "parent_context_path": parent_library,
+                "scope": "context-smoke",
+            }),
+        )
+        .await?;
+    memory::embed_item(&db, config, &memory_item).await?;
+
+    let descendants = db
+        .list_projects()
+        .await?
+        .into_iter()
+        .filter(|project| {
+            let parent_path = Path::new(&parent_library);
+            project
+                .library_path
+                .as_ref()
+                .is_some_and(|path| path == parent_path || path.starts_with(parent_path))
+        })
+        .collect::<Vec<_>>();
+    if descendants.len() < 2 {
+        anyhow::bail!("Context smoke expected parent and child projects in subtree");
+    }
+
+    let mut found = false;
+    for project in descendants {
+        let pack = memory::retrieve_context_with_config(
+            &db,
+            Some(config),
+            memory::RetrievalRequest {
+                query: marker.clone(),
+                project_id: Some(project.id),
+                activity_id: None,
+                limit: memory::default_hit_limit(),
+            },
+        )
+        .await?;
+        if pack.hits.iter().any(|hit| hit.item.id == memory_item.id) {
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        anyhow::bail!("Context smoke did not retrieve child memory from parent subtree scan");
+    }
+
+    println!("   OK: parent project {} ({})", parent.name, parent.id);
+    println!("   OK: child project {} ({})", child.name, child.id);
+    println!("   OK: subtree memory retrieval found {}", memory_item.id);
+    println!("Context smoke passed.");
+    Ok(())
+}
+
 fn smoke_display_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -2289,6 +2404,7 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
             )
         );
         println!("  {command} smoke mvp --provider codex --run-agent");
+        println!("  {command} smoke context");
         println!("  {command} doctor --smoke");
         println!("  {command} admin");
         println!();
