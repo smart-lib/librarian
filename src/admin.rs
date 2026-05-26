@@ -36,6 +36,7 @@ struct AppState {
 #[derive(Clone, Debug)]
 struct ChatProjectContext {
     nodes: Vec<ChatLibraryContextNode>,
+    suggested_nodes: Vec<ChatLibraryContextNode>,
     source: &'static str,
 }
 
@@ -62,6 +63,14 @@ impl ChatProjectContext {
         context_label_for_nodes(&self.nodes)
     }
 
+    fn suggested_label(&self) -> String {
+        context_label_for_nodes(&self.suggested_nodes)
+    }
+
+    fn has_suggestion(&self) -> bool {
+        !self.suggested_nodes.is_empty()
+    }
+
     fn projects(&self) -> Vec<Project> {
         self.nodes
             .iter()
@@ -74,6 +83,7 @@ impl ChatProjectContext {
             "source": self.source,
             "label": self.label(),
             "nodes": self.nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
+            "suggested_nodes": self.suggested_nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
             "projects": self.nodes.iter().filter_map(|node| node.project.as_ref()).map(project_context_metadata).collect::<Vec<_>>(),
         })
     }
@@ -766,6 +776,16 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const last = String(source).split(/[\\/]/).filter(Boolean).pop() || project.name;
         return humanProjectName(last);
       }
+      function contextNodeFromMetadata(node) {
+        const project = node?.project || {};
+        return {
+          id: project.id || node?.id || '',
+          name: project.name || node?.library_path || node?.label || '',
+          library_path: node?.library_path || project.library_path || '',
+          path: project.workspace_path || project.path || '',
+          label: node?.label || project.display_name || ''
+        };
+      }
       function contextLabelFromProjects(projects) {
         return Array.isArray(projects) && projects.length
           ? projects.map(projectDisplayName).join(' + ')
@@ -843,6 +863,38 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         article.querySelectorAll('[data-approval-decision]').forEach(button => {
           if (terminal) button.disabled = true;
           button.addEventListener('click', () => decideApproval(article, approval?.id, button.dataset.approvalDecision));
+        });
+        el('chat-log').scrollTop = el('chat-log').scrollHeight;
+      }
+      function setContextSwitchCard(article, ui, detail) {
+        const context = ui?.context || {};
+        const nodes = Array.isArray(context.nodes) ? context.nodes.map(contextNodeFromMetadata) : [];
+        const label = context.label || ui?.label || contextLabelFromProjects(nodes);
+        article.className = 'message assistant approval context-switch';
+        article.innerHTML = `
+          <div class="approval-head"><span>Context suggestion</span><span class="approval-risk">Review</span></div>
+          <div class="approval-summary">Switch this chat to <strong>${htmlEscape(label)}</strong>?</div>
+          <div class="approval-paths">${nodes.length ? nodes.map(node => `<div>${htmlEscape(node.library_path || node.name)}</div>`).join('') : '<div>No context nodes declared.</div>'}</div>
+          <div class="approval-actions">
+            <button type="button" data-context-decision="approve">Switch context</button>
+            <button type="button" class="reject" data-context-decision="reject">Keep current</button>
+          </div>
+        `;
+        if (detail) {
+          const small = document.createElement('small');
+          small.textContent = `${detail} - proposed context: ${label}`;
+          article.appendChild(small);
+        }
+        article.querySelector('[data-context-decision="approve"]').addEventListener('click', () => {
+          state.activeContext = nodes;
+          state.activeProject = nodes[0]?.name || '';
+          renderContext();
+          appendMessage('system', `Context switched to ${label}.`, 'Context');
+          article.querySelectorAll('[data-context-decision]').forEach(button => button.disabled = true);
+        });
+        article.querySelector('[data-context-decision="reject"]').addEventListener('click', () => {
+          appendMessage('system', 'Context suggestion dismissed.', 'Context');
+          article.querySelectorAll('[data-context-decision]').forEach(button => button.disabled = true);
         });
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
       }
@@ -1384,20 +1436,15 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             body: JSON.stringify({
               message: goal,
               project: project || null,
-              project_context: contextProjects.map(project => project.name),
+              project_context: contextProjects.map(project => project.name || project.library_path).filter(Boolean),
               session_id: state.chatSessionId
             })
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
           if (data.session_id) state.chatSessionId = data.session_id;
-          if (data.context?.projects?.length) {
-            state.activeContext = data.context.projects.map(project => ({
-              id: project.id,
-              name: project.name,
-              library_path: project.library_path,
-              path: project.workspace_path
-            }));
+          if (data.context?.nodes?.length) {
+            state.activeContext = data.context.nodes.map(contextNodeFromMetadata);
             state.activeProject = state.activeContext[0]?.name || '';
             renderContext();
           }
@@ -1407,7 +1454,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const detail = data.mode === 'slash-command'
             ? 'Command result'
             : `${assistantName()} - ${(elapsed / 1000).toFixed(1)}s - ${iterationCount} it - ${memoryCount} memory`;
-          if (data.ui?.type === 'approval') {
+          if (data.ui?.type === 'context_switch') {
+            setContextSwitchCard(pending, data.ui, detail);
+          } else if (data.ui?.type === 'approval') {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
           } else {
             if (data.mode === 'slash-command') pending.className = 'message system command';
@@ -3655,13 +3704,15 @@ async fn resolve_chat_project_context(
     if !nodes.is_empty() {
         return Ok(ChatProjectContext {
             nodes,
+            suggested_nodes: Vec::new(),
             source: "explicit",
         });
     }
 
-    if config.tool_permissions.context_switch != ToolPermissionPolicy::Auto {
+    if message.trim_start().starts_with('/') {
         return Ok(ChatProjectContext {
-            nodes,
+            nodes: Vec::new(),
+            suggested_nodes: Vec::new(),
             source: "global",
         });
     }
@@ -3683,22 +3734,34 @@ async fn resolve_chat_project_context(
         .cloned()
         .collect::<Vec<_>>();
     matches.sort_by(|left, right| left.name.cmp(&right.name));
-    if matches.len() == 1 {
-        Ok(ChatProjectContext {
-            nodes: matches
-                .into_iter()
-                .map(|project| ChatLibraryContextNode {
-                    library_path: project.library_path.clone(),
-                    project: Some(project),
-                })
-                .collect(),
-            source: "auto",
-        })
+    let inferred_nodes = if matches.len() == 1 {
+        matches
+            .into_iter()
+            .map(|project| ChatLibraryContextNode {
+                library_path: project.library_path.clone(),
+                project: Some(project),
+            })
+            .collect::<Vec<_>>()
     } else {
-        Ok(ChatProjectContext {
+        Vec::new()
+    };
+
+    match config.tool_permissions.context_switch {
+        ToolPermissionPolicy::Auto if !inferred_nodes.is_empty() => Ok(ChatProjectContext {
+            nodes: inferred_nodes,
+            suggested_nodes: Vec::new(),
+            source: "auto",
+        }),
+        ToolPermissionPolicy::Ask if !inferred_nodes.is_empty() => Ok(ChatProjectContext {
             nodes: Vec::new(),
+            suggested_nodes: inferred_nodes,
+            source: "suggested",
+        }),
+        _ => Ok(ChatProjectContext {
+            nodes: Vec::new(),
+            suggested_nodes: Vec::new(),
             source: "global",
-        })
+        }),
     }
 }
 
@@ -4004,7 +4067,27 @@ async fn librarian_chat(
         )
         .await?;
 
-    let chat_result = if let Some(result) =
+    let chat_result = if chat_context.has_suggestion() {
+        let suggested_label = chat_context.suggested_label();
+        LibrarianChatResult {
+            reply: format!(
+                "Похоже, этот диалог относится к контексту `{suggested_label}`. Переключить текущий контекст?"
+            ),
+            memory_hits: Vec::new(),
+            mode: "context-switch-proposal",
+            iterations: 0,
+            trace: Vec::new(),
+            ui: Some(serde_json::json!({
+                "type": "context_switch",
+                "label": suggested_label,
+                "context": {
+                    "source": "suggested",
+                    "label": suggested_label,
+                    "nodes": chat_context.suggested_nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
+                }
+            })),
+        }
+    } else if let Some(result) =
         execute_slash_command(&state, &config, project, &gated.content).await?
     {
         result
