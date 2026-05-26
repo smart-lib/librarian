@@ -35,13 +35,19 @@ struct AppState {
 
 #[derive(Clone, Debug)]
 struct ChatProjectContext {
-    projects: Vec<Project>,
+    nodes: Vec<ChatLibraryContextNode>,
     source: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct ChatLibraryContextNode {
+    library_path: Option<PathBuf>,
+    project: Option<Project>,
 }
 
 impl ChatProjectContext {
     fn primary_project(&self) -> Option<&Project> {
-        self.projects.first()
+        self.nodes.iter().find_map(|node| node.project.as_ref())
     }
 
     fn primary_project_id(&self) -> Option<Uuid> {
@@ -49,18 +55,26 @@ impl ChatProjectContext {
     }
 
     fn is_empty(&self) -> bool {
-        self.projects.is_empty()
+        self.nodes.is_empty()
     }
 
     fn label(&self) -> String {
-        context_label_for_projects(&self.projects)
+        context_label_for_nodes(&self.nodes)
+    }
+
+    fn projects(&self) -> Vec<Project> {
+        self.nodes
+            .iter()
+            .filter_map(|node| node.project.clone())
+            .collect()
     }
 
     fn metadata(&self) -> serde_json::Value {
         serde_json::json!({
             "source": self.source,
             "label": self.label(),
-            "projects": self.projects.iter().map(project_context_metadata).collect::<Vec<_>>(),
+            "nodes": self.nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
+            "projects": self.nodes.iter().filter_map(|node| node.project.as_ref()).map(project_context_metadata).collect::<Vec<_>>(),
         })
     }
 }
@@ -3615,6 +3629,7 @@ async fn resolve_chat_project_context(
     input: &LibrarianChatRequest,
     message: &str,
 ) -> Result<ChatProjectContext> {
+    let known_projects = state.db.list_projects().await?;
     let mut requested = Vec::new();
     if let Some(values) = &input.project_context {
         requested.extend(values.iter().map(String::as_str));
@@ -3623,40 +3638,37 @@ async fn resolve_chat_project_context(
         requested.push(value);
     }
 
-    let mut projects = Vec::new();
+    let mut nodes = Vec::new();
     for value in requested {
         let value = value.trim();
         if value.is_empty() {
             continue;
         }
-        let project = state.db.get_project_by_name_or_id(value).await?;
-        if !projects
+        let node = resolve_library_context_node(config, &known_projects, value)?;
+        if !nodes
             .iter()
-            .any(|existing: &Project| existing.id == project.id)
+            .any(|existing| same_context_node(existing, &node))
         {
-            projects.push(project);
+            nodes.push(node);
         }
     }
-    if !projects.is_empty() {
+    if !nodes.is_empty() {
         return Ok(ChatProjectContext {
-            projects,
+            nodes,
             source: "explicit",
         });
     }
 
     if config.tool_permissions.context_switch != ToolPermissionPolicy::Auto {
         return Ok(ChatProjectContext {
-            projects,
+            nodes,
             source: "global",
         });
     }
 
     let message_key = normalized_project_lookup_key(message);
-    let mut matches = state
-        .db
-        .list_projects()
-        .await?
-        .into_iter()
+    let mut matches = known_projects
+        .iter()
         .filter(|project| {
             let name_key = normalized_project_lookup_key(&project.name);
             let path_key = project
@@ -3668,31 +3680,104 @@ async fn resolve_chat_project_context(
                 && (message_key.contains(&name_key)
                     || (!path_key.is_empty() && message_key.contains(&path_key)))
         })
+        .cloned()
         .collect::<Vec<_>>();
     matches.sort_by(|left, right| left.name.cmp(&right.name));
     if matches.len() == 1 {
         Ok(ChatProjectContext {
-            projects: matches,
+            nodes: matches
+                .into_iter()
+                .map(|project| ChatLibraryContextNode {
+                    library_path: project.library_path.clone(),
+                    project: Some(project),
+                })
+                .collect(),
             source: "auto",
         })
     } else {
         Ok(ChatProjectContext {
-            projects: Vec::new(),
+            nodes: Vec::new(),
             source: "global",
         })
     }
 }
 
-fn context_label_for_projects(projects: &[Project]) -> String {
-    if projects.is_empty() {
+fn resolve_library_context_node(
+    config: &Config,
+    projects: &[Project],
+    value: &str,
+) -> Result<ChatLibraryContextNode> {
+    if let Some(project) = find_project_context_ref(projects, value) {
+        return Ok(ChatLibraryContextNode {
+            library_path: project.library_path.clone(),
+            project: Some(project.clone()),
+        });
+    }
+    let library_path = normalize_library_context_path(config, value)?;
+    let project = projects
+        .iter()
+        .find(|project| project.library_path.as_ref() == Some(&library_path))
+        .cloned();
+    Ok(ChatLibraryContextNode {
+        library_path: Some(library_path),
+        project,
+    })
+}
+
+fn find_project_context_ref<'a>(projects: &'a [Project], value: &str) -> Option<&'a Project> {
+    let normalized_value = value.trim().trim_start_matches('/').replace('\\', "/");
+    projects.iter().find(|project| {
+        project.id.to_string() == value
+            || project.name == value
+            || project
+                .library_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().replace('\\', "/") == normalized_value)
+                .unwrap_or(false)
+    })
+}
+
+fn normalize_library_context_path(config: &Config, value: &str) -> Result<PathBuf> {
+    let trimmed = value
+        .trim()
+        .trim_start_matches("Library/")
+        .trim_start_matches("Library\\")
+        .trim_start_matches('/');
+    let normalized = library_tools::normalize_tool_relative_path(trimmed)?;
+    let relative = PathBuf::from(normalized);
+    let absolute = config.vault_path.join(&relative);
+    if !absolute.exists() {
+        anyhow::bail!("Library context `{}` was not found", relative.display());
+    }
+    Ok(relative)
+}
+
+fn same_context_node(left: &ChatLibraryContextNode, right: &ChatLibraryContextNode) -> bool {
+    if let (Some(left_project), Some(right_project)) = (&left.project, &right.project) {
+        return left_project.id == right_project.id;
+    }
+    left.library_path == right.library_path
+}
+
+fn context_label_for_nodes(nodes: &[ChatLibraryContextNode]) -> String {
+    if nodes.is_empty() {
         "Global conversation".to_string()
     } else {
-        projects
+        nodes
             .iter()
-            .map(project_display_label)
+            .map(library_context_display_label)
             .collect::<Vec<_>>()
             .join(" + ")
     }
+}
+
+fn library_context_metadata(node: &ChatLibraryContextNode) -> serde_json::Value {
+    serde_json::json!({
+        "kind": if node.library_path.is_some() { "library_node" } else { "project" },
+        "label": library_context_display_label(node),
+        "library_path": node.library_path.as_ref().map(|path| path.to_string_lossy().replace('\\', "/")),
+        "project": node.project.as_ref().map(project_context_metadata),
+    })
 }
 
 fn project_context_metadata(project: &Project) -> serde_json::Value {
@@ -3703,6 +3788,17 @@ fn project_context_metadata(project: &Project) -> serde_json::Value {
         "library_path": project.library_path.as_ref().map(|path| path.to_string_lossy().to_string()),
         "workspace_path": project.path.to_string_lossy().to_string(),
     })
+}
+
+fn library_context_display_label(node: &ChatLibraryContextNode) -> String {
+    node.library_path
+        .as_ref()
+        .map(|path| {
+            let value = path.to_string_lossy().replace('\\', "/");
+            humanize_project_name(value.split('/').next_back().unwrap_or(&value))
+        })
+        .or_else(|| node.project.as_ref().map(project_display_label))
+        .unwrap_or_else(|| "Global conversation".to_string())
 }
 
 fn project_display_label(project: &Project) -> String {
@@ -3913,9 +4009,13 @@ async fn librarian_chat(
     {
         result
     } else {
-        let initial_context_pack =
-            retrieve_chat_context_pack(&state.db, &config, &gated.content, &chat_context.projects)
-                .await?;
+        let initial_context_pack = retrieve_chat_context_pack(
+            &state.db,
+            &config,
+            &gated.content,
+            &chat_context.projects(),
+        )
+        .await?;
         chat::run_librarian_chat_loop(
             &state.db,
             &config,
