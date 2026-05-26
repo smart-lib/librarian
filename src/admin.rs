@@ -770,7 +770,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
       function projectDisplayName(project) {
         if (!project) return '';
-        const source = project.library_path || project.name || '';
+        const source = project.context_path || project.library_path || project.name || '';
         const last = String(source).split(/[\\/]/).filter(Boolean).pop() || project.name;
         return humanProjectName(last);
       }
@@ -778,8 +778,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const project = node?.project || {};
         return {
           id: project.id || node?.id || '',
-          name: project.name || node?.library_path || node?.label || '',
-          library_path: node?.library_path || project.library_path || '',
+          name: project.name || node?.context_path || node?.library_path || node?.label || '',
+          library_path: node?.context_path || node?.library_path || project.context_path || project.library_path || '',
+          context_path: node?.context_path || node?.library_path || project.context_path || project.library_path || '',
           path: project.workspace_path || project.path || '',
           label: node?.label || project.display_name || ''
         };
@@ -2461,7 +2462,29 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn projects(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
-    Ok(Json(state.db.list_projects().await?))
+    let projects = state.db.list_projects().await?;
+    Ok(Json(
+        projects.iter().map(project_api_json).collect::<Vec<_>>(),
+    ))
+}
+
+fn project_api_json(project: &Project) -> serde_json::Value {
+    let context_path = project
+        .library_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().replace('\\', "/"));
+    let workspace_path = project.path.to_string_lossy().to_string();
+    serde_json::json!({
+        "id": project.id,
+        "name": project.name,
+        "library_path": context_path.clone(),
+        "context_path": context_path,
+        "workspace_path": workspace_path,
+        "path": workspace_path,
+        "autonomy_mode": project.autonomy_mode,
+        "git_policy": project.git_policy,
+        "created_at": project.created_at,
+    })
 }
 
 async fn create_project(
@@ -2516,7 +2539,7 @@ async fn create_project(
         }),
     )
     .await?;
-    Ok(Json(project))
+    Ok(Json(project_api_json(&project)))
 }
 
 async fn attach_project_library(
@@ -2547,7 +2570,7 @@ async fn attach_project_library(
         }),
     )
     .await?;
-    Ok(Json(project))
+    Ok(Json(project_api_json(&project)))
 }
 
 async fn attach_project_workspace(
@@ -2578,7 +2601,7 @@ async fn attach_project_workspace(
         }),
     )
     .await?;
-    Ok(Json(project))
+    Ok(Json(project_api_json(&project)))
 }
 
 async fn project_map(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
@@ -3849,11 +3872,16 @@ fn library_context_metadata(node: &ChatLibraryContextNode) -> serde_json::Value 
 }
 
 fn project_context_metadata(project: &Project) -> serde_json::Value {
+    let context_path = project
+        .library_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().replace('\\', "/"));
     serde_json::json!({
         "id": project.id,
         "name": project.name,
         "display_name": project_display_label(project),
-        "library_path": project.library_path.as_ref().map(|path| path.to_string_lossy().to_string()),
+        "library_path": context_path.clone(),
+        "context_path": context_path,
         "workspace_path": project.path.to_string_lossy().to_string(),
     })
 }
