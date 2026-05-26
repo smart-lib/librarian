@@ -1456,6 +1456,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             : `${assistantName()} - ${(elapsed / 1000).toFixed(1)}s - ${iterationCount} it - ${memoryCount} memory`;
           if (data.ui?.type === 'context_switch') {
             setContextSwitchCard(pending, data.ui, detail);
+          } else if (data.ui?.type === 'context_update') {
+            const nodes = Array.isArray(data.ui.context?.nodes) ? data.ui.context.nodes.map(contextNodeFromMetadata) : [];
+            state.activeContext = nodes;
+            state.activeProject = nodes[0]?.name || '';
+            renderContext();
+            if (data.mode === 'slash-command') pending.className = 'message system command';
+            setMessage(pending, data.reply || 'Context updated.', detail, data.ui.context?.label || contextLabelFromProjects(nodes));
           } else if (data.ui?.type === 'approval') {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
           } else {
@@ -4088,7 +4095,7 @@ async fn librarian_chat(
             })),
         }
     } else if let Some(result) =
-        execute_slash_command(&state, &config, project, &gated.content).await?
+        execute_slash_command(&state, &config, &chat_context, project, &gated.content).await?
     {
         result
     } else {
@@ -4269,6 +4276,7 @@ async fn create_job(
 async fn execute_slash_command(
     state: &AppState,
     config: &Config,
+    chat_context: &ChatProjectContext,
     project: Option<&Project>,
     message: &str,
 ) -> Result<Option<LibrarianChatResult>> {
@@ -4278,7 +4286,7 @@ async fn execute_slash_command(
     let args = split_slash_args(command_line)?;
     if args.is_empty() {
         return Ok(Some(slash_reply(
-            "Available commands: /lib, /work, /mem, /settings, /remember, /help",
+            "Available commands: /context, /lib, /work, /mem, /settings, /remember, /help",
             serde_json::json!({ "command": "empty" }),
         )));
     }
@@ -4292,6 +4300,8 @@ async fn execute_slash_command(
         execute_memory_slash_command(&state.db, config, project, &args[1..]).await?
     } else if matches!(command.as_str(), "settings" | "config") {
         execute_settings_slash_command(state, config, &args[1..]).await?
+    } else if matches!(command.as_str(), "context" | "ctx") {
+        execute_context_slash_command(state, config, chat_context, &args[1..]).await?
     } else if matches!(command.as_str(), "agent" | "agents" | "job" | "jobs") {
         execute_agent_slash_command(state, config, &args[1..]).await?
     } else if matches!(command.as_str(), "project" | "projects") {
@@ -4314,7 +4324,7 @@ async fn execute_slash_command(
                 execute_library_slash_command(&state.db, config, &["tree".to_string()]).await?
             }
             _ => slash_reply(
-                "Unknown slash command. Try /help. Library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; project commands live under /project; approvals live under /approval; prompt blocks live under /prompt; settings commands live under /settings; background agent jobs live under /agent.",
+                "Unknown slash command. Try /help. Context commands live under /context; library commands live under /lib; working-folder commands live under /work; memory commands live under /mem; project commands live under /project; approvals live under /approval; prompt blocks live under /prompt; settings commands live under /settings; background agent jobs live under /agent.",
                 serde_json::json!({ "command": command, "status": "unknown" }),
             ),
         }
@@ -4730,7 +4740,136 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
 }
 
 fn slash_help() -> &'static str {
-    "Available command groups:\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/approval help - pending tool approval proposals\n/prompt help - prompt builder block presets\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+    "Available command groups:\n/context help - show or change the active chat context\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/approval help - pending tool approval proposals\n/prompt help - prompt builder block presets\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
+}
+
+async fn execute_context_slash_command(
+    state: &AppState,
+    config: &Config,
+    chat_context: &ChatProjectContext,
+    args: &[String],
+) -> Result<LibrarianChatResult> {
+    if args.is_empty() {
+        return Ok(slash_reply(
+            context_slash_help(),
+            serde_json::json!({ "command": "context" }),
+        ));
+    }
+    let command = args[0].to_ascii_lowercase();
+    let result = match command.as_str() {
+        "help" => slash_reply(
+            context_slash_help(),
+            serde_json::json!({ "tool": "context", "command": command }),
+        ),
+        "show" | "status" => slash_reply(
+            &format!("Current context: {}", chat_context.label()),
+            serde_json::json!({
+                "tool": "context",
+                "command": command,
+                "context": chat_context.metadata(),
+            }),
+        ),
+        "clear" => context_update_reply(
+            "Context cleared. Future messages will use the global conversation until you select another context.",
+            Vec::new(),
+            "clear",
+        ),
+        "set" | "use" => {
+            if args.len() < 2 {
+                anyhow::bail!("Usage: /context set <library-path|project-name|project-id>");
+            }
+            let nodes = resolve_context_nodes_from_args(state, config, &args[1..]).await?;
+            context_update_reply(
+                &format!("Context set to {}.", context_label_for_nodes(&nodes)),
+                nodes,
+                "set",
+            )
+        }
+        "add" => {
+            if args.len() < 2 {
+                anyhow::bail!("Usage: /context add <library-path|project-name|project-id>");
+            }
+            let mut nodes = chat_context.nodes.clone();
+            for node in resolve_context_nodes_from_args(state, config, &args[1..]).await? {
+                if !nodes.iter().any(|existing| same_context_node(existing, &node)) {
+                    nodes.push(node);
+                }
+            }
+            context_update_reply(
+                &format!("Context set to {}.", context_label_for_nodes(&nodes)),
+                nodes,
+                "add",
+            )
+        }
+        "remove" | "rm" => {
+            if args.len() < 2 {
+                anyhow::bail!("Usage: /context remove <library-path|project-name|project-id>");
+            }
+            let remove_nodes = resolve_context_nodes_from_args(state, config, &args[1..]).await?;
+            let mut nodes = chat_context.nodes.clone();
+            nodes.retain(|node| {
+                !remove_nodes
+                    .iter()
+                    .any(|remove| same_context_node(node, remove))
+            });
+            context_update_reply(
+                &format!("Context set to {}.", context_label_for_nodes(&nodes)),
+                nodes,
+                "remove",
+            )
+        }
+        _ => slash_reply(
+            "Unknown context command. Try /context help.",
+            serde_json::json!({ "tool": "context", "command": command, "status": "unknown" }),
+        ),
+    };
+    Ok(result)
+}
+
+async fn resolve_context_nodes_from_args(
+    state: &AppState,
+    config: &Config,
+    args: &[String],
+) -> Result<Vec<ChatLibraryContextNode>> {
+    let projects = state.db.list_projects().await?;
+    let mut nodes = Vec::new();
+    for value in args {
+        let node = resolve_library_context_node(config, &projects, value)?;
+        if !nodes
+            .iter()
+            .any(|existing| same_context_node(existing, &node))
+        {
+            nodes.push(node);
+        }
+    }
+    Ok(nodes)
+}
+
+fn context_update_reply(
+    reply: &str,
+    nodes: Vec<ChatLibraryContextNode>,
+    action: &str,
+) -> LibrarianChatResult {
+    LibrarianChatResult {
+        reply: reply.to_string(),
+        iterations: 0,
+        memory_hits: Vec::new(),
+        trace: Vec::new(),
+        mode: "slash-command",
+        ui: Some(serde_json::json!({
+            "type": "context_update",
+            "action": action,
+            "context": {
+                "source": "slash-command",
+                "label": context_label_for_nodes(&nodes),
+                "nodes": nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
+            }
+        })),
+    }
+}
+
+fn context_slash_help() -> &'static str {
+    "Context commands live under /context:\n/context show - show the current chat context\n/context set <library-path|project-name|project-id> - replace the context\n/context add <library-path|project-name|project-id> - add a context node\n/context remove <library-path|project-name|project-id> - remove a context node\n/context clear - return to global conversation"
 }
 
 fn library_slash_help() -> &'static str {
