@@ -44,6 +44,23 @@ pub struct AttachWorkspaceRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct UpdateToolPermissionsRequest {
+    pub preset: Option<String>,
+    pub library_read: Option<String>,
+    pub library_create: Option<String>,
+    pub library_edit_markdown: Option<String>,
+    pub library_move: Option<String>,
+    pub library_delete: Option<String>,
+    pub workspace_create: Option<String>,
+    pub workspace_move: Option<String>,
+    pub workspace_delete: Option<String>,
+    pub memory_write: Option<String>,
+    pub settings_change: Option<String>,
+    pub agent_launch: Option<String>,
+    pub context_switch: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PromptBlocksQuery {
     pub target: Option<String>,
 }

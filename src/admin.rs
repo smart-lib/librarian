@@ -1035,12 +1035,18 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
               <button type="submit">Save</button>
             </div>
           </form>`,
+          renderPermissionSettings(),
           card('Memory', `items=${memory.items ?? 0}<br>embedded=${memory.embedded_items ?? 0}<br>missing=${memory.missing_embeddings ?? 0}`),
           card('Knowledge base', `${htmlEscape(health.vault_path || 'Library')}<br><span class="muted">${htmlEscape(health.database_path || '.mdb/librarian.db')}</span>`),
           card('Secrets', `${htmlEscape(secrets.status || 'unknown')}<br><span class="muted">${htmlEscape(secrets.location || '')}</span>`)
         ].join('');
         const chatForm = el('chat-settings-form');
         if (chatForm) chatForm.addEventListener('submit', saveChatSettings);
+        const permissionsForm = el('tool-permissions-form');
+        if (permissionsForm) {
+          qsa('[data-permission]').forEach(select => select.addEventListener('change', () => { el('permission-preset').value = 'custom'; }));
+          permissionsForm.addEventListener('submit', saveToolPermissions);
+        }
       }
       async function saveChatSettings(event) {
         event.preventDefault();
@@ -1050,6 +1056,35 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           memory_hit_limit: Number(el('chat-memory-hit-limit').value || 12),
           max_iterations: Number(el('chat-max-iterations').value || 6)
         });
+      }
+      function policySelect(name, value) {
+        return `<select id="perm-${name}" data-permission="${name}">
+          ${['auto', 'ask', 'deny'].map(option => `<option value="${option}" ${option === value ? 'selected' : ''}>${option}</option>`).join('')}
+        </select>`;
+      }
+      function renderPermissionSettings() {
+        const permissions = state.health?.tool_permissions || {};
+        const keys = [
+          'library_read', 'library_create', 'library_edit_markdown', 'library_move', 'library_delete',
+          'workspace_create', 'workspace_move', 'workspace_delete',
+          'memory_write', 'settings_change', 'agent_launch', 'context_switch'
+        ];
+        return `<form id="tool-permissions-form" class="card stack">
+          <h3>Tool Permissions</h3>
+          <div class="form-grid">
+            <div><label for="permission-preset">Preset</label><select id="permission-preset">
+              ${['balanced', 'autopilot', 'confirm', 'locked_down', 'custom'].map(option => `<option value="${option}" ${option === (permissions.preset || 'balanced') ? 'selected' : ''}>${option}</option>`).join('')}
+            </select></div>
+            ${keys.map(key => `<div><label for="perm-${key}">${key}</label>${policySelect(key, permissions[key] || 'ask')}</div>`).join('')}
+            <button type="submit">Save</button>
+          </div>
+        </form>`;
+      }
+      async function saveToolPermissions(event) {
+        event.preventDefault();
+        const body = { preset: el('permission-preset').value };
+        qsa('[data-permission]').forEach(select => { body[select.dataset.permission] = select.value; });
+        await postJson('/api/settings/tool-permissions', body);
       }
       function renderChatSessions() {
         el('chat-sessions').innerHTML = state.chatSessions.length ? state.chatSessions.map(session => {
@@ -2292,6 +2327,10 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/schedules", get(schedules).post(create_schedule))
         .route("/api/settings/worker", post(update_worker_settings))
         .route("/api/settings/chat", post(update_chat_settings))
+        .route(
+            "/api/settings/tool-permissions",
+            post(update_tool_permissions_settings),
+        )
         .route("/api/settings/codex", post(update_codex_runtime_settings))
         .route("/api/settings/claude", post(update_claude_runtime_settings))
         .route("/api/settings/routing", post(update_routing_settings))
@@ -3426,6 +3465,128 @@ async fn update_chat_settings(
             "max_iterations": max_iterations,
         },
     })))
+}
+
+async fn update_tool_permissions_settings(
+    State(state): State<AppState>,
+    Json(input): Json<UpdateToolPermissionsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let current_config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &current_config,
+        "settings.change",
+        current_config.tool_permissions.settings_change,
+    )
+    .await?;
+
+    let permissions = {
+        let mut config = state.config.write().await;
+        let preset_choice = input
+            .preset
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(parse_tool_permission_preset)
+            .transpose()?;
+        if let Some(preset) = preset_choice {
+            if preset != ToolPermissionPreset::Custom {
+                apply_tool_permission_preset(&mut config.tool_permissions, preset);
+                config.save()?;
+                config.tool_permissions.clone()
+            } else {
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "library_read",
+                    input.library_read,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "library_create",
+                    input.library_create,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "library_edit_markdown",
+                    input.library_edit_markdown,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "library_move",
+                    input.library_move,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "library_delete",
+                    input.library_delete,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "workspace_create",
+                    input.workspace_create,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "workspace_move",
+                    input.workspace_move,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "workspace_delete",
+                    input.workspace_delete,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "memory_write",
+                    input.memory_write,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "settings_change",
+                    input.settings_change,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "agent_launch",
+                    input.agent_launch,
+                )?;
+                apply_optional_tool_permission(
+                    &mut config.tool_permissions,
+                    "context_switch",
+                    input.context_switch,
+                )?;
+                config.save()?;
+                config.tool_permissions.clone()
+            }
+        } else {
+            config.tool_permissions.clone()
+        }
+    };
+    state
+        .db
+        .add_system_event(
+            "settings_tool",
+            serde_json::json!({
+                "action": "tool_permissions_updated",
+                "source": "admin-api",
+                "tool_permissions": permissions,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "tool_permissions": permissions,
+    })))
+}
+
+fn apply_optional_tool_permission(
+    permissions: &mut ToolPermissionsConfig,
+    key: &str,
+    value: Option<String>,
+) -> Result<()> {
+    if let Some(value) = value.as_deref().filter(|value| !value.trim().is_empty()) {
+        set_tool_permission(permissions, key, parse_tool_permission_policy(value)?)?;
+    }
+    Ok(())
 }
 
 async fn update_codex_runtime_settings(
