@@ -1,6 +1,7 @@
 pub mod claude_code;
 pub mod codex;
 pub mod openrouter;
+pub mod runtime;
 
 use anyhow::Result;
 use async_trait::async_trait;

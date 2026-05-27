@@ -16,7 +16,9 @@ use crate::{
     domain::{AgentInstructionFile, AgentRunSpec, Job, JobStatus, MemoryKind, ProviderKind},
     gates,
     memory::{self, RetrievalRequest},
-    prompt, router,
+    prompt,
+    providers::runtime,
+    router,
     vault::Vault,
 };
 
@@ -68,6 +70,7 @@ pub async fn run_job_by_id(config: Config, db: Database, job_id: uuid::Uuid) -> 
 pub struct JobPreflightReport {
     pub job_id: uuid::Uuid,
     pub selected_provider: String,
+    pub provider_runtime: runtime::ProviderRuntimeSpec,
     pub fallback_from: Option<String>,
     pub fallback_reason: Option<String>,
     pub project_name: String,
@@ -106,6 +109,7 @@ pub async fn preflight_job(
         "preflight",
         json!({
             "selected_provider": &report.selected_provider,
+            "provider_runtime": &report.provider_runtime,
             "fallback_from": &report.fallback_from,
             "fallback_reason": &report.fallback_reason,
             "project_name": &report.project_name,
@@ -264,6 +268,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         "prepared",
         json!({
             "command": command_parts.clone(),
+            "provider_runtime": runtime::runtime_spec(&job.provider, &config),
             "project_note": project_note,
             "context_hits": context_pack.hits.len(),
             "prompt_chars": prompt_len,
@@ -510,6 +515,7 @@ async fn prepare_job(
     Ok(JobPreflightReport {
         job_id: job.id,
         selected_provider: router::provider_name(&job.provider).to_string(),
+        provider_runtime: runtime::runtime_spec(&job.provider, config),
         fallback_from,
         fallback_reason,
         project_name: project.name,

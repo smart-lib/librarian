@@ -8,7 +8,7 @@ use crate::{
     domain::{AgentRunSpec, MountMode, NetworkMode, ProviderKind},
     providers::{
         claude_code::ClaudeCodeProvider, codex::CodexProvider, openrouter::OpenRouterProvider,
-        ProviderAdapter, ProviderCommand,
+        runtime::runtime_spec, ProviderAdapter, ProviderCommand,
     },
 };
 
@@ -57,13 +57,24 @@ impl DockerRunner {
             ));
         }
 
-        if matches!(spec.provider, ProviderKind::Codex) && self.config.codex.mount_host_home {
-            let Some(host_home) = &self.config.codex.host_home else {
-                bail!("codex.mount_host_home is enabled but codex.host_home is not configured");
+        let runtime = runtime_spec(&spec.provider, &self.config);
+        if runtime.mount_host_home {
+            let Some(host_home) = runtime.host_home.as_ref() else {
+                bail!(
+                    "{} profile mount is enabled but host_home is not configured",
+                    runtime.name
+                );
+            };
+            let Some(container_home) = runtime.container_home.as_deref() else {
+                bail!(
+                    "{} profile mount is enabled but container_home is not configured",
+                    runtime.name
+                );
             };
             if !host_home.exists() {
                 bail!(
-                    "Configured Codex home does not exist: {}",
+                    "Configured {} home does not exist: {}",
+                    runtime.name,
                     host_home.display()
                 );
             }
@@ -71,42 +82,18 @@ impl DockerRunner {
                 parts.push("--user".to_string());
                 parts.push(user);
             }
-            parts.push("--env".to_string());
-            parts.push(format!("CODEX_HOME={}", self.config.codex.container_home));
-            parts.push("--env".to_string());
-            parts.push("HOME=/home/agent".to_string());
-            parts.push("--mount".to_string());
-            parts.push(codex_home_mount(
-                &self.config,
-                host_home,
-                &self.config.codex.container_home,
-                self.config.codex.mount_read_only,
-            ));
-        }
-        if matches!(spec.provider, ProviderKind::ClaudeCode) && self.config.claude.mount_host_home {
-            let Some(host_home) = &self.config.claude.host_home else {
-                bail!("claude.mount_host_home is enabled but claude.host_home is not configured");
-            };
-            if !host_home.exists() {
-                bail!(
-                    "Configured Claude home does not exist: {}",
-                    host_home.display()
-                );
+            if let Some(env_name) = runtime.profile_env {
+                parts.push("--env".to_string());
+                parts.push(format!("{env_name}={container_home}"));
             }
-            if let Some(user) = container_user_for_host_path(host_home)? {
-                parts.push("--user".to_string());
-                parts.push(user);
-            }
-            parts.push("--env".to_string());
-            parts.push(format!("CLAUDE_HOME={}", self.config.claude.container_home));
             parts.push("--env".to_string());
             parts.push("HOME=/home/agent".to_string());
             parts.push("--mount".to_string());
             parts.push(provider_home_mount(
                 &self.config,
                 host_home,
-                &self.config.claude.container_home,
-                self.config.claude.mount_read_only,
+                container_home,
+                runtime.mount_read_only,
             ));
         }
 
@@ -191,21 +178,6 @@ fn runtime_prefix(config: &Config) -> Vec<String> {
     let mut parts = vec![config.docker.runtime_command.clone()];
     parts.extend(config.docker.runtime_args.clone());
     parts
-}
-
-fn codex_home_mount(
-    config: &Config,
-    host_home: &std::path::Path,
-    container_home: &str,
-    read_only: bool,
-) -> String {
-    let readonly = if read_only { ",readonly" } else { "" };
-    format!(
-        "type=bind,source={},target={}{}",
-        mount_source(config, host_home),
-        container_home,
-        readonly
-    )
 }
 
 fn provider_home_mount(
