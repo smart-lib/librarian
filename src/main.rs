@@ -2503,6 +2503,22 @@ impl DoctorCheck {
     }
 }
 
+impl From<provider_health::ProviderDiagnostic> for DoctorCheck {
+    fn from(diagnostic: provider_health::ProviderDiagnostic) -> Self {
+        let severity = match diagnostic.level {
+            "ok" => DoctorSeverity::Ok,
+            "error" => DoctorSeverity::Error,
+            _ => DoctorSeverity::Warn,
+        };
+        Self {
+            severity,
+            label: format!("provider {}", diagnostic.provider),
+            detail: format!("{}: {}", diagnostic.status, diagnostic.detail),
+            next_step: diagnostic.next_step,
+        }
+    }
+}
+
 async fn run_doctor(config: &Config) -> Result<()> {
     config.ensure_layout()?;
 
@@ -2547,12 +2563,16 @@ async fn run_doctor(config: &Config) -> Result<()> {
         ),
     ];
 
+    let mut provider_states = Vec::new();
     checks.push(match Database::connect(config).await {
         Ok(db) => match db.migrate().await {
-            Ok(()) => DoctorCheck::ok(
-                "sqlite",
-                format!("opened and migrated {}", config.database_path.display()),
-            ),
+            Ok(()) => {
+                provider_states = db.list_provider_states().await.unwrap_or_default();
+                DoctorCheck::ok(
+                    "sqlite",
+                    format!("opened and migrated {}", config.database_path.display()),
+                )
+            }
             Err(error) => DoctorCheck::error(
                 "sqlite",
                 format!("opened but migration failed: {error}"),
@@ -2576,10 +2596,12 @@ async fn run_doctor(config: &Config) -> Result<()> {
         )
         .await,
     );
-    checks.push(host_codex_check().await);
-    checks.push(codex_profile_check(config));
-    checks.push(host_claude_check().await);
-    checks.push(claude_profile_check(config));
+    checks.extend(
+        provider_health::collect_provider_diagnostics(config, &provider_states)
+            .await
+            .into_iter()
+            .map(DoctorCheck::from),
+    );
 
     let overall = if checks
         .iter()
@@ -2835,178 +2857,10 @@ fn path_check(label: &str, path: &std::path::Path, next_step: &str) -> DoctorChe
     }
 }
 
-fn codex_profile_check(config: &Config) -> DoctorCheck {
-    let Some(path) = &config.codex.host_home else {
-        return DoctorCheck::warn(
-            "codex profile",
-            "not configured",
-            "Run Codex with CODEX_HOME set to Librarian's codex-home, then enable the container mount.",
-        );
-    };
-    if !path.exists() {
-        return DoctorCheck::error(
-            "codex profile",
-            format!("missing {}", path.display()),
-            "Run `CODEX_HOME=<this path> codex`, complete sign-in, then enable the container mount.",
-        );
-    }
-    if !config.codex.mount_host_home {
-        return DoctorCheck::warn(
-            "codex profile",
-            format!("present at {}, container mount disabled", path.display()),
-            "Run `librarian auth codex --enable-container-mount --codex-home <this path>` before containerized Codex runs.",
-        );
-    }
-    if codex_profile_has_auth_artifacts(path) {
-        return DoctorCheck::ok(
-            "codex profile",
-            format!("present at {}, mount enabled", path.display()),
-        );
-    }
-    DoctorCheck::warn(
-        "codex profile",
-        format!(
-            "present at {}, but no common auth/config file found at top level",
-            path.display()
-        ),
-        "Run `codex` with CODEX_HOME set to this path, complete sign-in, then rerun `librarian doctor`.",
-    )
-}
-
-fn codex_profile_has_auth_artifacts(path: &std::path::Path) -> bool {
-    let names = ["auth.json", "config.toml", "credentials.json"];
-    if names.iter().any(|name| path.join(name).exists()) {
-        return true;
-    }
-    has_named_file_within(path, &names, 3)
-}
-
-fn claude_profile_check(config: &Config) -> DoctorCheck {
-    let Some(path) = &config.claude.host_home else {
-        return DoctorCheck::warn(
-            "claude profile",
-            "not configured",
-            "Set `[claude].host_home` or CLAUDE_HOME, then enable the container mount before Claude Code jobs.",
-        );
-    };
-    if !path.exists() {
-        let severity = if config.claude.mount_host_home {
-            DoctorSeverity::Error
-        } else {
-            DoctorSeverity::Warn
-        };
-        return DoctorCheck {
-            severity,
-            label: "claude profile".to_string(),
-            detail: format!("missing {}", path.display()),
-            next_step: Some(
-                "Create/sign in to a Claude profile, or set `[claude].host_home` to the existing profile path.".to_string(),
-            ),
-        };
-    }
-    if !config.claude.mount_host_home {
-        return DoctorCheck::warn(
-            "claude profile",
-            format!("present at {}, container mount disabled", path.display()),
-            "Enable `[claude].mount_host_home` before containerized Claude Code runs.",
-        );
-    }
-    if claude_profile_has_auth_artifacts(path) {
-        return DoctorCheck::ok(
-            "claude profile",
-            format!(
-                "present at {}, mount enabled, instruction file={}",
-                path.display(),
-                config.claude.instruction_file
-            ),
-        );
-    }
-    DoctorCheck::warn(
-        "claude profile",
-        format!(
-            "present at {}, but no common Claude auth/config file found",
-            path.display()
-        ),
-        "Run Claude Code with this profile path if supported, or point `[claude].host_home` at the signed-in host profile.",
-    )
-}
-
-fn claude_profile_has_auth_artifacts(path: &std::path::Path) -> bool {
-    let names = [
-        ".credentials.json",
-        "credentials.json",
-        "settings.json",
-        "config.json",
-        "claude.json",
-    ];
-    if names.iter().any(|name| path.join(name).exists()) {
-        return true;
-    }
-    has_named_file_within(path, &names, 3)
-}
-
-fn has_named_file_within(path: &std::path::Path, names: &[&str], depth: usize) -> bool {
-    if depth == 0 {
-        return false;
-    }
-    let Ok(entries) = std::fs::read_dir(path) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let entry_path = entry.path();
-        if entry_path.is_file()
-            && entry_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| names.iter().any(|candidate| candidate == &name))
-        {
-            return true;
-        }
-        if entry_path.is_dir() && has_named_file_within(&entry_path, names, depth - 1) {
-            return true;
-        }
-    }
-    false
-}
-
-async fn host_codex_check() -> DoctorCheck {
-    if cfg!(windows) {
-        command_check("host codex", "where.exe", &["codex"]).await
-    } else {
-        command_check("host codex", "sh", &["-lc", "command -v codex"]).await
-    }
-}
-
-async fn host_claude_check() -> DoctorCheck {
-    if cfg!(windows) {
-        optional_command_check("host claude", "where.exe", &["claude"]).await
-    } else {
-        optional_command_check("host claude", "sh", &["-lc", "command -v claude"]).await
-    }
-}
-
-async fn optional_command_check(label: &str, program: &str, args: &[&str]) -> DoctorCheck {
-    let check = command_check(label, program, args).await;
-    if check.severity == DoctorSeverity::Error {
-        DoctorCheck::warn(label, check.detail, command_next_step(label, ""))
-    } else {
-        check
-    }
-}
-
 async fn runtime_check(label: &str, config: &Config, args: &[&str]) -> DoctorCheck {
     let mut all_args = config.docker.runtime_args.clone();
     all_args.extend(args.iter().map(|arg| arg.to_string()));
     command_check_owned(label, &config.docker.runtime_command, &all_args).await
-}
-
-async fn command_check(label: &str, program: &str, args: &[&str]) -> DoctorCheck {
-    command_check_owned(
-        label,
-        program,
-        &args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
-    )
-    .await
 }
 
 async fn command_check_owned(label: &str, program: &str, args: &[String]) -> DoctorCheck {
