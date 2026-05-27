@@ -28,7 +28,7 @@ use crate::{
     library_tools::LibraryRoot,
     memory,
     memory_policy::{durable_memory_priority, durable_memory_type, is_visible_durable_memory_item},
-    prompt, router, scheduler,
+    prompt, provider_health, router, scheduler,
     secrets::SecretVault,
     slash_utils::split_slash_args,
     third_eye, worker,
@@ -182,6 +182,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       color: var(--muted);
       font-size: 12px;
     }
+    .pill.ok { border-color: var(--accent); color: var(--accent); }
+    .pill.warn { border-color: #e0c56f; color: #e0c56f; }
+    .pill.error { border-color: #ef7777; color: #ef7777; }
     h1, h2, h3, p { margin: 0; }
     h2 {
       margin: 0 0 14px;
@@ -1142,13 +1145,19 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const states = new Map((state.providers.states || []).map(item => [`${item.provider}:${item.model || ''}`, item]));
         const models = state.providers.catalog || [];
         const runtime = state.providers.runtime || {};
+        const diagnostics = new Map((state.providers.diagnostics || []).map(item => [item.provider, item]));
         const cards = models.length ? models.map(model => {
           const current = states.get(`${model.provider}:${model.model}`) || states.get(`${model.provider}:`) || {};
           const providerRuntime = runtime[model.provider] || {};
+          const diagnostic = diagnostics.get(model.provider) || {};
           const runtimeLines = Object.keys(providerRuntime).length
             ? `<br><span class="muted tiny">host profile: ${htmlEscape(providerRuntime.host_home || '-')}</span><br><span class="muted tiny">mount: ${providerRuntime.mount_host_home ? 'enabled' : 'disabled'}${providerRuntime.host_home_exists === false ? ' · missing profile' : ''}</span>`
             : '';
-          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="muted">${htmlEscape(current.status || 'Not paused')}</span>${runtimeLines}`);
+          const level = diagnostic.level || 'muted';
+          const status = diagnostic.status || current.status || 'Unknown';
+          const detail = diagnostic.detail ? `<div class="muted tiny">${htmlEscape(diagnostic.detail)}</div>` : '';
+          const next = diagnostic.next_step ? `<details><summary>Next step</summary><pre>${htmlEscape(diagnostic.next_step)}</pre></details>` : '';
+          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="pill ${htmlEscape(level)}">${htmlEscape(status)}</span>${runtimeLines}${detail}${next}`);
         }).join('') : '<div class="card muted">No providers reported.</div>';
         const commands = state.providers.commands || {};
         const codex = runtime['codex'] || {};
@@ -3127,6 +3136,7 @@ async fn providers_status(State(state): State<AppState>) -> Result<impl IntoResp
     let states = state.db.list_provider_states().await?;
     let catalog = router::model_catalog();
     let config = state.config.read().await;
+    let diagnostics = provider_health::collect_provider_diagnostics(&config, &states).await;
     let command_prefix = format!("librarian --home {}", admin_shell_path(&config.home));
     let default_codex_home = config.home.join(".cfg").join("codex-home");
     let codex_home = config
@@ -3151,13 +3161,16 @@ async fn providers_status(State(state): State<AppState>) -> Result<impl IntoResp
                 admin_shell_path(codex_home),
             ),
             "claude_auth": format!(
-                "CLAUDE_HOME={} claude\n# Then save this profile path and enable the Claude mount in Settings -> Providers.",
+                "CLAUDE_HOME={} claude\n{} auth claude --enable-container-mount --claude-home {}",
+                admin_shell_path(claude_home),
+                command_prefix,
                 admin_shell_path(claude_home),
             ),
             "build_agent_image": format!("{command_prefix} runtime build-agent-image"),
             "smoke_codex": format!("{command_prefix} smoke mvp --provider codex --run-agent"),
             "smoke_claude": format!("{command_prefix} smoke mvp --provider claude-code --run-agent"),
         },
+        "diagnostics": diagnostics,
         "runtime": {
             "codex": {
                 "host_home": config.codex.host_home.as_ref().map(|path| path.display().to_string()),

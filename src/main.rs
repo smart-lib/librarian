@@ -11,6 +11,7 @@ mod library_tools;
 mod memory;
 mod memory_policy;
 mod prompt;
+mod provider_health;
 mod providers;
 mod router;
 mod scheduler;
@@ -186,6 +187,14 @@ enum AuthCommand {
         enable_container_mount: bool,
         #[arg(long)]
         codex_home: Option<PathBuf>,
+        #[arg(long)]
+        read_only: bool,
+    },
+    Claude {
+        #[arg(long)]
+        enable_container_mount: bool,
+        #[arg(long)]
+        claude_home: Option<PathBuf>,
         #[arg(long)]
         read_only: bool,
     },
@@ -879,6 +888,39 @@ async fn main() -> Result<()> {
                 } else {
                     println!("For containerized Codex runs, enable the explicit mount with:");
                     println!("  librarian auth codex --enable-container-mount");
+                }
+            }
+            AuthCommand::Claude {
+                enable_container_mount,
+                claude_home,
+                read_only,
+            } => {
+                println!("Starting Claude Code auth bootstrap.");
+                if let Some(path) = &config.claude.host_home {
+                    println!("Portable Claude profile path: {}", path.display());
+                    println!("Run Claude Code with CLAUDE_HOME set to that path before sign-in.");
+                }
+                println!("Run `claude` in this terminal and complete the Anthropic sign-in flow.");
+                println!("Librarian will mount the selected Claude profile only when you explicitly enable it.");
+                if enable_container_mount || claude_home.is_some() {
+                    let mut config = config;
+                    if let Some(claude_home) = claude_home {
+                        std::fs::create_dir_all(&claude_home)?;
+                        config.claude.host_home = Some(claude_home.canonicalize()?);
+                    }
+                    config.claude.mount_host_home = enable_container_mount;
+                    config.claude.mount_read_only = read_only;
+                    config.save()?;
+                    println!(
+                        "Saved Claude runtime profile. host_home={} mount_host_home={} read_only={} instruction_file={}",
+                        optional_path(&config.claude.host_home),
+                        config.claude.mount_host_home,
+                        config.claude.mount_read_only,
+                        config.claude.instruction_file
+                    );
+                } else {
+                    println!("For containerized Claude Code runs, enable the explicit mount with:");
+                    println!("  librarian auth claude --enable-container-mount");
                 }
             }
         },
