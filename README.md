@@ -155,6 +155,13 @@ secret grant exists:
 librarian --home "$HOME/Librarian" smoke mvp --provider open-router --secret-grant-token <grant-token> --run-agent
 ```
 
+If you have exactly one stored OpenRouter secret, the smoke runner can create a
+short-lived grant automatically:
+
+```bash
+librarian --home "$HOME/Librarian" smoke mvp --provider open-router --secret <secret-name-or-id> --run-agent
+```
+
 Print the expanded WSL/Ubuntu smoke-test sequence with:
 
 ```bash

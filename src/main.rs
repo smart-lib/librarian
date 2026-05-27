@@ -233,6 +233,8 @@ enum SmokeCommand {
         allow_network: bool,
         #[arg(long)]
         secret_grant_token: Option<String>,
+        #[arg(long)]
+        secret: Option<String>,
         #[arg(long, default_value = "LibrarianSmoke")]
         name: String,
     },
@@ -790,6 +792,7 @@ async fn main() -> Result<()> {
                     smoke_run_agent,
                     false,
                     None,
+                    None,
                     "LibrarianDoctorSmoke",
                 )
                 .await?;
@@ -842,14 +845,17 @@ async fn main() -> Result<()> {
                 run_agent,
                 allow_network,
                 secret_grant_token,
+                secret,
                 name,
             } => {
+                let provider = provider.into();
                 run_mvp_smoke(
                     &config,
-                    provider.into(),
+                    provider,
                     run_agent,
                     allow_network,
                     secret_grant_token.as_deref(),
+                    secret.as_deref(),
                     &name,
                 )
                 .await?;
@@ -1907,6 +1913,7 @@ async fn run_mvp_smoke(
     run_agent: bool,
     allow_network: bool,
     secret_grant_token: Option<&str>,
+    secret_ref: Option<&str>,
     name: &str,
 ) -> Result<()> {
     config.ensure_layout()?;
@@ -2021,6 +2028,15 @@ async fn run_mvp_smoke(
     println!("   OK: {}", memory_item.id);
 
     println!("4. Queueing provider job and running preflight...");
+    let generated_secret_grant =
+        resolve_smoke_secret_grant(config, &db, &provider, secret_grant_token, secret_ref).await?;
+    let secret_grant_token = secret_grant_token.or(generated_secret_grant.as_deref());
+    if let Some(token) = secret_grant_token {
+        println!(
+            "   OK: using secret grant {}",
+            short_secret_token_for_display(token)
+        );
+    }
     let network_mode = router::default_network_mode_for_provider(
         &provider,
         allow_network,
@@ -2395,6 +2411,63 @@ async fn run_provider_smoke(config: &Config, require_ready: bool) -> Result<()> 
     println!();
     println!("Provider smoke passed.");
     Ok(())
+}
+
+async fn resolve_smoke_secret_grant(
+    config: &Config,
+    db: &Database,
+    provider: &ProviderKind,
+    explicit_token: Option<&str>,
+    secret_ref: Option<&str>,
+) -> Result<Option<String>> {
+    if explicit_token.is_some() {
+        return Ok(None);
+    }
+    let provider_name = router::provider_name(provider);
+    let secret_ref = match secret_ref {
+        Some(secret_ref) => Some(secret_ref.to_string()),
+        None if matches!(provider, ProviderKind::OpenRouter) => {
+            let records = db
+                .list_secret_records()
+                .await?
+                .into_iter()
+                .filter(|record| record.provider == "openrouter")
+                .collect::<Vec<_>>();
+            if records.len() == 1 {
+                Some(records[0].id.to_string())
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let Some(secret_ref) = secret_ref else {
+        return Ok(None);
+    };
+    let vault = SecretVault::new(config.clone());
+    let grant_id = vault
+        .grant(db, &secret_ref, None, Some(provider_name), "read", 900, 1)
+        .await?;
+    Ok(Some(secrets::encode_grant_token(grant_id)))
+}
+
+fn short_secret_token_for_display(token: &str) -> String {
+    let chars = token.chars().collect::<Vec<_>>();
+    if chars.len() <= 12 {
+        return token.to_string();
+    }
+    format!(
+        "{}...{}",
+        chars.iter().take(6).collect::<String>(),
+        chars
+            .iter()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>()
+    )
 }
 
 fn smoke_display_name(name: &str) -> String {
