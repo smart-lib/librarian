@@ -244,6 +244,10 @@ enum SmokeCommand {
         #[arg(long, default_value = "LibrarianToolsSmoke")]
         name: String,
     },
+    Providers {
+        #[arg(long)]
+        require_ready: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -855,6 +859,9 @@ async fn main() -> Result<()> {
             }
             SmokeCommand::Tools { name } => {
                 run_tools_smoke(&config, &name).await?;
+            }
+            SmokeCommand::Providers { require_ready } => {
+                run_provider_smoke(&config, require_ready).await?;
             }
         },
         Command::Auth { command } => match command {
@@ -1862,6 +1869,9 @@ fn print_runtime_smoke_plan(config: &Config, project: &str) {
     println!("Local tool smoke without provider calls:");
     println!("   {binary} --home \"{home}\" smoke tools");
     println!();
+    println!("Provider health smoke without container launches:");
+    println!("   {binary} --home \"{home}\" smoke providers");
+    println!();
     println!("Safe preflight-only variant:");
     println!("   {binary} --home \"{home}\" smoke mvp --provider codex");
     println!();
@@ -2340,6 +2350,53 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
+async fn run_provider_smoke(config: &Config, require_ready: bool) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+    let states = db.list_provider_states().await?;
+    let diagnostics = provider_health::collect_provider_diagnostics(config, &states).await;
+
+    println!("Librarian provider smoke");
+    println!("  root: {}", config.home.display());
+    println!(
+        "  mode: {}",
+        if require_ready {
+            "require all providers ready"
+        } else {
+            "report only"
+        }
+    );
+    println!();
+
+    let mut not_ready = Vec::new();
+    for diagnostic in &diagnostics {
+        println!(
+            "[{}] {}: {}",
+            diagnostic.level.to_ascii_uppercase(),
+            diagnostic.provider,
+            diagnostic.status
+        );
+        println!("     {}", diagnostic.detail);
+        if let Some(next_step) = &diagnostic.next_step {
+            println!("     next: {next_step}");
+        }
+        if diagnostic.level != "ok" {
+            not_ready.push(diagnostic.provider.clone());
+        }
+    }
+
+    if require_ready && !not_ready.is_empty() {
+        anyhow::bail!(
+            "Provider smoke requires ready providers; not ready: {}",
+            not_ready.join(", ")
+        );
+    }
+    println!();
+    println!("Provider smoke passed.");
+    Ok(())
+}
+
 fn smoke_display_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -2591,6 +2648,7 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
         println!("  {command} smoke mvp --provider codex --run-agent");
         println!("  {command} smoke context");
         println!("  {command} smoke tools");
+        println!("  {command} smoke providers");
         println!("  {command} doctor --smoke");
         println!("  {command} admin");
         println!();

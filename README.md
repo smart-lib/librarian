@@ -133,6 +133,15 @@ librarian --home "$HOME/Librarian" smoke tools
 This checks Library Markdown edits, Projects sandbox file operations, project
 context registration, durable memory retrieval, and approval persistence.
 
+Run provider health diagnostics without launching containers:
+
+```bash
+librarian --home "$HOME/Librarian" smoke providers
+```
+
+Add `--require-ready` when you want the command to fail if any configured
+provider is not ready.
+
 The same preflight smoke can also run through doctor:
 
 ```bash
