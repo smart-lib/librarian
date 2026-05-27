@@ -18,6 +18,8 @@ pub struct LibrarianChatRequest {
     pub project: Option<String>,
     #[serde(default)]
     pub project_context: Option<Vec<String>>,
+    #[serde(default)]
+    pub project_context_scope: Option<String>,
     pub session_id: Option<uuid::Uuid>,
 }
 

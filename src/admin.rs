@@ -42,7 +42,29 @@ struct AppState {
 struct ChatProjectContext {
     nodes: Vec<ChatLibraryContextNode>,
     suggested_nodes: Vec<ChatLibraryContextNode>,
+    scope: ContextScope,
     source: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContextScope {
+    Node,
+    Subtree,
+    Ancestors,
+    NodeAndAncestors,
+    ContextSet,
+}
+
+impl ContextScope {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Subtree => "subtree",
+            Self::Ancestors => "ancestors",
+            Self::NodeAndAncestors => "node+ancestors",
+            Self::ContextSet => "context-set",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +102,7 @@ impl ChatProjectContext {
         serde_json::json!({
             "source": self.source,
             "label": self.label(),
+            "scope": self.scope.label(),
             "nodes": self.nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
             "suggested_nodes": self.suggested_nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
             "projects": self.nodes.iter().filter_map(|node| node.project.as_ref()).map(project_context_metadata).collect::<Vec<_>>(),
@@ -717,6 +740,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         health: null,
         activeProject: '',
         activeContext: [],
+        contextScope: 'subtree',
         chatSessionId: null,
         inputHistory: [],
         historyIndex: null,
@@ -1471,6 +1495,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
               message: goal,
               project: project || null,
               project_context: contextProjects.map(project => project.name || project.library_path).filter(Boolean),
+              project_context_scope: state.contextScope || 'subtree',
               session_id: state.chatSessionId
             })
           });
@@ -1493,6 +1518,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           } else if (data.ui?.type === 'context_update') {
             const nodes = Array.isArray(data.ui.context?.nodes) ? data.ui.context.nodes.map(contextNodeFromMetadata) : [];
             state.activeContext = nodes;
+            state.contextScope = data.ui.context?.scope || state.contextScope || 'subtree';
             state.activeProject = nodes[0]?.name || '';
             renderContext();
             if (data.mode === 'slash-command') pending.className = 'message system command';
@@ -3868,6 +3894,12 @@ async fn resolve_chat_project_context(
     message: &str,
 ) -> Result<ChatProjectContext> {
     let known_projects = state.db.list_projects().await?;
+    let scope = input
+        .project_context_scope
+        .as_deref()
+        .map(parse_context_scope)
+        .transpose()?
+        .unwrap_or(ContextScope::Subtree);
     let mut requested = Vec::new();
     if let Some(values) = &input.project_context {
         requested.extend(values.iter().map(String::as_str));
@@ -3894,6 +3926,7 @@ async fn resolve_chat_project_context(
         return Ok(ChatProjectContext {
             nodes,
             suggested_nodes: Vec::new(),
+            scope,
             source: "explicit",
         });
     }
@@ -3902,6 +3935,7 @@ async fn resolve_chat_project_context(
         return Ok(ChatProjectContext {
             nodes: Vec::new(),
             suggested_nodes: Vec::new(),
+            scope,
             source: "global",
         });
     }
@@ -3939,18 +3973,36 @@ async fn resolve_chat_project_context(
         ToolPermissionPolicy::Auto if !inferred_nodes.is_empty() => Ok(ChatProjectContext {
             nodes: inferred_nodes,
             suggested_nodes: Vec::new(),
+            scope,
             source: "auto",
         }),
         ToolPermissionPolicy::Ask if !inferred_nodes.is_empty() => Ok(ChatProjectContext {
             nodes: Vec::new(),
             suggested_nodes: inferred_nodes,
+            scope,
             source: "suggested",
         }),
         _ => Ok(ChatProjectContext {
             nodes: Vec::new(),
             suggested_nodes: Vec::new(),
+            scope,
             source: "global",
         }),
+    }
+}
+
+fn parse_context_scope(value: &str) -> Result<ContextScope> {
+    match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+        "node" | "current" => Ok(ContextScope::Node),
+        "subtree" | "descendants" | "children" => Ok(ContextScope::Subtree),
+        "ancestors" | "parents" => Ok(ContextScope::Ancestors),
+        "node+ancestors" | "node-and-ancestors" | "current+parents" => {
+            Ok(ContextScope::NodeAndAncestors)
+        }
+        "context-set" | "set" | "selected" => Ok(ContextScope::ContextSet),
+        _ => anyhow::bail!(
+            "Context scope must be node, subtree, ancestors, node+ancestors, or context-set"
+        ),
     }
 }
 
@@ -4206,16 +4258,38 @@ async fn context_project_ids_for_retrieval(
     let all_projects = db.list_projects().await?;
     let mut ids = Vec::new();
     for node in &chat_context.nodes {
-        if let Some(project) = &node.project {
+        if matches!(
+            chat_context.scope,
+            ContextScope::Node | ContextScope::NodeAndAncestors | ContextScope::ContextSet
+        ) {
+            if let Some(project) = &node.project {
+                ids.push(project.id);
+            }
+        }
+        if chat_context.scope == ContextScope::ContextSet {
+            continue;
+        }
+        if chat_context.scope == ContextScope::Ancestors {
+            // Ancestor expansion below includes exact parent records only; skip exact project here.
+        } else if let Some(project) = &node.project {
             ids.push(project.id);
         }
         if let Some(library_path) = &node.library_path {
             for project in &all_projects {
-                if project
-                    .library_path
-                    .as_ref()
-                    .is_some_and(|project_path| library_path_contains(library_path, project_path))
-                {
+                let Some(project_path) = project.library_path.as_ref() else {
+                    continue;
+                };
+                let include = match chat_context.scope {
+                    ContextScope::Node => project_path == library_path,
+                    ContextScope::Subtree => library_path_contains(library_path, project_path),
+                    ContextScope::Ancestors => library_path_contains(project_path, library_path),
+                    ContextScope::NodeAndAncestors => {
+                        project_path == library_path
+                            || library_path_contains(project_path, library_path)
+                    }
+                    ContextScope::ContextSet => project_path == library_path,
+                };
+                if include {
                     ids.push(project.id);
                 }
             }
@@ -4307,9 +4381,10 @@ async fn librarian_chat(
                 "type": "context_switch",
                 "label": suggested_label,
                 "context": {
-                    "source": "suggested",
-                    "label": suggested_label,
-                    "nodes": chat_context.suggested_nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
+                "source": "suggested",
+                "label": suggested_label,
+                "scope": chat_context.scope.label(),
+                "nodes": chat_context.suggested_nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
                 }
             })),
         }
@@ -4976,7 +5051,11 @@ async fn execute_context_slash_command(
             serde_json::json!({ "tool": "context", "command": command }),
         ),
         "show" | "status" => slash_reply(
-            &format!("Current context: {}", chat_context.label()),
+            &format!(
+                "Current context: {} ({})",
+                chat_context.label(),
+                chat_context.scope.label()
+            ),
             serde_json::json!({
                 "tool": "context",
                 "command": command,
@@ -4986,8 +5065,25 @@ async fn execute_context_slash_command(
         "clear" => context_update_reply(
             "Context cleared. Future messages will use the global conversation until you select another context.",
             Vec::new(),
+            chat_context.scope,
             "clear",
         ),
+        "scope" => {
+            if args.len() < 2 {
+                anyhow::bail!("Usage: /context scope <node|subtree|ancestors|node+ancestors|context-set>");
+            }
+            let scope = parse_context_scope(&args[1])?;
+            context_update_reply(
+                &format!(
+                    "Context scope set to {} for {}.",
+                    scope.label(),
+                    chat_context.label()
+                ),
+                chat_context.nodes.clone(),
+                scope,
+                "scope",
+            )
+        }
         "set" | "use" => {
             if args.len() < 2 {
                 anyhow::bail!("Usage: /context set <library-path|project-name|project-id>");
@@ -4996,6 +5092,7 @@ async fn execute_context_slash_command(
             context_update_reply(
                 &format!("Context set to {}.", context_label_for_nodes(&nodes)),
                 nodes,
+                chat_context.scope,
                 "set",
             )
         }
@@ -5012,6 +5109,7 @@ async fn execute_context_slash_command(
             context_update_reply(
                 &format!("Context set to {}.", context_label_for_nodes(&nodes)),
                 nodes,
+                chat_context.scope,
                 "add",
             )
         }
@@ -5029,6 +5127,7 @@ async fn execute_context_slash_command(
             context_update_reply(
                 &format!("Context set to {}.", context_label_for_nodes(&nodes)),
                 nodes,
+                chat_context.scope,
                 "remove",
             )
         }
@@ -5062,6 +5161,7 @@ async fn resolve_context_nodes_from_args(
 fn context_update_reply(
     reply: &str,
     nodes: Vec<ChatLibraryContextNode>,
+    scope: ContextScope,
     action: &str,
 ) -> LibrarianChatResult {
     LibrarianChatResult {
@@ -5076,6 +5176,7 @@ fn context_update_reply(
             "context": {
                 "source": "slash-command",
                 "label": context_label_for_nodes(&nodes),
+                "scope": scope.label(),
                 "nodes": nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
             }
         })),
@@ -5083,7 +5184,7 @@ fn context_update_reply(
 }
 
 fn context_slash_help() -> &'static str {
-    "Context commands live under /context:\n/context show - show the current chat context\n/context set <library-path|project-name|project-id> - replace the context\n/context add <library-path|project-name|project-id> - add a context node\n/context remove <library-path|project-name|project-id> - remove a context node\n/context clear - return to global conversation"
+    "Context commands live under /context:\n/context show - show the current chat context\n/context scope <node|subtree|ancestors|node+ancestors|context-set> - change memory scope\n/context set <library-path|project-name|project-id> - replace the context\n/context add <library-path|project-name|project-id> - add a context node\n/context remove <library-path|project-name|project-id> - remove a context node\n/context clear - return to global conversation"
 }
 
 fn library_slash_help() -> &'static str {
@@ -8355,6 +8456,7 @@ mod tests {
                     message: "/help".to_string(),
                     project: None,
                     project_context: None,
+                    project_context_scope: None,
                     session_id: None,
                 }),
             )
@@ -8690,6 +8792,7 @@ mod tests {
                         .to_string(),
                     project: None,
                     project_context: None,
+                    project_context_scope: None,
                     session_id: None,
                 }),
             )
@@ -8840,6 +8943,19 @@ mod tests {
             Path::new("Games"),
             Path::new("GameTools")
         ));
+    }
+
+    #[test]
+    fn parses_context_scope_tokens() {
+        assert_eq!(
+            parse_context_scope("node").expect("node"),
+            ContextScope::Node
+        );
+        assert_eq!(
+            parse_context_scope("node_and_ancestors").expect("ancestors"),
+            ContextScope::NodeAndAncestors
+        );
+        assert!(parse_context_scope("sideways").is_err());
     }
 
     #[test]
