@@ -225,17 +225,11 @@ async fn run_librarian_chat_loop_with_runner(
                 context_packs.push(context_pack);
             }
             "propose_tool" => {
-                let tool = directive
-                    .tool
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let tool_action = directive
-                    .tool_action
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| "unknown".to_string());
-                let mut payload = directive.payload.unwrap_or_else(|| serde_json::json!({}));
+                let (tool, tool_action, mut payload) = validate_tool_proposal(
+                    directive.tool.as_deref(),
+                    directive.tool_action.as_deref(),
+                    directive.payload,
+                )?;
                 if let Some(object) = payload.as_object_mut() {
                     object.insert(
                         "chat_scope".to_string(),
@@ -315,6 +309,45 @@ async fn run_librarian_chat_loop_with_runner(
         mode: "codex-chat",
         ui: None,
     })
+}
+
+fn validate_tool_proposal(
+    tool: Option<&str>,
+    action: Option<&str>,
+    payload: Option<serde_json::Value>,
+) -> Result<(String, String, serde_json::Value)> {
+    let tool = normalize_tool_token(tool.unwrap_or_default());
+    let action = normalize_tool_token(action.unwrap_or_default());
+    let payload = payload.unwrap_or_else(|| serde_json::json!({}));
+    if !payload.is_object() {
+        anyhow::bail!("Tool proposal payload must be a JSON object");
+    }
+    let required = match (tool.as_str(), action.as_str()) {
+        ("library", "create_folder" | "create_file" | "delete") => &["path"][..],
+        ("library", "write_markdown" | "append_markdown") => &["path", "content"],
+        ("library", "move") => &["from", "to"],
+        ("library", "replace_lines" | "cut_lines") => &["path", "start_line", "end_line"],
+        ("library", "replace_find" | "cut_find") => &["path", "query"],
+        ("library", "replace_section" | "cut_section") => &["path", "heading"],
+        ("workspace", "create_folder" | "create_file" | "delete") => &["path"][..],
+        ("workspace", "move") => &["from", "to"],
+        ("project", "create_starting_docs_and_project_folder" | "create_starting_docs") => {
+            &["library_path"][..]
+        }
+        ("memory", "remember" | "add") => &["content"][..],
+        ("prompt", "add_block" | "add-block") => &["target", "name", "content"],
+        _ => anyhow::bail!("Unsupported tool proposal `{tool}.{action}`"),
+    };
+    for key in required {
+        if payload.get(*key).is_none() {
+            anyhow::bail!("Tool proposal `{tool}.{action}` missing `{key}`");
+        }
+    }
+    Ok((tool, action, payload))
+}
+
+fn normalize_tool_token(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace('-', "_")
 }
 
 fn chat_provider_unavailable_result(
@@ -602,6 +635,33 @@ mod tests {
         assert_eq!(directive.tool.as_deref(), Some("library"));
         assert_eq!(directive.tool_action.as_deref(), Some("create_folder"));
         assert_eq!(directive.payload.expect("payload")["path"], "projects/test");
+    }
+
+    #[test]
+    fn validates_tool_proposal_contract() {
+        let (tool, action, payload) = validate_tool_proposal(
+            Some("library"),
+            Some("replace-section"),
+            Some(
+                serde_json::json!({"path":"note.md","heading":"Plan","content":"## Plan\nDone\n"}),
+            ),
+        )
+        .expect("proposal");
+        assert_eq!(tool, "library");
+        assert_eq!(action, "replace_section");
+        assert_eq!(payload["heading"], "Plan");
+        assert!(validate_tool_proposal(
+            Some("library"),
+            Some("replace-section"),
+            Some(serde_json::json!({"path":"note.md"})),
+        )
+        .is_err());
+        assert!(validate_tool_proposal(
+            Some("shell"),
+            Some("run"),
+            Some(serde_json::json!({"command":"rm -rf /"})),
+        )
+        .is_err());
     }
 
     #[test]
