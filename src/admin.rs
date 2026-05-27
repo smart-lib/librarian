@@ -908,14 +908,26 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           small.textContent = `${detail} - proposed context: ${label}`;
           article.appendChild(small);
         }
-        article.querySelector('[data-context-decision="approve"]').addEventListener('click', () => {
+        article.querySelector('[data-context-decision="approve"]').addEventListener('click', async () => {
+          if (ui?.approval?.id) {
+            const response = await fetch(`/api/approvals/${encodeURIComponent(ui.approval.id)}/approve`, { method: 'POST' });
+            const data = await response.json();
+            if (!response.ok) {
+              appendMessage('system', `Could not switch context: ${data.error || response.status}`, 'Context');
+              return;
+            }
+          }
           state.activeContext = nodes;
+          state.contextScope = context.scope || state.contextScope || 'subtree';
           state.activeProject = nodes[0]?.name || '';
           renderContext();
           appendMessage('system', `Context switched to ${label}.`, 'Context');
           article.querySelectorAll('[data-context-decision]').forEach(button => button.disabled = true);
         });
-        article.querySelector('[data-context-decision="reject"]').addEventListener('click', () => {
+        article.querySelector('[data-context-decision="reject"]').addEventListener('click', async () => {
+          if (ui?.approval?.id) {
+            await fetch(`/api/approvals/${encodeURIComponent(ui.approval.id)}/reject`, { method: 'POST' }).catch(() => {});
+          }
           appendMessage('system', 'Context suggestion dismissed.', 'Context');
           article.querySelectorAll('[data-context-decision]').forEach(button => button.disabled = true);
         });
@@ -4369,6 +4381,20 @@ async fn librarian_chat(
 
     let chat_result = if chat_context.has_suggestion() {
         let suggested_label = chat_context.suggested_label();
+        let approval = state
+            .db
+            .create_tool_approval(
+                "context",
+                "switch",
+                serde_json::json!({
+                    "summary": format!("Switch chat context to {suggested_label}"),
+                    "label": suggested_label,
+                    "scope": chat_context.scope.label(),
+                    "nodes": chat_context.suggested_nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
+                    "user_message": gated.content.trim(),
+                }),
+            )
+            .await?;
         LibrarianChatResult {
             reply: format!(
                 "Похоже, этот диалог относится к контексту `{suggested_label}`. Переключить текущий контекст?"
@@ -4380,9 +4406,10 @@ async fn librarian_chat(
             ui: Some(serde_json::json!({
                 "type": "context_switch",
                 "label": suggested_label,
+                "approval": approval,
                 "context": {
-                "source": "suggested",
-                "label": suggested_label,
+                    "source": "suggested",
+                    "label": suggested_label,
                 "scope": chat_context.scope.label(),
                 "nodes": chat_context.suggested_nodes.iter().map(library_context_metadata).collect::<Vec<_>>(),
                 }
@@ -6411,6 +6438,29 @@ async fn execute_approved_tool_approval(
                 .create_prompt_block(&target, &name, &content, markdown)
                 .await?;
             Ok(serde_json::json!({ "block_id": block.id, "target": block.target }))
+        }
+        ("context", "switch") => {
+            let label = approval_payload_string(&approval.payload, "label")?;
+            state
+                .db
+                .add_system_event(
+                    "context_tool",
+                    serde_json::json!({
+                        "action": "switch",
+                        "approval_id": approval.id,
+                        "label": label,
+                        "scope": approval.payload.get("scope").cloned(),
+                        "nodes": approval.payload.get("nodes").cloned(),
+                    }),
+                )
+                .await?;
+            Ok(serde_json::json!({
+                "context": {
+                    "label": label,
+                    "scope": approval.payload.get("scope").cloned(),
+                    "nodes": approval.payload.get("nodes").cloned().unwrap_or_else(|| serde_json::json!([])),
+                }
+            }))
         }
         _ => anyhow::bail!(
             "Approval executor does not allow `{}` `{}` yet",
@@ -9112,6 +9162,35 @@ mod tests {
             "notes/test.md"
         );
         assert!(approval_payload_string(&payload, "content").is_err());
+    }
+
+    #[tokio::test]
+    async fn approval_executor_handles_context_switch() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-context-approval-{}",
+            Uuid::new_v4()
+        ));
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        let state = AppState {
+            db: db.clone(),
+            config: Arc::new(RwLock::new(config.clone())),
+        };
+        let approval = db
+            .create_tool_approval(
+                "context",
+                "switch",
+                serde_json::json!({"label":"Games","scope":"subtree","nodes":[]}),
+            )
+            .await
+            .expect("approval");
+        let output = execute_approved_tool_approval(&state, &config, &approval)
+            .await
+            .expect("execute");
+        assert_eq!(output["context"]["label"], "Games");
+        std::fs::remove_dir_all(home).ok();
     }
 
     #[test]
