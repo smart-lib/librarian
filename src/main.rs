@@ -31,7 +31,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use config::Config;
 use db::Database;
 use docker_runner::DockerRunner;
-use domain::{JobStatus, MemoryKind, MountMode, ProviderKind, ScheduleKind, ScheduleStatus};
+use domain::{
+    JobStatus, MemoryKind, MountMode, ProviderKind, ScheduleKind, ScheduleStatus,
+    ToolApprovalStatus,
+};
 use secrets::SecretVault;
 use serde_json::json;
 use tokio::process::Command as TokioCommand;
@@ -225,6 +228,10 @@ enum SmokeCommand {
     },
     Context {
         #[arg(long, default_value = "LibrarianContextSmoke")]
+        name: String,
+    },
+    Tools {
+        #[arg(long, default_value = "LibrarianToolsSmoke")]
         name: String,
     },
 }
@@ -835,6 +842,9 @@ async fn main() -> Result<()> {
             }
             SmokeCommand::Context { name } => {
                 run_context_smoke(&config, &name).await?;
+            }
+            SmokeCommand::Tools { name } => {
+                run_tools_smoke(&config, &name).await?;
             }
         },
         Command::Auth { command } => match command {
@@ -1806,6 +1816,9 @@ fn print_runtime_smoke_plan(config: &Config, project: &str) {
     println!("One-command MVP smoke:");
     println!("   {binary} --home \"{home}\" smoke mvp --provider codex --run-agent");
     println!();
+    println!("Local tool smoke without provider calls:");
+    println!("   {binary} --home \"{home}\" smoke tools");
+    println!();
     println!("Safe preflight-only variant:");
     println!("   {binary} --home \"{home}\" smoke mvp --provider codex");
     println!();
@@ -2155,6 +2168,135 @@ async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
+async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+
+    let started_at = Utc::now();
+    let slug = smoke_slug(name, started_at);
+    let display_name = smoke_display_name(name);
+    let library_dir = format!("tools-smoke/{slug}");
+    let workspace_dir = format!("_smoke/tools/{slug}");
+    let workspace_path = config.home.join("Projects").join(&workspace_dir);
+
+    println!("Librarian tools smoke");
+    println!("  root: {}", config.home.display());
+    println!("  library: {library_dir}");
+
+    println!("1. Exercising library Markdown tools...");
+    library_tools::create_folder(config, library_tools::LibraryRoot::Library, &library_dir)?;
+    let note_path = format!("{library_dir}/overview.md");
+    library_tools::write_markdown(
+        config,
+        &note_path,
+        "# Tools Smoke\n\nIntro line.\n\n## Editable\n\nold value\nremove by section\n\n## Keep\n\nstable marker\n",
+    )?;
+    let read = library_tools::read_markdown_lines(config, &note_path, 1, 6)?;
+    if !read.content.contains("## Editable") {
+        anyhow::bail!("Tools smoke could not read the editable section");
+    }
+    library_tools::replace_markdown_lines(config, &note_path, 3, 3, "Intro line updated.\n")?;
+    library_tools::replace_first_markdown_match(config, &note_path, "old value", "new value\n")?;
+    library_tools::replace_markdown_section(
+        config,
+        &note_path,
+        "Editable",
+        "new value\nsection replace marker\n",
+    )?;
+    library_tools::append_markdown(config, &note_path, "\n## Temporary\n\ncut me\n")?;
+    library_tools::cut_markdown_section(config, &note_path, "Temporary")?;
+    let matches = library_tools::find_markdown(config, &note_path, "section replace marker", 3)?;
+    if matches.is_empty() {
+        anyhow::bail!("Tools smoke did not find replaced section marker");
+    }
+    println!("   OK: read, line edit, find/replace, section replace, section cut.");
+
+    println!("2. Exercising Projects sandbox tools...");
+    library_tools::create_folder(config, library_tools::LibraryRoot::Projects, &workspace_dir)?;
+    library_tools::create_empty_file(
+        config,
+        library_tools::LibraryRoot::Projects,
+        &format!("{workspace_dir}/scratch.tmp"),
+    )?;
+    library_tools::move_path(
+        config,
+        library_tools::LibraryRoot::Projects,
+        &format!("{workspace_dir}/scratch.tmp"),
+        &format!("{workspace_dir}/scratch-renamed.tmp"),
+    )?;
+    library_tools::delete_path(
+        config,
+        library_tools::LibraryRoot::Projects,
+        &format!("{workspace_dir}/scratch-renamed.tmp"),
+        false,
+    )?;
+    println!("   OK: project file create, move, delete.");
+
+    println!("3. Registering project context and memory...");
+    let workspace_path = workspace_path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", workspace_path.display()))?;
+    let project = db.add_project(&display_name, &workspace_path).await?;
+    let project = db
+        .attach_project_library_path(project.id, Path::new(&library_dir))
+        .await?;
+    let marker = format!("tools smoke marker {slug}");
+    let memory_item = db
+        .add_memory_item(
+            Some(project.id),
+            None,
+            MemoryKind::Fact,
+            Some("tools-smoke"),
+            &format!("{marker}: library/project tools and approvals are operational."),
+            Some("cli:smoke-tools"),
+            json!({
+                "scope": "tools-smoke",
+                "context_path": library_dir,
+            }),
+        )
+        .await?;
+    memory::embed_item(&db, config, &memory_item).await?;
+    let pack = memory::retrieve_context_with_config(
+        &db,
+        Some(config),
+        memory::RetrievalRequest {
+            query: marker.clone(),
+            project_id: Some(project.id),
+            activity_id: None,
+            limit: memory::default_hit_limit(),
+        },
+    )
+    .await?;
+    if !pack.hits.iter().any(|hit| hit.item.id == memory_item.id) {
+        anyhow::bail!("Tools smoke did not retrieve its memory marker");
+    }
+    println!("   OK: project={} memory={}", project.id, memory_item.id);
+
+    println!("4. Exercising approval persistence...");
+    let approval = db
+        .create_tool_approval(
+            "library",
+            "write_markdown",
+            json!({
+                "path": format!("{library_dir}/approval.md"),
+                "content": "# Approval smoke\n",
+                "summary": "Tools smoke approval persistence check",
+            }),
+        )
+        .await?;
+    let rejected = db
+        .update_tool_approval_status(approval.id, ToolApprovalStatus::Rejected)
+        .await?;
+    if !matches!(rejected.status, ToolApprovalStatus::Rejected) {
+        anyhow::bail!("Tools smoke approval did not persist rejected status");
+    }
+    println!("   OK: approval={} rejected", rejected.id);
+
+    println!("Tools smoke passed.");
+    Ok(())
+}
+
 fn smoke_display_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -2405,6 +2547,7 @@ fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: 
         );
         println!("  {command} smoke mvp --provider codex --run-agent");
         println!("  {command} smoke context");
+        println!("  {command} smoke tools");
         println!("  {command} doctor --smoke");
         println!("  {command} admin");
         println!();

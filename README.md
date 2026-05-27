@@ -124,6 +124,15 @@ Run the context/tree-memory smoke without calling a provider:
 librarian --home "$HOME/Librarian" smoke context
 ```
 
+Run the focused tool smoke without calling a provider:
+
+```bash
+librarian --home "$HOME/Librarian" smoke tools
+```
+
+This checks Library Markdown edits, Projects sandbox file operations, project
+context registration, durable memory retrieval, and approval persistence.
+
 The same preflight smoke can also run through doctor:
 
 ```bash
