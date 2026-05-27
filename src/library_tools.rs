@@ -235,6 +235,25 @@ pub fn cut_first_markdown_match(
     cut_markdown_lines(config, relative_path, line, line)
 }
 
+pub fn replace_markdown_section(
+    config: &Config,
+    relative_path: &str,
+    heading: &str,
+    replacement: &str,
+) -> Result<MarkdownEdit> {
+    let (start, end) = markdown_section_range(config, relative_path, heading)?;
+    replace_markdown_lines(config, relative_path, start, end, replacement)
+}
+
+pub fn cut_markdown_section(
+    config: &Config,
+    relative_path: &str,
+    heading: &str,
+) -> Result<MarkdownEdit> {
+    let (start, end) = markdown_section_range(config, relative_path, heading)?;
+    cut_markdown_lines(config, relative_path, start, end)
+}
+
 pub fn move_path(
     config: &Config,
     root: LibraryRoot,
@@ -319,6 +338,60 @@ fn first_match_line(config: &Config, relative_path: &str, query: &str) -> Result
         .first()
         .map(|item| item.line_number)
         .ok_or_else(|| anyhow::anyhow!("No match found for `{query}`"))
+}
+
+fn markdown_section_range(
+    config: &Config,
+    relative_path: &str,
+    heading: &str,
+) -> Result<(usize, usize)> {
+    let path = resolve_existing_path(config, LibraryRoot::Library, relative_path)?;
+    ensure_markdown(&path)?;
+    let content =
+        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let lines = split_lines_preserve(&content);
+    let heading = normalize_heading_text(heading);
+    if heading.is_empty() {
+        bail!("Markdown heading must not be empty");
+    }
+    let mut start = None;
+    let mut level = 0_usize;
+    for (index, line) in lines.iter().enumerate() {
+        if let Some((line_level, title)) = parse_heading_line(line) {
+            if start.is_none() && normalize_heading_text(title) == heading {
+                start = Some(index + 1);
+                level = line_level;
+                continue;
+            }
+            if start.is_some() && line_level <= level {
+                return Ok((start.unwrap(), index));
+            }
+        }
+    }
+    start
+        .map(|start| (start, lines.len().max(start)))
+        .ok_or_else(|| anyhow::anyhow!("Markdown section `{heading}` was not found"))
+}
+
+fn parse_heading_line(line: &str) -> Option<(usize, &str)> {
+    let trimmed = line.trim_start();
+    let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    Some((level, rest.trim()))
+}
+
+fn normalize_heading_text(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('#')
+        .trim()
+        .to_ascii_lowercase()
 }
 
 fn read_entry(
@@ -620,6 +693,30 @@ mod tests {
         assert_eq!(
             read_markdown(&config, "shelf/book.md").expect("read markdown"),
             "alpha\nBETA\n"
+        );
+        std::fs::remove_dir_all(&config.home).ok();
+    }
+
+    #[test]
+    fn edits_markdown_by_section_heading() {
+        let config = test_config();
+        write_markdown(
+            &config,
+            "shelf/book.md",
+            "# Book\n\n## Target\nold\n\n### Child\nchild\n\n## Next\nnext\n",
+        )
+        .expect("write markdown");
+        let edit = replace_markdown_section(&config, "shelf/book.md", "Target", "## Target\nnew\n")
+            .expect("replace section");
+        assert_eq!(edit.start_line, 3);
+        assert_eq!(
+            read_markdown(&config, "shelf/book.md").expect("read markdown"),
+            "# Book\n\n## Target\nnew\n## Next\nnext\n"
+        );
+        cut_markdown_section(&config, "shelf/book.md", "Next").expect("cut section");
+        assert_eq!(
+            read_markdown(&config, "shelf/book.md").expect("read markdown"),
+            "# Book\n\n## Target\nnew\n"
         );
         std::fs::remove_dir_all(&config.home).ok();
     }

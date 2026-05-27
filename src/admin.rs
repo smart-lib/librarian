@@ -4956,6 +4956,54 @@ async fn execute_library_slash_command(
                 serde_json::json!({ "tool": "library", "command": command, "edit": edit }),
             )
         }
+        "cut-section" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /lib cut-section <library-md-path> <heading>");
+            }
+            let edit = library_tools::cut_markdown_section(config, &args[1], &args[2])?;
+            log_slash_library_event(
+                db,
+                "cut_markdown_section",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line, "heading": args[2] }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Cut section `{}` in `{}`.", args[2], edit.path),
+                serde_json::json!({ "tool": "library", "command": command, "edit": edit }),
+            )
+        }
+        "replace-section" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "library.edit_markdown",
+                config.tool_permissions.library_edit_markdown,
+            )
+            .await?;
+            if args.len() < 4 {
+                anyhow::bail!("Usage: /lib replace-section <library-md-path> <heading> <content>");
+            }
+            let replacement = args[3..].join(" ");
+            let edit =
+                library_tools::replace_markdown_section(config, &args[1], &args[2], &replacement)?;
+            log_slash_library_event(
+                db,
+                "replace_markdown_section",
+                serde_json::json!({ "root": "library", "path": edit.path, "start_line": edit.start_line, "end_line": edit.end_line, "heading": args[2] }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Replaced section `{}` in `{}`.", args[2], edit.path),
+                serde_json::json!({ "tool": "library", "command": command, "edit": edit }),
+            )
+        }
         "move" | "rename" => {
             ensure_tool_permission(
                 db,
@@ -5188,7 +5236,7 @@ fn context_slash_help() -> &'static str {
 }
 
 fn library_slash_help() -> &'static str {
-    "Library commands live under /lib:\n/lib tree [depth]\n/lib mkdir <path>\n/lib touch <path>\n/lib read <library-md-path> [start] [end]\n/lib read-lines <library-md-path> <start> <end>\n/lib write-overwrite <library-md-path> <content>\n/lib append <library-md-path> <content>\n/lib cut-lines <library-md-path> <start> <end>\n/lib replace-lines <library-md-path> <start> <end> <content>\n/lib find <library-md-path> <query> [limit]\n/lib cut-find <library-md-path> <query>\n/lib replace-find <library-md-path> <query> <content>\n/lib move <from> <to>\n/lib delete <path> --yes [--recursive]"
+    "Library commands live under /lib:\n/lib tree [depth]\n/lib mkdir <path>\n/lib touch <path>\n/lib read <library-md-path> [start] [end]\n/lib read-lines <library-md-path> <start> <end>\n/lib write-overwrite <library-md-path> <content>\n/lib append <library-md-path> <content>\n/lib cut-lines <library-md-path> <start> <end>\n/lib replace-lines <library-md-path> <start> <end> <content>\n/lib find <library-md-path> <query> [limit]\n/lib cut-find <library-md-path> <query>\n/lib replace-find <library-md-path> <query> <content>\n/lib cut-section <library-md-path> <heading>\n/lib replace-section <library-md-path> <heading> <content>\n/lib move <from> <to>\n/lib delete <path> --yes [--recursive]"
 }
 
 async fn execute_workspace_slash_command(
