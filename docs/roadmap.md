@@ -11,9 +11,9 @@ the product direction.
 - Current phase: working Librarian chat MVP.
 - Current crate version: `0.2.1`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
-- Next implementation focus: replace the local memory responder with a real
-  provider-backed Librarian chat loop, then add explicit tools, permissions,
-  and background agent launch as separate actions.
+- Next implementation focus: harden provider-backed chat/tools into reliable
+  user workflows: context-aware memory, tool execution approvals, prompt
+  versioning, provider runtime validation, and focused integration smoke tests.
 
 ## Product Defaults
 
@@ -256,12 +256,16 @@ Tasks:
   multi-project context. First backend/UI pass accepts `project_context` in
   `/api/chat`, resolves it to project records, stores context metadata on raw
   user/assistant memory and chat turns, returns a human context label, and shows
-  that context in the top chat badge plus each message.
+  that context in the top chat badge plus each message. Second backend pass adds
+  explicit memory scope modes: current node, subtree, ancestors,
+  node+ancestors, and selected context set.
 - Add permissioned dialogue-aware context switching. The `context_switch`
   policy controls whether Librarian may infer/switch context automatically:
   `deny` keeps the current/global context, `ask` is the default and should lead
   to approval UI before changing context, and `auto` allows high-confidence
-  project-name/path matches to switch context.
+  project-name/path matches to switch context. Context-switch proposals are now
+  persisted as approval records, so accepting from the chat UI goes through the
+  same audit/executor path as other guarded actions.
 - Add a clear fallback when the chat provider is unavailable: actionable
   “Codex auth/runtime missing” message, not memory dump output.
 - Add tests for the chat endpoint that prove it does not create jobs and that
@@ -555,7 +559,8 @@ Tool groups:
   create, edit, append, summarize, and reorganize `.md` notes. First API pass
   supports whole-file read/write for `.md` under `Library`; second pass adds
   range reads, line-range cut/replace, append, find, cut-first-match, and
-  replace-first-match. Safer section-aware Markdown editing remains.
+  replace-first-match. Third pass adds section-aware Markdown cut/replace by
+  heading so Librarian can edit a named section without rewriting a whole note.
 - Memory tools: write durable facts, decisions, instructions, preferences,
   status notes, and run observations; update/supersede/contradict older memory
   with audit trail. First slash pass supports `/mem remember <kind> <content>`,
@@ -568,7 +573,9 @@ Tool groups:
   commands are usable. First correction pass adds
   `/mem supersede <old-id> <kind> <content>` and
   `/mem contradict <old-id> <kind> <content>` with linked durable memory
-  records and `memory_tool` audit events.
+  records and `memory_tool` audit events. Durable memory entries now carry
+  `memory_type` and `retrieval_priority` metadata so instructions/decisions can
+  rank above low-value facts during retrieval.
 - Settings/prompt tools: inspect settings, propose changes, and apply only
   after explicit user approval. First settings slash pass supports
   `/settings tool-permissions` and guarded
@@ -610,7 +617,9 @@ Permission model:
   library create/write/append, memory remember, and prompt add-block. Second
   executor pass expands approved actions to library move/delete and line/search
   Markdown edits, workspace create/move/delete, and starter project creation.
-  Execution still passes through the normal permission gates and tool sandboxes.
+  Third pass validates assistant-emitted tool/action/payload contracts before
+  creating approval records, including section-edit actions. Execution still
+  passes through the normal permission gates and tool sandboxes.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
   First pass logs `tool_permission` decisions and mutating library/workspace
@@ -668,7 +677,9 @@ Tasks:
 - Store prompt/instruction versions so chat runs and agent jobs can cite which
   instruction set they used. First integration pass injects `librarian` blocks
   into chat prompts and `agents` blocks into background agent prompts; job
-  prepared events include enabled agent block metadata.
+  prepared events include enabled agent block metadata. Second backend pass adds
+  stable prompt-block version metadata to chat traces, render APIs, preflight
+  reports, and prepared job events.
 
 Dependencies:
 
@@ -693,6 +704,10 @@ Tasks:
   fixed portable profile permissions and provider network defaults; next manual
   smoke should confirm a complete `codex exec` response inside the agent
   container.
+- Run local tool integration without a provider call. `librarian smoke tools`
+  now checks Library Markdown edits, Projects sandbox operations, project
+  context registration, durable memory retrieval, and approval persistence in
+  one command.
 - Verify `codex exec` works in the agent image and diagnose auth/profile issues
   without inspecting undocumented auth files.
 - Keep background runs non-blocking from the chat perspective: chat records
@@ -1057,7 +1072,8 @@ Findings and tasks:
   project map UI, and legacy removal. First small split moves request/query
   DTOs into `src/admin_models.rs`; route handlers and HTML still need further
   extraction. Second small split moves slash argument tokenization into
-  `src/slash_utils.rs`.
+  `src/slash_utils.rs`. Third small split moves durable-memory visibility and
+  ranking policy helpers into `src/memory_policy.rs`.
 - `src/admin.rs` still contains old inactive HTML functions behind
   `#[allow(dead_code)]`. Delete or move them into archived design notes once
   the new chat-first UI has covered the needed controls.
@@ -1089,6 +1105,11 @@ Findings and tasks:
   UX, diagnostics, and validation. It also needs provider-specific launch
   semantics so Claude sees a normal project directory with `CLAUDE.md` rather
   than a generic stdin-only runner.
+- Provider runtime behavior now has a first shared metadata layer describing
+  CLI command name, profile env var, profile mount, project instruction file,
+  and provider-network needs. Docker launch uses this shared spec for Codex and
+  Claude profile mounts; deeper provider-specific diagnostics and UI auth flows
+  remain.
 - Provider cost/budget logic uses observed spend only; no estimated reservation
   exists before dispatch.
 - Gate/redaction logic is heuristic. It can over-capture high-entropy strings
