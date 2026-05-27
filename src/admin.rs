@@ -1157,7 +1157,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const status = diagnostic.status || current.status || 'Unknown';
           const detail = diagnostic.detail ? `<div class="muted tiny">${htmlEscape(diagnostic.detail)}</div>` : '';
           const next = diagnostic.next_step ? `<details><summary>Next step</summary><pre>${htmlEscape(diagnostic.next_step)}</pre></details>` : '';
-          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="pill ${htmlEscape(level)}">${htmlEscape(status)}</span>${runtimeLines}${detail}${next}`);
+          const authKey = model.provider === 'claude-code' ? 'claude' : (model.provider === 'codex' ? 'codex' : '');
+          const smokeKey = model.provider === 'claude-code' ? 'smoke-claude' : (model.provider === 'codex' ? 'smoke-codex' : 'smoke-openrouter');
+          const actions = `<div class="row">${authKey ? `<button type="button" class="secondary" data-provider-command="${authKey}">Auth</button>` : ''}<button type="button" class="secondary" data-provider-command="${smokeKey}">Smoke</button></div>`;
+          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="pill ${htmlEscape(level)}">${htmlEscape(status)}</span>${runtimeLines}${detail}${next}${actions}`);
         }).join('') : '<div class="card muted">No providers reported.</div>';
         const commands = state.providers.commands || {};
         const codex = runtime['codex'] || {};
@@ -1171,6 +1174,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             <button type="button" class="secondary" data-provider-command="image">Build image</button>
             <button type="button" class="secondary" data-provider-command="smoke-codex">Codex smoke</button>
             <button type="button" class="secondary" data-provider-command="smoke-claude">Claude smoke</button>
+            <button type="button" class="secondary" data-provider-command="smoke-openrouter">OpenRouter smoke</button>
           </div>
           <div class="muted tiny">Claude instruction file: ${htmlEscape(claude.instruction_file || 'CLAUDE.md')}</div>
         </div>`;
@@ -1209,7 +1213,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             claude: commands.claude_auth,
             image: commands.build_agent_image,
             'smoke-codex': commands.smoke_codex,
-            'smoke-claude': commands.smoke_claude
+            'smoke-claude': commands.smoke_claude,
+            'smoke-openrouter': commands.smoke_openrouter
           }[key] || 'Command is not available yet.';
           appendMessage('system', command, 'Provider command');
         }));
@@ -3169,6 +3174,7 @@ async fn providers_status(State(state): State<AppState>) -> Result<impl IntoResp
             "build_agent_image": format!("{command_prefix} runtime build-agent-image"),
             "smoke_codex": format!("{command_prefix} smoke mvp --provider codex --run-agent"),
             "smoke_claude": format!("{command_prefix} smoke mvp --provider claude-code --run-agent"),
+            "smoke_openrouter": format!("{command_prefix} smoke mvp --provider open-router --secret <secret-name-or-id> --run-agent"),
         },
         "diagnostics": diagnostics,
         "runtime": {
