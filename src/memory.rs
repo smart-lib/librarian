@@ -176,7 +176,7 @@ fn score_item(
     let lexical_score = lexical_score(item, query_terms);
     let recency_score = recency_score(item, now);
     let scope_score = scope_score(item, project_id, activity_id);
-    let kind_score = kind_score(&item.kind);
+    let kind_score = metadata_priority_score(item);
     let validity_score = validity_score(item, now);
     let score = (semantic_score * 0.42 + lexical_score * 0.18 + kind_score * 0.12 + 0.28)
         * recency_score
@@ -356,6 +356,14 @@ fn kind_score(kind: &MemoryKind) -> f64 {
         MemoryKind::RunObservation => 0.58,
         MemoryKind::UserMessage | MemoryKind::AssistantMessage => 0.45,
     }
+}
+
+fn metadata_priority_score(item: &MemoryItem) -> f64 {
+    item.metadata
+        .get("retrieval_priority")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or_else(|| kind_score(&item.kind))
+        .clamp(0.1, 1.2)
 }
 
 fn validity_score(item: &MemoryItem, now: DateTime<Utc>) -> f64 {

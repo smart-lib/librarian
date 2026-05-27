@@ -6328,7 +6328,7 @@ async fn execute_approved_tool_approval(
                 .add_memory_item(
                     None,
                     None,
-                    kind,
+                    kind.clone(),
                     None,
                     &content,
                     Some("admin:approval-execute"),
@@ -6701,7 +6701,7 @@ async fn execute_memory_slash_command(
                 .add_memory_item(
                     project.map(|project| project.id),
                     None,
-                    kind,
+                    kind.clone(),
                     None,
                     &content,
                     Some("admin:slash-memory"),
@@ -6709,6 +6709,8 @@ async fn execute_memory_slash_command(
                         "tool": "memory",
                         "command": command,
                         "memory_role": "durable_memory",
+                        "memory_type": durable_memory_type(&kind),
+                        "retrieval_priority": durable_memory_priority(&kind),
                         "durability": "durable",
                         "scope": if project.is_some() { "project" } else { "global" },
                         "project": project.map(|project| project.name.clone()),
@@ -6764,7 +6766,7 @@ async fn execute_memory_slash_command(
                 .add_linked_memory_item(
                     project.map(|project| project.id),
                     None,
-                    kind,
+                    kind.clone(),
                     old.topic.as_deref(),
                     &content,
                     Some("admin:slash-memory"),
@@ -6772,6 +6774,8 @@ async fn execute_memory_slash_command(
                         "tool": "memory",
                         "command": command,
                         "memory_role": "durable_memory",
+                        "memory_type": durable_memory_type(&kind),
+                        "retrieval_priority": durable_memory_priority(&kind),
                         "durability": "durable",
                         "scope": if project.is_some() { "project" } else { "global" },
                         "project": project.map(|project| project.name.clone()),
@@ -6889,6 +6893,31 @@ fn is_visible_durable_memory_item(item: &crate::domain::MemoryItem) -> bool {
         }
     }
     true
+}
+
+fn durable_memory_type(kind: &MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::Instruction => "instruction",
+        MemoryKind::Decision => "decision",
+        MemoryKind::Status => "status",
+        MemoryKind::Summary => "summary",
+        MemoryKind::RunObservation => "run_observation",
+        MemoryKind::Fact => "fact",
+        MemoryKind::UserMessage => "user_message",
+        MemoryKind::AssistantMessage => "assistant_message",
+    }
+}
+
+fn durable_memory_priority(kind: &MemoryKind) -> f64 {
+    match kind {
+        MemoryKind::Instruction => 1.0,
+        MemoryKind::Decision => 0.92,
+        MemoryKind::Status => 0.78,
+        MemoryKind::Summary => 0.72,
+        MemoryKind::Fact => 0.64,
+        MemoryKind::RunObservation => 0.58,
+        MemoryKind::UserMessage | MemoryKind::AssistantMessage => 0.35,
+    }
 }
 
 fn memory_slash_help() -> &'static str {
@@ -8956,6 +8985,15 @@ mod tests {
             ContextScope::NodeAndAncestors
         );
         assert!(parse_context_scope("sideways").is_err());
+    }
+
+    #[test]
+    fn durable_memory_metadata_classifies_kinds() {
+        assert_eq!(durable_memory_type(&MemoryKind::Instruction), "instruction");
+        assert!(
+            durable_memory_priority(&MemoryKind::Instruction)
+                > durable_memory_priority(&MemoryKind::Fact)
+        );
     }
 
     #[test]
