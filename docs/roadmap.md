@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.1`; bump at least the minor version when a visible
+- Current crate version: `0.2.2`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -934,7 +934,17 @@ Tasks:
   placeholder “ready” states with data from doctor/provider diagnostics. First
   UI pass shows stored Codex/Claude runtime state and allows saving Claude
   profile/mount settings. Second pass adds Codex runtime editing plus generated
-  auth/build/smoke commands in the Providers tab.
+  auth/build/smoke commands in the Providers tab. Third pass exposes shared
+  provider diagnostics from `/api/providers`, including host CLI presence,
+  profile/auth detection, mount state, paused state, and next-step text; the
+  Providers tab now renders those statuses instead of generic readiness text.
+- Add a provider-only integration smoke. First pass adds
+  `librarian smoke providers`, which reports Codex/OpenRouter/Claude health
+  without launching containers and can fail with `--require-ready`.
+- Add Claude auth bootstrap parity with Codex. First pass adds
+  `librarian auth claude --enable-container-mount --claude-home <path>` so the
+  saved profile path and mount flags can be configured from CLI and surfaced in
+  admin commands.
 - Add Claude-specific doctor checks and worker diagnostics: host command
   present, profile/auth available, container path readable, `CLAUDE.md`
   generated/mounted, and common login/network failures. First pass adds host
