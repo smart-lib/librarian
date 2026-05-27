@@ -26,7 +26,9 @@ use crate::{
     },
     gates, library_tools,
     library_tools::LibraryRoot,
-    memory, prompt, router, scheduler,
+    memory,
+    memory_policy::{durable_memory_priority, durable_memory_type, is_visible_durable_memory_item},
+    prompt, router, scheduler,
     secrets::SecretVault,
     slash_utils::split_slash_args,
     third_eye, worker,
@@ -6961,68 +6963,6 @@ async fn execute_memory_slash_command(
     Ok(result)
 }
 
-fn is_raw_transcript_memory_item(item: &crate::domain::MemoryItem) -> bool {
-    item.metadata
-        .get("durability")
-        .and_then(serde_json::Value::as_str)
-        == Some("transcript")
-        || item
-            .metadata
-            .get("memory_role")
-            .and_then(serde_json::Value::as_str)
-            == Some("raw_chat_turn")
-}
-
-fn is_visible_durable_memory_item(item: &crate::domain::MemoryItem) -> bool {
-    if is_raw_transcript_memory_item(item) {
-        return false;
-    }
-    if matches!(
-        item.kind,
-        MemoryKind::UserMessage | MemoryKind::AssistantMessage
-    ) {
-        if item
-            .metadata
-            .get("memory_role")
-            .and_then(serde_json::Value::as_str)
-            == Some("durable_memory")
-        {
-            return true;
-        }
-        if item.source.as_deref() == Some("admin:librarian-chat")
-            || item.topic.as_deref() == Some("librarian-chat")
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn durable_memory_type(kind: &MemoryKind) -> &'static str {
-    match kind {
-        MemoryKind::Instruction => "instruction",
-        MemoryKind::Decision => "decision",
-        MemoryKind::Status => "status",
-        MemoryKind::Summary => "summary",
-        MemoryKind::RunObservation => "run_observation",
-        MemoryKind::Fact => "fact",
-        MemoryKind::UserMessage => "user_message",
-        MemoryKind::AssistantMessage => "assistant_message",
-    }
-}
-
-fn durable_memory_priority(kind: &MemoryKind) -> f64 {
-    match kind {
-        MemoryKind::Instruction => 1.0,
-        MemoryKind::Decision => 0.92,
-        MemoryKind::Status => 0.78,
-        MemoryKind::Summary => 0.72,
-        MemoryKind::Fact => 0.64,
-        MemoryKind::RunObservation => 0.58,
-        MemoryKind::UserMessage | MemoryKind::AssistantMessage => 0.35,
-    }
-}
-
 fn memory_slash_help() -> &'static str {
     "Memory commands live under /mem:\n/mem remember <fact|decision|instruction|status|summary> <content>\n/mem supersede <old-memory-id> <kind> <content>\n/mem contradict <old-memory-id> <kind> <content>\n/remember <content> - shortcut for /mem remember fact <content>\n/mem recent [limit]\n\nMemory is stored in the current chat scope: selected project when present, otherwise global."
 }
@@ -9088,15 +9028,6 @@ mod tests {
             ContextScope::NodeAndAncestors
         );
         assert!(parse_context_scope("sideways").is_err());
-    }
-
-    #[test]
-    fn durable_memory_metadata_classifies_kinds() {
-        assert_eq!(durable_memory_type(&MemoryKind::Instruction), "instruction");
-        assert!(
-            durable_memory_priority(&MemoryKind::Instruction)
-                > durable_memory_priority(&MemoryKind::Fact)
-        );
     }
 
     #[test]

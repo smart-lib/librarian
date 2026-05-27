@@ -9,6 +9,7 @@ mod domain;
 mod gates;
 mod library_tools;
 mod memory;
+mod memory_policy;
 mod prompt;
 mod providers;
 mod router;
