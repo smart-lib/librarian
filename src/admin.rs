@@ -26,7 +26,7 @@ use crate::{
     },
     gates, library_tools,
     library_tools::LibraryRoot,
-    memory, router, scheduler,
+    memory, prompt, router, scheduler,
     secrets::SecretVault,
     slash_utils::split_slash_args,
     third_eye, worker,
@@ -2882,9 +2882,11 @@ async fn render_prompt_target(
     };
     let blocks = state.db.list_prompt_blocks(Some(target)).await?;
     let rendered = render_prompt_blocks(&blocks);
+    let version = prompt::prompt_block_version(Some(target), &blocks);
     Ok(Json(serde_json::json!({
         "target": target,
         "rendered": rendered,
+        "version": version,
         "blocks": blocks,
     })))
 }
@@ -6597,6 +6599,7 @@ async fn execute_prompt_slash_command(
         "blocks" | "list" => {
             let target = args.get(1).map(String::as_str);
             let blocks = state.db.list_prompt_blocks(target).await?;
+            let version = prompt::prompt_block_version(target, &blocks);
             let mut reply = format!("Prompt blocks: {} item(s).", blocks.len());
             for block in &blocks {
                 reply.push_str(&format!(
@@ -6606,7 +6609,7 @@ async fn execute_prompt_slash_command(
             }
             slash_reply(
                 &reply,
-                serde_json::json!({ "tool": "prompt", "command": command, "target": target, "blocks": blocks }),
+                serde_json::json!({ "tool": "prompt", "command": command, "target": target, "version": version, "blocks": blocks }),
             )
         }
         "add-block" | "add" => {
@@ -6686,6 +6689,7 @@ async fn execute_prompt_slash_command(
                 .ok_or_else(|| anyhow::anyhow!("Usage: /prompt render <target>"))?;
             let blocks = state.db.list_prompt_blocks(Some(target)).await?;
             let rendered = render_prompt_blocks(&blocks);
+            let version = prompt::prompt_block_version(Some(target), &blocks);
             slash_reply(
                 &format!("Rendered prompt target `{target}`:\n\n{rendered}"),
                 serde_json::json!({
@@ -6693,6 +6697,7 @@ async fn execute_prompt_slash_command(
                     "command": command,
                     "target": target,
                     "rendered": rendered,
+                    "version": version,
                     "blocks": blocks,
                 }),
             )

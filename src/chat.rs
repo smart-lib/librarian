@@ -90,6 +90,7 @@ async fn run_librarian_chat_loop_with_runner(
     for iteration in 1..=max_iterations {
         let iteration_started_at = Instant::now();
         let librarian_blocks = db.list_prompt_blocks(Some("librarian")).await?;
+        let prompt_version = prompt::prompt_block_version(Some("librarian"), &librarian_blocks);
         let librarian_instruction_blocks = prompt::render_prompt_blocks(&librarian_blocks);
         let prompt = build_librarian_chat_prompt(
             config,
@@ -121,6 +122,7 @@ async fn run_librarian_chat_loop_with_runner(
             trace.push(serde_json::json!({
                 "iteration": iteration,
                 "action": "plain_answer",
+                "prompt_version": prompt_version,
                 "prompt_chars": prompt_chars,
                 "reply_chars": raw_reply.chars().count(),
                 "provider_elapsed_ms": provider_elapsed_ms,
@@ -147,6 +149,7 @@ async fn run_librarian_chat_loop_with_runner(
                     "iteration": iteration,
                     "action": "answer",
                     "reason": directive.reason,
+                    "prompt_version": prompt_version,
                     "prompt_chars": prompt_chars,
                     "reply_chars": reply.chars().count(),
                     "provider_elapsed_ms": provider_elapsed_ms,
@@ -171,6 +174,7 @@ async fn run_librarian_chat_loop_with_runner(
                     "iteration": iteration,
                     "action": "clarify",
                     "reason": directive.reason,
+                    "prompt_version": prompt_version,
                     "prompt_chars": prompt_chars,
                     "reply_chars": reply.chars().count(),
                     "provider_elapsed_ms": provider_elapsed_ms,
@@ -195,6 +199,7 @@ async fn run_librarian_chat_loop_with_runner(
                     "action": "search_memory",
                     "query": query,
                     "reason": directive.reason,
+                    "prompt_version": prompt_version,
                     "prompt_chars": prompt_chars,
                     "reply_chars": raw_reply.chars().count(),
                     "provider_elapsed_ms": provider_elapsed_ms,
@@ -261,6 +266,7 @@ async fn run_librarian_chat_loop_with_runner(
                     "tool": approval.tool,
                     "tool_action": approval.action,
                     "reason": directive.reason,
+                    "prompt_version": prompt_version,
                     "prompt_chars": prompt_chars,
                     "reply_chars": raw_reply.chars().count(),
                     "provider_elapsed_ms": provider_elapsed_ms,
@@ -285,6 +291,7 @@ async fn run_librarian_chat_loop_with_runner(
                     "iteration": iteration,
                     "action": "unknown_directive",
                     "directive_action": action,
+                    "prompt_version": prompt_version,
                     "prompt_chars": prompt_chars,
                     "reply_chars": raw_reply.chars().count(),
                     "provider_elapsed_ms": provider_elapsed_ms,

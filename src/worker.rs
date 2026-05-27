@@ -74,6 +74,7 @@ pub struct JobPreflightReport {
     pub project_path: String,
     pub context_hits: usize,
     pub prompt_chars: usize,
+    pub prompt_version: prompt::PromptBlockVersion,
     pub instruction_files: Vec<InstructionFileReport>,
     pub command: Vec<String>,
     pub budget_checks: Vec<router::BudgetCheck>,
@@ -111,6 +112,7 @@ pub async fn preflight_job(
             "project_path": &report.project_path,
             "context_hits": report.context_hits,
             "prompt_chars": report.prompt_chars,
+            "prompt_version": &report.prompt_version,
             "instruction_files": &report.instruction_files,
             "command": &report.command,
             "budget_checks": &report.budget_checks,
@@ -232,6 +234,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
     )
     .await?;
     let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+    let agent_prompt_version = prompt::prompt_block_version(Some("agents"), &agent_blocks);
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
     let instruction_files = provider_instruction_files(&db, &config, &job.provider).await?;
     let enriched_prompt = prompt::build_agent_prompt(
@@ -264,6 +267,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
             "project_note": project_note,
             "context_hits": context_pack.hits.len(),
             "prompt_chars": prompt_len,
+            "prompt_version": agent_prompt_version,
             "prompt_blocks": agent_blocks.iter().filter(|block| block.enabled).map(|block| serde_json::json!({
                 "id": block.id,
                 "target": block.target,
@@ -465,6 +469,7 @@ async fn prepare_job(
     )
     .await?;
     let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+    let agent_prompt_version = prompt::prompt_block_version(Some("agents"), &agent_blocks);
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
     let instruction_files = provider_instruction_files(db, config, &job.provider).await?;
     let enriched_prompt = prompt::build_agent_prompt(
@@ -511,6 +516,7 @@ async fn prepare_job(
         project_path: project.path.display().to_string(),
         context_hits: context_pack.hits.len(),
         prompt_chars: prompt_len,
+        prompt_version: agent_prompt_version,
         instruction_files: spec
             .instruction_files
             .iter()

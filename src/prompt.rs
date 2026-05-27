@@ -1,4 +1,14 @@
+use serde::Serialize;
+
 use crate::domain::{ContextPack, Project, PromptBlock};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PromptBlockVersion {
+    pub target: Option<String>,
+    pub version: String,
+    pub enabled_blocks: usize,
+    pub rendered_chars: usize,
+}
 
 pub fn render_prompt_blocks(blocks: &[PromptBlock]) -> String {
     blocks
@@ -8,6 +18,57 @@ pub fn render_prompt_blocks(blocks: &[PromptBlock]) -> String {
         .filter(|content| !content.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+pub fn prompt_block_version(target: Option<&str>, blocks: &[PromptBlock]) -> PromptBlockVersion {
+    let mut enabled = blocks
+        .iter()
+        .filter(|block| block.enabled)
+        .collect::<Vec<_>>();
+    enabled.sort_by(|left, right| {
+        left.target
+            .cmp(&right.target)
+            .then(left.position.cmp(&right.position))
+            .then(left.name.cmp(&right.name))
+            .then(left.id.cmp(&right.id))
+    });
+
+    let mut hash = FNV_OFFSET_BASIS;
+    hash = fnv_update(hash, b"prompt-blocks-v1");
+    hash = fnv_update(hash, target.unwrap_or("*").as_bytes());
+    for block in &enabled {
+        hash = fnv_update(hash, block.target.as_bytes());
+        hash = fnv_update(hash, block.name.as_bytes());
+        hash = fnv_update(hash, block.position.to_string().as_bytes());
+        hash = fnv_update(
+            hash,
+            if block.markdown {
+                b"markdown"
+            } else {
+                b"plain"
+            },
+        );
+        hash = fnv_update(hash, block.content.trim().as_bytes());
+    }
+
+    PromptBlockVersion {
+        target: target.map(ToOwned::to_owned),
+        version: format!("pbv1-{hash:016x}"),
+        enabled_blocks: enabled.len(),
+        rendered_chars: render_prompt_blocks(blocks).chars().count(),
+    }
+}
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+fn fnv_update(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash ^= 0xff;
+    hash.wrapping_mul(FNV_PRIME)
 }
 
 pub fn build_agent_prompt(
@@ -69,4 +130,42 @@ pub fn build_agent_prompt(
     prompt.push_str("- If the context contains conflicting memories, prefer newer higher-confidence memories.\n");
 
     prompt
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn block(name: &str, content: &str, enabled: bool, position: i64) -> PromptBlock {
+        PromptBlock {
+            id: Uuid::new_v4(),
+            target: "librarian".to_string(),
+            name: name.to_string(),
+            content: content.to_string(),
+            enabled,
+            position,
+            markdown: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn prompt_block_version_ignores_disabled_blocks() {
+        let blocks = vec![
+            block("identity", "Be useful.", true, 1),
+            block("disabled", "Ignore me.", false, 2),
+        ];
+        let without_disabled = vec![blocks[0].clone()];
+
+        let version = prompt_block_version(Some("librarian"), &blocks);
+        let other = prompt_block_version(Some("librarian"), &without_disabled);
+
+        assert_eq!(version.version, other.version);
+        assert_eq!(version.enabled_blocks, 1);
+        assert_eq!(version.rendered_chars, "Be useful.".chars().count());
+    }
 }
