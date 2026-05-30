@@ -122,18 +122,18 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
   <style>
     :root {
       color-scheme: dark;
-      --bg: #101214;
-      --panel: #181d21;
-      --panel-2: #20272d;
-      --text: #edf1f5;
-      --muted: #99a6b2;
-      --line: #303941;
-      --accent: #62c7a8;
-      --accent-2: #8fb7ff;
-      --chrome: #e4c16f;
-      --chrome-hover: #ffd98a;
+      --bg: #070a0f;
+      --panel: rgba(18, 24, 32, .86);
+      --panel-2: rgba(28, 38, 50, .88);
+      --text: #f1f6ff;
+      --muted: #9fb1c2;
+      --line: rgba(128, 154, 178, .24);
+      --accent: #70dcc0;
+      --accent-2: #91b8ff;
+      --chrome: #e8c86d;
+      --chrome-hover: #ffe39b;
       --danger: #c76f6f;
-      --shadow: 0 18px 60px rgba(0, 0, 0, .38);
+      --shadow: 0 22px 70px rgba(0, 0, 0, .45);
       --edge-control-space: 68px;
     }
     * { box-sizing: border-box; }
@@ -147,7 +147,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     body {
       margin: 0;
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at 18% 12%, rgba(112, 220, 192, .12), transparent 30%),
+        radial-gradient(circle at 82% 8%, rgba(232, 200, 109, .10), transparent 28%),
+        linear-gradient(135deg, #070a0f 0%, #0d1118 48%, #080b10 100%);
       color: var(--text);
     }
     button, textarea, input, select { font: inherit; }
@@ -171,7 +174,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 6px;
-      background: #11161a;
+      background: rgba(7, 10, 15, .72);
       color: var(--text);
     }
     input, select { height: 38px; padding: 0 10px; }
@@ -222,8 +225,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       border: 1px solid var(--line);
       border-top: 0;
       border-radius: 0 0 18px 18px;
-      background: rgba(18, 22, 25, .96);
-      box-shadow: var(--shadow);
+      background: linear-gradient(180deg, rgba(18, 24, 32, .94), rgba(8, 12, 18, .90));
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .05);
       text-align: center;
       line-height: 1.2;
       font-weight: 800;
@@ -337,14 +340,15 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       padding: 13px 15px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--panel);
+      background: linear-gradient(180deg, rgba(20, 29, 39, .90), rgba(12, 17, 24, .88));
+      backdrop-filter: blur(16px);
       white-space: pre-wrap;
       line-height: 1.45;
     }
     .message.user {
       align-self: flex-end;
-      background: #1d2b29;
-      border-color: #2f5a50;
+      background: linear-gradient(135deg, rgba(32, 65, 58, .88), rgba(24, 36, 43, .88));
+      border-color: rgba(112, 220, 192, .36);
     }
     .message.assistant, .message.system { align-self: flex-start; }
     .message.system { color: var(--muted); }
@@ -431,7 +435,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .composer {
       border-top: 1px solid var(--line);
-      background: rgba(18, 22, 25, .98);
+      background: linear-gradient(180deg, rgba(9, 12, 18, .88), rgba(7, 10, 15, .98));
+      backdrop-filter: blur(18px);
       padding: 12px 14px 14px;
       position: relative;
     }
@@ -486,7 +491,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       z-index: 10;
       display: none;
       grid-template-rows: 58px minmax(0, 1fr);
-      background: var(--bg);
+      background:
+        radial-gradient(circle at 20% 12%, rgba(112, 220, 192, .09), transparent 26%),
+        radial-gradient(circle at 84% 16%, rgba(232, 200, 109, .08), transparent 30%),
+        var(--bg);
     }
     .overlay.open { display: grid; }
     .overlay-head {
@@ -495,7 +503,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       align-items: center;
       position: relative;
       border-bottom: 1px solid var(--line);
-      background: rgba(18, 22, 25, .96);
+      background: rgba(8, 12, 18, .92);
+      backdrop-filter: blur(16px);
     }
     .overlay-head .icon-button {
       position: static;
@@ -517,7 +526,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .tabs {
       border-right: 1px solid var(--line);
       padding: 18px 12px;
-      background: #12161a;
+      background: rgba(9, 13, 19, .72);
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -549,7 +558,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .card {
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--panel);
+      background: linear-gradient(180deg, rgba(18, 25, 34, .92), rgba(13, 18, 25, .88));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
       padding: 14px;
       line-height: 1.45;
     }
@@ -581,23 +591,153 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .project-stage {
       min-height: 0;
-      overflow: auto;
-      padding: 28px clamp(20px, 5vw, 70px);
+      overflow: hidden;
+      padding: clamp(14px, 2vw, 26px);
     }
     .project-layout {
       display: grid;
-      grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
-      gap: 18px;
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+      gap: clamp(14px, 2vw, 22px);
       min-height: 100%;
+      height: 100%;
     }
-    .project-map {
-      min-height: 420px;
-      position: relative;
+    .project-tools {
+      min-height: 0;
       overflow: auto;
+      display: grid;
+      align-content: start;
+      gap: 12px;
+      padding-right: 4px;
+    }
+    .atlas-panel {
+      position: relative;
+      min-height: 0;
+      height: 100%;
+      overflow: hidden;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #0f1417;
-      padding: 24px;
+      border-radius: 22px;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(112, 220, 192, .11), transparent 32%),
+        radial-gradient(circle at 80% 18%, rgba(232, 200, 109, .10), transparent 28%),
+        linear-gradient(145deg, rgba(13, 20, 31, .94), rgba(4, 7, 12, .98));
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.05);
+    }
+    .atlas-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: default;
+    }
+    .atlas-canvas.clickable { cursor: pointer; }
+    .atlas-hud,
+    .atlas-bottom {
+      position: absolute;
+      left: clamp(12px, 2vw, 22px);
+      right: clamp(12px, 2vw, 22px);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      pointer-events: none;
+    }
+    .atlas-hud {
+      top: clamp(12px, 2vw, 22px);
+      justify-content: space-between;
+    }
+    .atlas-title {
+      max-width: min(640px, 68%);
+      padding: 12px 16px;
+      border: 1px solid rgba(112, 220, 192, .24);
+      border-radius: 18px;
+      background: rgba(5, 8, 13, .64);
+      box-shadow: 0 12px 36px rgba(0,0,0,.24);
+      backdrop-filter: blur(14px);
+    }
+    .atlas-title strong {
+      display: block;
+      font-size: clamp(18px, 2.2vw, 28px);
+      line-height: 1.05;
+    }
+    .atlas-title span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .atlas-status {
+      padding: 8px 12px;
+      border: 1px solid rgba(232, 200, 109, .26);
+      border-radius: 999px;
+      color: var(--chrome);
+      background: rgba(5, 8, 13, .58);
+      font-size: 12px;
+      white-space: nowrap;
+      backdrop-filter: blur(12px);
+    }
+    .atlas-bottom {
+      bottom: clamp(12px, 2vw, 22px);
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .atlas-bottom button,
+    .atlas-side-actions button {
+      pointer-events: auto;
+      min-height: 42px;
+      border-radius: 999px;
+      border-color: rgba(255,255,255,.10);
+      background: rgba(9, 14, 21, .72);
+      color: var(--text);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+      backdrop-filter: blur(12px);
+    }
+    .atlas-bottom button.primary,
+    .atlas-side-actions button.primary {
+      background: linear-gradient(135deg, var(--accent), var(--chrome));
+      color: #06100d;
+    }
+    .atlas-side-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .atlas-side-actions .wide {
+      grid-column: 1 / -1;
+    }
+    .atlas-detail {
+      display: grid;
+      gap: 8px;
+    }
+    .atlas-detail .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .atlas-detail .metric {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(7, 10, 15, .36);
+    }
+    .atlas-detail .metric b {
+      display: block;
+      font-size: 20px;
+    }
+    .atlas-detail .metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .atlas-breadcrumbs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .atlas-breadcrumbs button {
+      min-height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(9, 14, 21, .72);
+      border-color: var(--line);
+      color: var(--muted);
+      font-size: 12px;
     }
     .map-legend {
       display: flex;
@@ -612,54 +752,26 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       color: var(--muted);
       font-size: 12px;
     }
-    .tree {
-      min-width: 640px;
-      display: flex;
-      align-items: flex-start;
-      gap: 28px;
-      position: relative;
+    .compact-project-list {
+      max-height: 260px;
+      overflow: auto;
+      display: grid;
+      gap: 8px;
     }
-    .tree::before {
-      content: "";
-      position: absolute;
-      left: 252px;
-      top: 24px;
-      width: 28px;
-      border-top: 1px solid rgba(98, 199, 168, .45);
-    }
-    .node-column {
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-      align-items: center;
-    }
-    .node {
-      min-width: 210px;
-      max-width: 260px;
+    .compact-project {
+      display: grid;
+      gap: 5px;
+      padding: 10px;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
-      box-shadow: var(--shadow);
-      padding: 14px;
+      border-radius: 12px;
+      background: rgba(7, 10, 15, .35);
       text-align: left;
+      color: var(--text);
     }
-    .node.active { border-color: var(--accent); }
-    .node.book { border-color: #8fb7ff; }
-    .node.shelf { border-color: #62c7a8; }
-    .node.rack { border-color: #e4c16f; }
-    .node.artifact { border-color: #99a6b2; }
-    .node.root {
-      background: #1d2529;
-      text-align: center;
+    .compact-project.active {
+      border-color: rgba(112, 220, 192, .72);
+      box-shadow: 0 0 0 1px rgba(112, 220, 192, .16);
     }
-    .node .badge {
-      display: inline-block;
-      margin-bottom: 6px;
-      color: var(--muted);
-      font-size: 11px;
-      text-transform: uppercase;
-    }
-    .node button { width: 100%; margin-top: 10px; }
     .empty {
       width: min(560px, 100%);
       margin: 12vh auto 0;
@@ -674,6 +786,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       .composer { padding: 10px 12px; }
       .overlay-body { grid-template-columns: 180px minmax(0, 1fr); }
       #goal-input { height: 88px; }
+      .project-layout { grid-template-columns: 1fr; }
+      .project-tools { max-height: 38vh; }
     }
   </style>
 </head>
@@ -727,7 +841,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
   <section id="projects-overlay" class="overlay" aria-hidden="true">
     <header class="overlay-head">
       <button class="icon-button" type="button" data-close="projects-overlay" aria-label="Close projects">X</button>
-      <div class="overlay-title">Projects</div>
+      <div class="overlay-title">Knowledge Atlas</div>
       <span></span>
     </header>
     <div id="project-stage" class="project-stage"></div>
@@ -747,6 +861,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         activeContext: [],
         contextScope: 'subtree',
         chatSessionId: null,
+        atlasPath: [''],
+        atlasSelectedPath: '',
+        atlasBackStack: [],
+        atlasForwardStack: [],
+        atlasHit: null,
         inputHistory: [],
         historyIndex: null,
         draftInput: '',
@@ -1012,7 +1131,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           state.activeProject = '';
         }
         state.activeContext = state.activeContext.filter(active =>
-          state.projects.some(project => project.id === active.id || project.name === active.name)
+          active.context_path || active.library_path || state.projects.some(project => project.id === active.id || project.name === active.name)
         );
         renderOverview();
         renderChatSessions();
@@ -1396,25 +1515,62 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           </div>
           <div class="row"><label><input id="agent-read-only" type="checkbox" checked> read-only</label><label><input id="agent-network" type="checkbox"> network</label></div>
         </form>` : '';
-        if (!state.projects.length) {
-          el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}<div class="card muted">No projects yet. Create one here or use <code>/project create</code> in chat.</div></div><div class="project-map">${renderProjectMapSurface()}</div></div>`;
-          wireProjectForms();
-          return;
-        }
+        const currentNode = currentAtlasNode();
+        const selectedNode = selectedAtlasNode();
+        const selectedLabel = projectMapNodeLabel(selectedNode || currentNode);
+        const selectedPath = atlasNodePath(selectedNode || currentNode) || '/';
+        const selectedStats = atlasStats(selectedNode || currentNode);
+        const breadcrumbs = atlasBreadcrumbNodes().map((node, index) =>
+          `<button type="button" data-atlas-crumb="${index}">${htmlEscape(projectMapNodeLabel(node))}</button>`
+        ).join('');
         const cards = state.projects.map(project => {
-          const active = project.name === state.activeProject ? ' active' : '';
-          return `<div class="card${active}">
-            <h3>${htmlEscape(project.name)}</h3>
+          const active = currentContextProjects().some(active => active.id === project.id || active.name === project.name) ? ' active' : '';
+          return `<button type="button" class="compact-project${active}" data-project="${htmlEscape(project.name)}">
+            <strong>${htmlEscape(projectDisplayName(project) || project.name)}</strong>
             <div class="muted tiny">Knowledge: ${htmlEscape(project.library_path || '-')}</div>
             <div class="muted tiny">Workspace: ${htmlEscape(project.path)}</div>
-            <div class="row">
-              <button type="button" data-project="${htmlEscape(project.name)}">Use</button>
-              <button class="secondary" type="button" data-attach-library="${htmlEscape(project.id)}">Knowledge</button>
-              <button class="secondary" type="button" data-attach-workspace="${htmlEscape(project.id)}">Workspace</button>
-            </div>
-          </div>`;
+          </button>`;
         }).join('');
-        el('project-stage').innerHTML = `<div class="project-layout"><div class="stack">${createForm}${agentForm}${cards}</div><div class="project-map">${renderProjectMapSurface()}</div></div>`;
+        const projectList = cards
+          ? `<div class="card stack"><h3>Registered workspaces</h3><div class="compact-project-list">${cards}</div><div class="row"><button class="secondary" type="button" id="attach-library-selected">Knowledge</button><button class="secondary" type="button" id="attach-workspace-selected">Workspace</button></div></div>`
+          : `<div class="card muted">No registered workspaces yet. The atlas still works with Library folders and notes.</div>`;
+        el('project-stage').innerHTML = `<div class="project-layout">
+          <aside class="project-tools">
+            <div class="card atlas-detail">
+              <h3>${htmlEscape(selectedLabel)}</h3>
+              <div class="muted tiny">${htmlEscape(selectedPath)}</div>
+              <div class="atlas-breadcrumbs">${breadcrumbs}</div>
+              <div class="metric-grid">
+                <div class="metric"><b>${selectedStats.folders}</b><span>Folders</span></div>
+                <div class="metric"><b>${selectedStats.files}</b><span>Files</span></div>
+                <div class="metric"><b>${selectedStats.projects}</b><span>Linked projects</span></div>
+                <div class="metric"><b>${selectedStats.depth}</b><span>Depth</span></div>
+              </div>
+              <div class="atlas-side-actions">
+                <button class="primary wide" type="button" id="atlas-chat-context">Chat in this context</button>
+                <button type="button" id="atlas-use-context">Use context</button>
+                <button type="button" id="atlas-back">Back</button>
+                <button type="button" id="atlas-forward">Forward</button>
+                <button type="button" id="atlas-root">Root</button>
+              </div>
+            </div>
+            ${createForm}
+            ${agentForm}
+            ${projectList}
+          </aside>
+          <section class="atlas-panel">
+            <canvas id="neural-atlas" class="atlas-canvas" aria-label="Knowledge atlas"></canvas>
+            <div class="atlas-hud">
+              <div class="atlas-title"><strong>${htmlEscape(projectMapNodeLabel(currentNode))}</strong><span>${htmlEscape(atlasNodePath(currentNode) || '/')} - click a neuron to descend, click a file-ring point to select.</span></div>
+              <div class="atlas-status">${htmlEscape(selectedLabel)} selected</div>
+            </div>
+            <div class="atlas-bottom">
+              <button class="primary" type="button" id="atlas-bottom-chat">Chat in this context</button>
+              <button type="button" id="atlas-bottom-back">Back</button>
+              <button type="button" id="atlas-bottom-root">Root</button>
+            </div>
+          </section>
+        </div>`;
         wireProjectForms();
         qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
           state.activeProject = button.dataset.project || '';
@@ -1423,8 +1579,336 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           state.chatSessionId = null;
           renderProjects();
           renderContext();
-          closeOverlay('projects-overlay');
         }));
+        qsa('[data-atlas-crumb]').forEach(button => button.addEventListener('click', () => {
+          const node = atlasBreadcrumbNodes()[Number(button.dataset.atlasCrumb)];
+          if (node) atlasNavigateTo(atlasNodePath(node), true);
+        }));
+        const selectedProject = state.projects.find(project => currentContextProjects().some(active => active.id === project.id || active.name === project.name));
+        const attachLibrary = el('attach-library-selected');
+        if (attachLibrary) attachLibrary.addEventListener('click', async () => {
+          if (!selectedProject) return appendMessage('system', 'Choose a registered workspace first.', 'Atlas');
+          const value = prompt('Knowledge base path inside Librarian/Library', selectedProject.library_path || '');
+          if (!value) return;
+          await postJson(`/api/projects/${selectedProject.id}/attach-library`, { library_path: value });
+        });
+        const attachWorkspace = el('attach-workspace-selected');
+        if (attachWorkspace) attachWorkspace.addEventListener('click', async () => {
+          if (!selectedProject) return appendMessage('system', 'Choose a registered workspace first.', 'Atlas');
+          const value = prompt('Existing workspace directory path', selectedProject.path || '');
+          if (!value) return;
+          await postJson(`/api/projects/${selectedProject.id}/attach-workspace`, { workspace_path: value });
+        });
+        wireAtlasControls();
+        renderNeuralAtlas();
+      }
+      function projectMapRoot() {
+        return state.projectMap?.root || { name: 'Knowledge Base', path: '', kind: 'Folder', visual_kind: 'rack', children: [], projects: [] };
+      }
+      function atlasNodePath(node) {
+        return String(node?.path || '');
+      }
+      function projectMapNodeLabel(node) {
+        if (!node) return 'Knowledge Base';
+        const name = node.name || node.path || 'Knowledge Base';
+        return humanProjectName(name) || 'Knowledge Base';
+      }
+      function atlasFindNode(path, node = projectMapRoot()) {
+        if (atlasNodePath(node) === String(path || '')) return node;
+        for (const child of (node.children || [])) {
+          const found = atlasFindNode(path, child);
+          if (found) return found;
+        }
+        return null;
+      }
+      function currentAtlasNode() {
+        return atlasFindNode(state.atlasPath[state.atlasPath.length - 1]) || projectMapRoot();
+      }
+      function selectedAtlasNode() {
+        return atlasFindNode(state.atlasSelectedPath) || currentAtlasNode();
+      }
+      function atlasBreadcrumbNodes() {
+        return state.atlasPath.map(path => atlasFindNode(path)).filter(Boolean);
+      }
+      function atlasStats(node) {
+        const stats = { folders: 0, files: 0, projects: 0, depth: Math.max(0, state.atlasPath.length - 1) };
+        function walk(entry) {
+          for (const project of (entry.projects || [])) {
+            if (project) stats.projects += 1;
+          }
+          for (const child of (entry.children || [])) {
+            const kind = String(child.visual_kind || child.kind || '').toLowerCase();
+            if (kind === 'book' || kind === 'markdown' || kind === 'file' || kind === 'artifact') stats.files += 1;
+            else stats.folders += 1;
+            walk(child);
+          }
+        }
+        if (node) walk(node);
+        return stats;
+      }
+      function atlasNavigateTo(path, pushHistory) {
+        const node = atlasFindNode(path);
+        if (!node) return;
+        const currentPath = atlasNodePath(currentAtlasNode());
+        if (pushHistory && currentPath !== atlasNodePath(node)) {
+          state.atlasBackStack.push(currentPath);
+          state.atlasForwardStack = [];
+        }
+        const trail = [];
+        function collect(entry, target, acc) {
+          const next = acc.concat(atlasNodePath(entry));
+          if (atlasNodePath(entry) === target) {
+            trail.push(...next);
+            return true;
+          }
+          return (entry.children || []).some(child => collect(child, target, next));
+        }
+        collect(projectMapRoot(), atlasNodePath(node), []);
+        state.atlasPath = trail.length ? trail : [''];
+        state.atlasSelectedPath = atlasNodePath(node);
+        renderProjects();
+      }
+      function atlasContextFromNode(node) {
+        const selected = node || selectedAtlasNode();
+        const linkedProject = Array.isArray(selected.projects) && selected.projects.length ? selected.projects[0] : null;
+        if (linkedProject) return contextNodeFromMetadata({ ...selected, project: linkedProject, context_path: selected.path, library_path: selected.path });
+        return contextNodeFromMetadata({ ...selected, context_path: selected.path, library_path: selected.path });
+      }
+      function useAtlasContext(closeAfter) {
+        const node = selectedAtlasNode();
+        const context = atlasContextFromNode(node);
+        state.activeContext = [context];
+        state.activeProject = context.id ? (context.name || context.context_path || '') : '';
+        state.contextScope = 'subtree';
+        state.chatSessionId = null;
+        renderContext();
+        renderProjects();
+        if (closeAfter) closeOverlay('projects-overlay');
+      }
+      function wireAtlasControls() {
+        const bind = (id, fn) => { const node = el(id); if (node) node.addEventListener('click', fn); };
+        bind('atlas-use-context', () => useAtlasContext(false));
+        bind('atlas-chat-context', () => useAtlasContext(true));
+        bind('atlas-bottom-chat', () => useAtlasContext(true));
+        bind('atlas-root', () => atlasNavigateTo('', true));
+        bind('atlas-bottom-root', () => atlasNavigateTo('', true));
+        bind('atlas-back', atlasBack);
+        bind('atlas-bottom-back', atlasBack);
+        bind('atlas-forward', atlasForward);
+      }
+      function atlasBack() {
+        const previous = state.atlasBackStack.pop();
+        if (previous === undefined) {
+          if (state.atlasPath.length > 1) atlasNavigateTo(state.atlasPath[state.atlasPath.length - 2], true);
+          return;
+        }
+        state.atlasForwardStack.push(atlasNodePath(currentAtlasNode()));
+        atlasNavigateTo(previous, false);
+      }
+      function atlasForward() {
+        const next = state.atlasForwardStack.pop();
+        if (next === undefined) return;
+        state.atlasBackStack.push(atlasNodePath(currentAtlasNode()));
+        atlasNavigateTo(next, false);
+      }
+      function renderNeuralAtlas() {
+        const canvas = el('neural-atlas');
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        const width = Math.max(320, rect.width);
+        const height = Math.max(320, rect.height);
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        const hits = [];
+        const current = currentAtlasNode();
+        const selected = selectedAtlasNode();
+        const children = (current.children || []);
+        const folders = children.filter(child => !atlasIsFile(child));
+        const files = children.filter(atlasIsFile);
+        const cx = width / 2;
+        const cy = height / 2 + 18;
+        const radius = Math.max(52, Math.min(92, Math.min(width, height) * .09));
+        drawAtlasBackground(ctx, width, height);
+        drawAtlasConnections(ctx, cx, cy, folders, files, width, height);
+        drawAtlasNode(ctx, cx, cy, radius, current, true, atlasNodePath(selected) === atlasNodePath(current));
+        hits.push({ type: 'select', node: current, x: cx, y: cy, r: radius + 10 });
+        const folderPoints = atlasOrbitPoints(folders.length, cx, cy, width, height, radius + 100);
+        folders.forEach((node, index) => {
+          const point = folderPoints[index];
+          const size = Math.max(30, Math.min(62, 24 + Math.sqrt(atlasStats(node).folders + atlasStats(node).files + 1) * 8));
+          drawAtlasNode(ctx, point.x, point.y, size, node, false, atlasNodePath(selected) === atlasNodePath(node));
+          drawAtlasLabel(ctx, point.x, point.y + size + 16, projectMapNodeLabel(node), atlasStats(node));
+          hits.push({ type: 'enter', node, x: point.x, y: point.y, r: size + 18 });
+        });
+        const filePoints = atlasFileRingPoints(files.length, cx, cy, radius + 56);
+        files.forEach((node, index) => {
+          const point = filePoints[index];
+          drawAtlasFile(ctx, point.x, point.y, node, atlasNodePath(selected) === atlasNodePath(node));
+          hits.push({ type: 'select', node, x: point.x, y: point.y, r: 15 });
+        });
+        if (!children.length) {
+          ctx.fillStyle = 'rgba(241, 246, 255, .62)';
+          ctx.font = '14px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('No child notes or folders here yet.', cx, cy + radius + 56);
+        }
+        canvas.onmousemove = event => {
+          const point = atlasPointer(canvas, event);
+          const hit = hits.find(item => Math.hypot(point.x - item.x, point.y - item.y) <= item.r);
+          canvas.classList.toggle('clickable', !!hit);
+          state.atlasHit = hit || null;
+        };
+        canvas.onclick = event => {
+          const point = atlasPointer(canvas, event);
+          const hit = hits.find(item => Math.hypot(point.x - item.x, point.y - item.y) <= item.r);
+          if (!hit) return;
+          state.atlasSelectedPath = atlasNodePath(hit.node);
+          if (hit.type === 'enter') atlasNavigateTo(atlasNodePath(hit.node), true);
+          else renderProjects();
+        };
+      }
+      function atlasIsFile(node) {
+        const kind = String(node?.visual_kind || node?.kind || '').toLowerCase();
+        return kind === 'book' || kind === 'markdown' || kind === 'file' || kind === 'artifact';
+      }
+      function atlasPointer(canvas, event) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      }
+      function drawAtlasBackground(ctx, width, height) {
+        ctx.clearRect(0, 0, width, height);
+        const grd = ctx.createRadialGradient(width / 2, height / 2, 20, width / 2, height / 2, Math.max(width, height) * .72);
+        grd.addColorStop(0, 'rgba(112, 220, 192, .15)');
+        grd.addColorStop(.45, 'rgba(40, 54, 76, .16)');
+        grd.addColorStop(1, 'rgba(2, 4, 8, .92)');
+        ctx.fillStyle = grd;
+        ctx.fillRect(0, 0, width, height);
+        ctx.strokeStyle = 'rgba(145, 184, 255, .06)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 22; i++) {
+          const x = (i * 97) % width;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.bezierCurveTo(x + 80, height * .28, x - 80, height * .64, x + 20, height);
+          ctx.stroke();
+        }
+      }
+      function drawAtlasConnections(ctx, cx, cy, folders, files, width, height, minOrbit) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(145, 184, 255, .18)';
+        ctx.lineWidth = 1;
+        const folderPoints = atlasOrbitPoints(folders.length, cx, cy, width, height, minOrbit);
+        folderPoints.forEach(point => {
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.quadraticCurveTo((cx + point.x) / 2, Math.min(cy, point.y) - 40, point.x, point.y);
+          ctx.stroke();
+        });
+        const filePoints = atlasFileRingPoints(files.length, cx, cy, minOrbit - 44);
+        ctx.strokeStyle = 'rgba(232, 200, 109, .18)';
+        filePoints.forEach(point => {
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(point.x, point.y);
+          ctx.stroke();
+        });
+        ctx.restore();
+      }
+      function atlasOrbitPoints(count, cx, cy, width, height, minOrbit) {
+        if (!count) return [];
+        const points = [];
+        const rx = Math.max(minOrbit, width * .34);
+        const ry = Math.max(minOrbit * .55, height * .28);
+        for (let i = 0; i < count; i++) {
+          const angle = -Math.PI / 2 + (Math.PI * 2 * i / count);
+          points.push({
+            x: cx + Math.cos(angle) * rx,
+            y: cy + Math.sin(angle) * ry
+          });
+        }
+        return points;
+      }
+      function atlasFileRingPoints(count, cx, cy, ring) {
+        if (!count) return [];
+        const points = [];
+        const max = Math.min(count, 28);
+        for (let i = 0; i < max; i++) {
+          const angle = -Math.PI / 2 + (Math.PI * 2 * i / max);
+          points.push({ x: cx + Math.cos(angle) * ring, y: cy + Math.sin(angle) * ring * .62 });
+        }
+        return points;
+      }
+      function drawAtlasNode(ctx, x, y, r, node, center, selected) {
+        const hue = atlasHue(node);
+        ctx.save();
+        ctx.shadowColor = hue;
+        ctx.shadowBlur = selected ? 32 : 18;
+        const grd = ctx.createRadialGradient(x - r * .25, y - r * .35, 2, x, y, r);
+        grd.addColorStop(0, 'rgba(255,255,255,.72)');
+        grd.addColorStop(.16, hue);
+        grd.addColorStop(1, 'rgba(8, 14, 22, .82)');
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        if (center) ctx.arc(x, y, r, 0, Math.PI * 2);
+        else if (String(node.visual_kind).toLowerCase() === 'shelf') atlasPolygon(ctx, x, y, r, 6);
+        else atlasPolygon(ctx, x, y, r, 8);
+        ctx.fill();
+        ctx.lineWidth = selected ? 4 : 1.5;
+        ctx.strokeStyle = selected ? '#e8c86d' : 'rgba(241,246,255,.34)';
+        ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = '#f1f6ff';
+        ctx.font = center ? '700 22px system-ui, sans-serif' : '700 13px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(projectMapNodeLabel(node), x, y + r + (center ? 32 : 18));
+      }
+      function drawAtlasFile(ctx, x, y, node, selected) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(Math.PI / 4);
+        ctx.shadowColor = '#91b8ff';
+        ctx.shadowBlur = selected ? 20 : 8;
+        ctx.fillStyle = selected ? '#e8c86d' : 'rgba(145, 184, 255, .86)';
+        ctx.fillRect(-8, -8, 16, 16);
+        ctx.strokeStyle = 'rgba(241,246,255,.55)';
+        ctx.strokeRect(-8, -8, 16, 16);
+        ctx.restore();
+      }
+      function drawAtlasLabel(ctx, x, y, label, stats) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.font = '700 13px system-ui, sans-serif';
+        ctx.fillStyle = '#f1f6ff';
+        ctx.fillText(label, x, y);
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.fillStyle = 'rgba(159,177,194,.86)';
+        ctx.fillText(`${stats.folders} folders / ${stats.files} files`, x, y + 16);
+        ctx.restore();
+      }
+      function atlasPolygon(ctx, x, y, r, sides) {
+        ctx.beginPath();
+        for (let i = 0; i < sides; i++) {
+          const angle = -Math.PI / 2 + i * Math.PI * 2 / sides;
+          const px = x + Math.cos(angle) * r;
+          const py = y + Math.sin(angle) * r;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      }
+      function atlasHue(node) {
+        const kind = String(node?.visual_kind || '').toLowerCase();
+        if (kind === 'shelf') return '#70dcc0';
+        if (kind === 'book') return '#91b8ff';
+        if (kind === 'artifact') return '#b2b8c1';
+        let hash = 0;
+        const text = atlasNodePath(node) || node?.name || '';
+        for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+        const palette = ['#70dcc0', '#e8c86d', '#91b8ff', '#ca8cff', '#ff9f7a'];
+        return palette[hash % palette.length];
       }
       function renderProjectMapTree(node) {
         if (!node) return '<div class="node root"><h3>Librarian</h3><div class="muted tiny">Knowledge base is empty.</div></div>';
@@ -1703,6 +2187,9 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         .then(loadSlashCommands)
         .then(restoreLatestChatSession)
         .catch(error => appendMessage('system', `Admin data failed to load: ${error.message || error}`));
+      window.addEventListener('resize', () => {
+        if (el('projects-overlay').classList.contains('open')) renderNeuralAtlas();
+      });
     })();
   </script>
 </body>
