@@ -123,15 +123,18 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     :root {
       color-scheme: dark;
       --bg: #070a0f;
-      --panel: rgba(18, 24, 32, .86);
-      --panel-2: rgba(28, 38, 50, .88);
-      --text: #f1f6ff;
-      --muted: #9fb1c2;
-      --line: rgba(128, 154, 178, .24);
+      --panel: rgba(14, 22, 40, .72);
+      --panel-2: rgba(28, 38, 60, .82);
+      --text: #efe6d0;
+      --muted: rgba(239, 230, 208, .58);
+      --dim: rgba(239, 230, 208, .32);
+      --line: rgba(231, 185, 97, .18);
+      --line-strong: rgba(231, 185, 97, .42);
       --accent: #70dcc0;
-      --accent-2: #91b8ff;
+      --accent-2: #7bb1ff;
+      --violet: #a58cff;
       --chrome: #e8c86d;
-      --chrome-hover: #ffe39b;
+      --chrome-hover: #f0cd86;
       --danger: #c76f6f;
       --shadow: 0 22px 70px rgba(0, 0, 0, .45);
       --edge-control-space: 68px;
@@ -152,6 +155,25 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         radial-gradient(circle at 82% 8%, rgba(232, 200, 109, .10), transparent 28%),
         linear-gradient(135deg, #070a0f 0%, #0d1118 48%, #080b10 100%);
       color: var(--text);
+    }
+    #atlas-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      width: 100%;
+      height: 100%;
+      filter: saturate(.86);
+      pointer-events: none;
+    }
+    #atlas-bg::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(circle at 50% 35%, rgba(123, 177, 255, .07), transparent 45%),
+        radial-gradient(circle at 100% 100%, rgba(165, 140, 255, .08), transparent 50%),
+        linear-gradient(180deg, rgba(6, 8, 26, .20) 0%, rgba(6, 8, 26, .72) 100%);
+      pointer-events: none;
     }
     button, textarea, input, select { font: inherit; }
     button {
@@ -200,6 +222,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       letter-spacing: 0;
     }
     .app {
+      position: relative;
+      z-index: 1;
       height: 100dvh;
       min-height: 560px;
       display: grid;
@@ -327,44 +351,157 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       overflow: auto;
       padding: 86px clamp(12px, var(--edge-control-space), 72px) 28px;
       scroll-behavior: smooth;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
     }
+    .chat-log::-webkit-scrollbar { width: 6px; }
+    .chat-log::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; }
     .thread {
-      width: min(100%, calc(100vw - (var(--edge-control-space) * 2)));
+      width: min(920px, calc(100vw - (var(--edge-control-space) * 2)));
       margin: 0 auto;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 18px;
     }
     .message {
       max-width: 100%;
-      padding: 13px 15px;
+      padding: 15px 18px;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: linear-gradient(180deg, rgba(20, 29, 39, .90), rgba(12, 17, 24, .88));
+      border-radius: 14px;
+      background: var(--panel);
       backdrop-filter: blur(16px);
       white-space: pre-wrap;
-      line-height: 1.45;
+      line-height: 1.55;
+      position: relative;
+      box-shadow: 0 22px 58px rgba(0,0,0,.34);
     }
     .message.user {
       align-self: flex-end;
-      background: linear-gradient(135deg, rgba(32, 65, 58, .88), rgba(24, 36, 43, .88));
-      border-color: rgba(112, 220, 192, .36);
+      margin-left: 16%;
+      background: linear-gradient(180deg, rgba(165, 140, 255, .12), rgba(123, 177, 255, .06));
+      border-color: rgba(165, 140, 255, .25);
+      color: var(--text);
+    }
+    .message.user::before {
+      content: "YOU";
+      position: absolute;
+      top: -8px;
+      left: 14px;
+      padding: 0 8px;
+      background: var(--bg);
+      color: var(--violet);
+      font-size: 9px;
+      letter-spacing: .35em;
+      font-weight: 700;
+    }
+    .message.assistant {
+      margin-right: 10%;
+      border-left: 2px solid var(--chrome);
+    }
+    .message.assistant::before {
+      content: "LIBRARIAN";
+      position: absolute;
+      top: -8px;
+      left: 14px;
+      padding: 0 8px;
+      background: var(--bg);
+      color: var(--chrome);
+      font-size: 9px;
+      letter-spacing: .35em;
+      font-weight: 700;
     }
     .message.assistant, .message.system { align-self: flex-start; }
-    .message.system { color: var(--muted); }
+    .message.system {
+      margin-left: 24px;
+      margin-right: 24px;
+      border-style: dashed;
+      border-color: rgba(112, 220, 192, .35);
+      background: rgba(8, 12, 24, .55);
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      box-shadow: none;
+    }
+    .message.system::before {
+      content: "SYSTEM";
+      position: absolute;
+      top: -8px;
+      left: 14px;
+      padding: 0 8px;
+      background: var(--bg);
+      color: var(--accent);
+      font-size: 9px;
+      letter-spacing: .35em;
+    }
     .message.command {
-      border-color: rgba(143, 183, 255, .5);
-      background: #171f29;
-      color: var(--text);
+      border-color: rgba(123, 177, 255, .2);
+      border-left: 2px solid var(--accent-2);
+      background: rgba(8, 12, 24, .35);
+      color: var(--accent-2);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12.5px;
     }
     .message.command small { color: var(--accent-2); }
     .message.thinking {
       color: var(--muted);
-      border-style: dashed;
+      border-style: solid;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-style: italic;
     }
     .message.approval {
-      border-color: rgba(228, 193, 111, .58);
-      background: #211f18;
+      border-color: var(--chrome);
+      background: linear-gradient(180deg, rgba(232, 200, 109, .14), rgba(232, 200, 109, .04));
+      box-shadow: 0 0 24px rgba(232, 200, 109, .12);
+    }
+    .message.approval::before {
+      content: "APPROVAL";
+    }
+    .message blockquote,
+    .message .quote {
+      margin: 10px 0;
+      padding: 6px 14px;
+      border-left: 2px solid var(--chrome);
+      background: rgba(232, 200, 109, .06);
+      color: var(--muted);
+      font-style: italic;
+    }
+    .message pre {
+      margin: 12px 0;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(0,0,0,.42);
+      color: #cce6ff;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    .message code {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+    .message p { margin: 0 0 10px; }
+    .message p:last-child { margin-bottom: 0; }
+    .message a {
+      color: var(--accent-2);
+      text-decoration: none;
+      border-bottom: 1px dotted rgba(123,177,255,.5);
+    }
+    .message a:hover {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .message .attachment-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      margin: 6px 0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: rgba(123,177,255,.06);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
     }
     .approval-head {
       display: flex;
@@ -430,37 +567,111 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .message small {
       display: block;
-      margin-top: 8px;
-      color: var(--muted);
+      margin-top: 11px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--line);
+      color: var(--dim);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 10px;
+      letter-spacing: .12em;
+      text-align: right;
     }
     .composer {
-      border-top: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(9, 12, 18, .88), rgba(7, 10, 15, .98));
-      backdrop-filter: blur(18px);
-      padding: 12px 14px 14px;
+      display: grid;
+      grid-template-columns: 1fr min(920px, calc(100vw - (var(--edge-control-space) * 2))) 1fr;
+      border-top: 0;
+      background: linear-gradient(180deg, rgba(9, 12, 18, 0), rgba(7, 10, 15, .82));
+      padding: 8px clamp(12px, var(--edge-control-space), 72px) 18px;
       position: relative;
     }
     .composer-inner {
+      grid-column: 2;
       width: 100%;
       margin: 0;
-      display: block;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(10, 14, 30, .82);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 -10px 40px rgba(0,0,0,.4);
+      padding: 10px 12px;
+    }
+    .composer-inner:focus-within {
+      border-color: var(--chrome);
+    }
+    .composer-tools {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .composer-tool {
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border-color: var(--line);
+      background: rgba(8, 12, 24, .55);
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .composer-tool:hover {
+      color: var(--chrome);
+      border-color: var(--line-strong);
     }
     #goal-input {
-      height: 112px;
-      max-height: 38vh;
-      resize: vertical;
+      height: 58px;
+      max-height: 30vh;
+      resize: none;
+      background: transparent;
+      border: 0;
+      padding: 6px 4px;
+      outline: 0;
+    }
+    .send-button {
+      width: 42px;
+      height: 42px;
+      min-height: 42px;
+      padding: 0;
+      border: 0;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      background: var(--chrome);
+      color: #1a0f02;
+      transition: transform .15s ease, background .15s ease;
+    }
+    .send-button:hover {
+      background: var(--chrome-hover);
+      transform: scale(1.04);
+    }
+    .send-button::before {
+      content: "";
+      width: 0;
+      height: 0;
+      border-top: 8px solid transparent;
+      border-bottom: 8px solid transparent;
+      border-left: 13px solid currentColor;
+      transform: translateX(1px);
     }
     .slash-palette {
       position: absolute;
-      left: 14px;
-      right: 14px;
-      bottom: calc(100% + 8px);
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+      width: min(620px, calc(100vw - 40px));
+      bottom: calc(100% + 10px);
       max-height: 260px;
       overflow: auto;
       display: none;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(18, 22, 25, .98);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: rgba(14, 22, 40, .94);
+      backdrop-filter: blur(14px);
       box-shadow: var(--shadow);
       padding: 8px;
       z-index: 8;
@@ -815,6 +1026,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
   </style>
 </head>
 <body>
+  <canvas id="atlas-bg" aria-hidden="true"></canvas>
   <div class="app">
     <header class="topbar">
       <button id="settings-open" class="icon-button" type="button" aria-label="Settings" title="Settings"><span class="settings-icon"></span></button>
@@ -830,7 +1042,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     <form id="chat-form" class="composer" autocomplete="off">
       <div id="slash-palette" class="slash-palette" role="listbox" aria-label="Slash commands"></div>
       <div class="composer-inner">
+        <div class="composer-tools">
+          <button class="composer-tool" type="button" id="composer-slash">Commands</button>
+          <button class="composer-tool" type="button" id="composer-context">Context</button>
+          <button class="composer-tool" type="button" id="composer-library">Library</button>
+        </div>
         <textarea id="goal-input" name="goal" placeholder="Message Librarian" autocomplete="off" required></textarea>
+        <button class="send-button" type="submit" aria-label="Send message" title="Send"></button>
       </div>
     </form>
   </div>
@@ -1104,7 +1322,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
       function setMessage(article, text, detail, contextLabel) {
         article.classList.remove('thinking');
-        article.textContent = text;
+        article.innerHTML = renderMessageContent(text);
         const context = contextLabel || currentContextLabel();
         if (detail !== undefined && detail !== null && detail !== '') {
           const small = document.createElement('small');
@@ -1119,6 +1337,33 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           article.title = `context: ${context}`;
         }
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
+      }
+      function renderMessageContent(text) {
+        const source = String(text ?? '');
+        const blocks = [];
+        let escaped = htmlEscape(source).replace(/```([\s\S]*?)```/g, (_, code) => {
+          const key = `@@CODE${blocks.length}@@`;
+          blocks.push(`<pre><code>${code.trim()}</code></pre>`);
+          return key;
+        });
+        escaped = escaped
+          .split(/\n{2,}/)
+          .map(block => {
+            const lines = block.split('\n');
+            if (lines.every(line => line.trim().startsWith('&gt;'))) {
+              return `<blockquote>${lines.map(line => line.replace(/^\s*&gt;\s?/, '')).join('<br>')}</blockquote>`;
+            }
+            if (lines.length && lines.every(line => /^\s*(?:[-*]\s+|\d+\.\s+)/.test(line))) {
+              return `<p>${lines.join('<br>')}</p>`;
+            }
+            return `<p>${lines.join('<br>')}</p>`;
+          })
+          .join('');
+        escaped = escaped.replace(/https?:\/\/[^\s<]+/g, url => `<a href="${url}" target="_blank" rel="noreferrer">${url}</a>`);
+        blocks.forEach((block, index) => {
+          escaped = escaped.replace(`@@CODE${index}@@`, block);
+        });
+        return escaped || '<p></p>';
       }
       function activeProjectName() {
         return state.activeProject || '';
@@ -2075,6 +2320,17 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
 
       el('settings-open').addEventListener('click', () => openOverlay('settings-overlay'));
       el('projects-open').addEventListener('click', () => openOverlay('projects-overlay'));
+      el('composer-library').addEventListener('click', () => openOverlay('projects-overlay'));
+      el('composer-context').addEventListener('click', () => {
+        appendMessage('system', `Current context: ${currentContextLabel()}`, 'Context');
+      });
+      el('composer-slash').addEventListener('click', () => {
+        const input = el('goal-input');
+        if (!input.value.startsWith('/')) input.value = '/';
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        updateSlashPalette();
+      });
       el('new-chat').addEventListener('click', () => {
         state.chatSessionId = null;
         el('thread').innerHTML = '';
@@ -2210,9 +2466,63 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         .then(loadSlashCommands)
         .then(restoreLatestChatSession)
         .catch(error => appendMessage('system', `Admin data failed to load: ${error.message || error}`));
+      drawAmbientAtlasBackground();
       window.addEventListener('resize', () => {
+        drawAmbientAtlasBackground();
         if (el('projects-overlay').classList.contains('open')) renderNeuralAtlas();
       });
+      function drawAmbientAtlasBackground() {
+        const canvas = el('atlas-bg');
+        if (!canvas) return;
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, width, height);
+        const gradient = ctx.createRadialGradient(width * .52, height * .34, 20, width * .52, height * .34, Math.max(width, height) * .74);
+        gradient.addColorStop(0, 'rgba(123,177,255,.12)');
+        gradient.addColorStop(.36, 'rgba(112,220,192,.06)');
+        gradient.addColorStop(1, 'rgba(6,8,26,.92)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+        const nodes = [
+          [width * .18, height * .28, 4, '#e8c86d'],
+          [width * .34, height * .18, 3, '#70dcc0'],
+          [width * .62, height * .24, 5, '#7bb1ff'],
+          [width * .78, height * .38, 3, '#a58cff'],
+          [width * .46, height * .58, 4, '#e8c86d'],
+          [width * .22, height * .72, 3, '#7bb1ff'],
+          [width * .70, height * .76, 4, '#70dcc0']
+        ];
+        ctx.lineWidth = 1;
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const dx = nodes[i][0] - nodes[j][0];
+            const dy = nodes[i][1] - nodes[j][1];
+            const dist = Math.hypot(dx, dy);
+            if (dist > Math.min(width, height) * .42) continue;
+            ctx.strokeStyle = `rgba(231,185,97,${Math.max(.03, .16 - dist / 2600)})`;
+            ctx.beginPath();
+            ctx.moveTo(nodes[i][0], nodes[i][1]);
+            ctx.lineTo(nodes[j][0], nodes[j][1]);
+            ctx.stroke();
+          }
+        }
+        for (const [x, y, r, color] of nodes) {
+          ctx.save();
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 18;
+          ctx.fillStyle = color;
+          ctx.globalAlpha = .75;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
     })();
   </script>
 </body>
