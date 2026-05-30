@@ -826,35 +826,44 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .project-stage {
       min-height: 0;
       overflow: hidden;
-      padding: clamp(14px, 2vw, 26px);
+      padding: 0;
+      position: relative;
     }
     .project-layout {
-      display: grid;
-      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-      gap: clamp(14px, 2vw, 22px);
+      display: block;
+      position: relative;
       min-height: 100%;
       height: 100%;
     }
     .project-tools {
+      position: absolute;
+      right: 22px;
+      top: 22px;
+      z-index: 3;
+      width: min(360px, 32vw);
       min-height: 0;
+      max-height: calc(100% - 118px);
       overflow: auto;
       display: grid;
       align-content: start;
       gap: 12px;
-      padding-right: 4px;
+      pointer-events: auto;
+      opacity: .16;
+      transition: opacity .18s ease;
+    }
+    .project-tools:hover,
+    .project-tools:focus-within {
+      opacity: 1;
     }
     .atlas-panel {
       position: relative;
       min-height: 0;
       height: 100%;
       overflow: hidden;
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      background:
-        radial-gradient(circle at 50% 45%, rgba(112, 220, 192, .11), transparent 32%),
-        radial-gradient(circle at 80% 18%, rgba(232, 200, 109, .10), transparent 28%),
-        linear-gradient(145deg, rgba(13, 20, 31, .94), rgba(4, 7, 12, .98));
-      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.05);
+      border: 0;
+      border-radius: 0;
+      background: #04050d;
+      box-shadow: none;
     }
     .atlas-canvas {
       width: 100%;
@@ -876,6 +885,24 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .atlas-hud {
       top: clamp(12px, 2vw, 22px);
       justify-content: space-between;
+    }
+    .atlas-stamp,
+    .atlas-help {
+      position: absolute;
+      left: 28px;
+      z-index: 2;
+      color: rgba(180,220,255,.45);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      letter-spacing: .5em;
+      text-transform: uppercase;
+      pointer-events: none;
+    }
+    .atlas-stamp { top: 22px; }
+    .atlas-help {
+      bottom: 22px;
+      color: rgba(180,220,255,.35);
+      letter-spacing: .25em;
     }
     .atlas-title {
       max-width: min(640px, 68%);
@@ -1828,12 +1855,11 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           </aside>
           <section class="atlas-panel">
             <canvas id="neural-atlas" class="atlas-canvas" aria-label="Knowledge atlas"></canvas>
-            <div class="atlas-hud">
-              <div class="atlas-title"><strong>${htmlEscape(projectMapNodeLabel(currentNode))}</strong><span>${htmlEscape(atlasNodePath(currentNode) || '/')} - click a neuron to descend, click a file-ring point to select.</span></div>
-              <div class="atlas-status">${htmlEscape(selectedLabel)} selected</div>
-            </div>
+            <div class="atlas-stamp">Neural Atlas · v1</div>
+            <div class="atlas-help">Neuron - zoom · core - back · prima - root · synapse - select</div>
             <div class="atlas-bottom">
               <button class="primary" type="button" id="atlas-bottom-chat">Chat in this context</button>
+              <button type="button" id="atlas-bottom-use">Use context</button>
               <button type="button" id="atlas-bottom-back">Back</button>
               <button type="button" id="atlas-bottom-root">Root</button>
             </div>
@@ -1958,6 +1984,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         bind('atlas-use-context', () => useAtlasContext(false));
         bind('atlas-chat-context', () => useAtlasContext(true));
         bind('atlas-bottom-chat', () => useAtlasContext(true));
+        bind('atlas-bottom-use', () => useAtlasContext(false));
         bind('atlas-root', () => atlasNavigateTo('', true));
         bind('atlas-bottom-root', () => atlasNavigateTo('', true));
         bind('atlas-back', atlasBack);
@@ -1982,201 +2009,583 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function renderNeuralAtlas() {
         const canvas = el('neural-atlas');
         if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
-        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-        const width = Math.max(320, rect.width);
-        const height = Math.max(320, rect.height);
-        canvas.width = Math.floor(width * dpr);
-        canvas.height = Math.floor(height * dpr);
-        const ctx = canvas.getContext('2d');
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        const hits = [];
-        const current = currentAtlasNode();
-        const selected = selectedAtlasNode();
-        const children = (current.children || []);
-        const folders = children.filter(child => !atlasIsFile(child));
-        const files = children.filter(atlasIsFile);
-        const cx = width / 2;
-        const cy = height / 2 + 18;
-        const radius = Math.max(52, Math.min(92, Math.min(width, height) * .09));
-        drawAtlasBackground(ctx, width, height);
-        drawAtlasConnections(ctx, cx, cy, folders, files, width, height);
-        drawAtlasNode(ctx, cx, cy, radius, current, true, atlasNodePath(selected) === atlasNodePath(current));
-        hits.push({ type: 'select', node: current, x: cx, y: cy, r: radius + 10 });
-        const folderPoints = atlasOrbitPoints(folders.length, cx, cy, width, height, radius + 100);
-        folders.forEach((node, index) => {
-          const point = folderPoints[index];
-          const size = Math.max(30, Math.min(62, 24 + Math.sqrt(atlasStats(node).folders + atlasStats(node).files + 1) * 8));
-          drawAtlasNode(ctx, point.x, point.y, size, node, false, atlasNodePath(selected) === atlasNodePath(node));
-          drawAtlasLabel(ctx, point.x, point.y + size + 16, projectMapNodeLabel(node), atlasStats(node));
-          hits.push({ type: 'enter', node, x: point.x, y: point.y, r: size + 18 });
-        });
-        const filePoints = atlasFileRingPoints(files.length, cx, cy, radius + 56);
-        files.forEach((node, index) => {
-          const point = filePoints[index];
-          drawAtlasFile(ctx, point.x, point.y, node, atlasNodePath(selected) === atlasNodePath(node));
-          hits.push({ type: 'select', node, x: point.x, y: point.y, r: 15 });
-        });
-        if (!children.length) {
-          ctx.fillStyle = 'rgba(241, 246, 255, .62)';
-          ctx.font = '14px system-ui, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('No child notes or folders here yet.', cx, cy + radius + 56);
+        const atlas = ensureAtlasState(canvas);
+        atlas.nodes = projectMapToNeuralTree(projectMapRoot());
+        if (!atlas.path.length || !atlasFindNeuralNode(atlas.nodes, atlas.path[atlas.path.length - 1]?.id)) {
+          atlas.path = [atlas.nodes];
+          atlas.openedFile = null;
         }
+        if (!atlas.raf) atlasTick();
+      }
+      function ensureAtlasState(canvas) {
+        if (state.neuralAtlas?.canvas === canvas) return state.neuralAtlas;
+        const atlas = {
+          canvas,
+          ctx: canvas.getContext('2d'),
+          nodes: projectMapToNeuralTree(projectMapRoot()),
+          path: [],
+          openedFile: null,
+          t: 0,
+          tilt: Math.PI / 3,
+          cam: { zoom: 1, tzoom: 1, focusX: 0, focusY: 0, tfocusX: 0, tfocusY: 0 },
+          hits: [],
+          mouse: { x: -1, y: -1 },
+          transitioning: false,
+          pendingPathOp: null,
+          zoomTargetMoon: null,
+          width: 0,
+          height: 0,
+          dpr: 1,
+          raf: null
+        };
+        atlas.path = [atlas.nodes];
+        state.neuralAtlas = atlas;
         canvas.onmousemove = event => {
           const point = atlasPointer(canvas, event);
-          const hit = hits.find(item => Math.hypot(point.x - item.x, point.y - item.y) <= item.r);
-          canvas.classList.toggle('clickable', !!hit);
+          atlas.mouse = point;
+          const hit = atlas.hits.find(item => atlasInside(item, point));
+          canvas.style.cursor = hit ? 'pointer' : 'default';
           state.atlasHit = hit || null;
         };
-        canvas.onclick = event => {
-          const point = atlasPointer(canvas, event);
-          const hit = hits.find(item => Math.hypot(point.x - item.x, point.y - item.y) <= item.r);
+        canvas.onclick = () => {
+          if (atlas.transitioning) return;
+          const hit = atlas.hits.find(item => atlasInside(item, atlas.mouse));
           if (!hit) return;
-          state.atlasSelectedPath = atlasNodePath(hit.node);
-          if (hit.type === 'enter') atlasNavigateTo(atlasNodePath(hit.node), true);
-          else renderProjects();
+          if (hit.kind === 'file') {
+            atlas.openedFile = hit.payload;
+            state.atlasSelectedPath = hit.payload.path || hit.payload.id || '';
+            return;
+          }
+          if (hit.kind === 'neuron') {
+            state.atlasSelectedPath = hit.payload.path || hit.payload.id || '';
+            atlas.transitioning = true;
+            atlas.zoomTargetMoon = hit.payload;
+            atlas.cam.tfocusX = hit.x - atlas.width / 2;
+            atlas.cam.tfocusY = hit.y - atlas.height / 2;
+            atlas.cam.tzoom = 4;
+            window.setTimeout(() => {
+              atlas.path.push(hit.payload);
+              state.atlasPath = atlas.path.map(node => node.path || '');
+              atlas.cam.tzoom = 1;
+              atlas.cam.zoom = 1;
+              atlas.cam.tfocusX = 0;
+              atlas.cam.tfocusY = 0;
+              atlas.cam.focusX = 0;
+              atlas.cam.focusY = 0;
+              atlas.transitioning = false;
+              atlas.zoomTargetMoon = null;
+              renderProjects();
+            }, 360);
+            return;
+          }
+          if (hit.kind === 'centerBack') {
+            if (atlas.openedFile) {
+              atlas.openedFile = null;
+              return;
+            }
+            if (atlas.path.length > 1) {
+              atlas.transitioning = true;
+              atlas.cam.tzoom = .25;
+              window.setTimeout(() => {
+                atlas.path.pop();
+                state.atlasPath = atlas.path.map(node => node.path || '');
+                state.atlasSelectedPath = atlas.path[atlas.path.length - 1]?.path || '';
+                atlas.cam.tzoom = 1;
+                atlas.cam.tfocusX = 0;
+                atlas.cam.tfocusY = 0;
+                atlas.cam.focusX = 0;
+                atlas.cam.focusY = 0;
+                atlas.transitioning = false;
+                renderProjects();
+              }, 260);
+            }
+            return;
+          }
+          if (hit.kind === 'super') {
+            atlas.path = [atlas.nodes];
+            state.atlasPath = [''];
+            state.atlasSelectedPath = '';
+            atlas.cam.tzoom = 1;
+            atlas.cam.zoom = 1;
+            atlas.cam.tfocusX = 0;
+            atlas.cam.tfocusY = 0;
+            atlas.cam.focusX = 0;
+            atlas.cam.focusY = 0;
+            renderProjects();
+            return;
+          }
+          if (hit.kind === 'close') atlas.openedFile = null;
+        };
+        return atlas;
+      }
+      function projectMapToNeuralTree(node) {
+        const children = (node.children || []).map(projectMapToNeuralTree);
+        const visual = String(node.visual_kind || '').toLowerCase();
+        const type = visual === 'book' || visual === 'artifact' ? 'file' : 'folder';
+        return {
+          id: atlasNodePath(node) || 'root',
+          name: projectMapNodeLabel(node),
+          rawName: node.name || 'Library',
+          path: atlasNodePath(node),
+          kind: node.kind || node.visual_kind || 'Folder',
+          type,
+          body: `${projectMapNodeLabel(node)}\n${atlasNodePath(node) || '/'}\n${atlasStats(node).folders} folders / ${atlasStats(node).files} files`,
+          projects: node.projects || [],
+          children,
+          updatedAt: Date.now() - Math.max(0, atlasStats(node).depth) * 86400000 * 12
         };
       }
-      function atlasIsFile(node) {
-        const kind = String(node?.visual_kind || node?.kind || '').toLowerCase();
-        return kind === 'book' || kind === 'markdown' || kind === 'file' || kind === 'artifact';
+      function atlasFindNeuralNode(root, id) {
+        if (!root) return null;
+        if (root.id === id) return root;
+        for (const child of root.children || []) {
+          const found = atlasFindNeuralNode(child, id);
+          if (found) return found;
+        }
+        return null;
       }
       function atlasPointer(canvas, event) {
         const rect = canvas.getBoundingClientRect();
         return { x: event.clientX - rect.left, y: event.clientY - rect.top };
       }
-      function drawAtlasBackground(ctx, width, height) {
-        ctx.clearRect(0, 0, width, height);
-        const grd = ctx.createRadialGradient(width / 2, height / 2, 20, width / 2, height / 2, Math.max(width, height) * .72);
-        grd.addColorStop(0, 'rgba(112, 220, 192, .15)');
-        grd.addColorStop(.45, 'rgba(40, 54, 76, .16)');
-        grd.addColorStop(1, 'rgba(2, 4, 8, .92)');
-        ctx.fillStyle = grd;
-        ctx.fillRect(0, 0, width, height);
-        ctx.strokeStyle = 'rgba(145, 184, 255, .06)';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 22; i++) {
-          const x = (i * 97) % width;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.bezierCurveTo(x + 80, height * .28, x - 80, height * .64, x + 20, height);
-          ctx.stroke();
+      function atlasInside(hit, point) {
+        if (hit.r) {
+          const dx = point.x - hit.x;
+          const dy = point.y - hit.y;
+          return dx * dx + dy * dy <= hit.r * hit.r;
         }
+        return point.x >= hit.x && point.x <= hit.x + hit.w && point.y >= hit.y && point.y <= hit.y + hit.h;
       }
-      function drawAtlasConnections(ctx, cx, cy, folders, files, width, height, minOrbit) {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(145, 184, 255, .18)';
-        ctx.lineWidth = 1;
-        const folderPoints = atlasOrbitPoints(folders.length, cx, cy, width, height, minOrbit);
-        folderPoints.forEach(point => {
-          ctx.beginPath();
-          ctx.moveTo(cx, cy);
-          ctx.quadraticCurveTo((cx + point.x) / 2, Math.min(cy, point.y) - 40, point.x, point.y);
-          ctx.stroke();
-        });
-        const filePoints = atlasFileRingPoints(files.length, cx, cy, minOrbit - 44);
-        ctx.strokeStyle = 'rgba(232, 200, 109, .18)';
-        filePoints.forEach(point => {
-          ctx.beginPath();
-          ctx.moveTo(cx, cy);
-          ctx.lineTo(point.x, point.y);
-          ctx.stroke();
-        });
-        ctx.restore();
+      function atlasTick() {
+        const atlas = state.neuralAtlas;
+        if (!atlas) return;
+        atlasResize(atlas);
+        atlas.t += .016;
+        atlas.cam.zoom += (atlas.cam.tzoom - atlas.cam.zoom) * .18;
+        atlas.cam.focusX += (atlas.cam.tfocusX - atlas.cam.focusX) * .18;
+        atlas.cam.focusY += (atlas.cam.tfocusY - atlas.cam.focusY) * .18;
+        atlas.hits.length = 0;
+        atlasBg(atlas);
+        atlasDrawSystem(atlas);
+        atlasDrawFile(atlas);
+        atlas.raf = requestAnimationFrame(atlasTick);
       }
-      function atlasOrbitPoints(count, cx, cy, width, height, minOrbit) {
-        if (!count) return [];
-        const points = [];
-        const rx = Math.max(minOrbit, width * .34);
-        const ry = Math.max(minOrbit * .55, height * .28);
-        for (let i = 0; i < count; i++) {
-          const angle = -Math.PI / 2 + (Math.PI * 2 * i / count);
-          points.push({
-            x: cx + Math.cos(angle) * rx,
-            y: cy + Math.sin(angle) * ry
-          });
+      function atlasResize(atlas) {
+        const rect = atlas.canvas.getBoundingClientRect();
+        const width = Math.max(320, rect.width);
+        const height = Math.max(320, rect.height);
+        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        if (atlas.width === width && atlas.height === height && atlas.dpr === dpr) return;
+        atlas.width = width;
+        atlas.height = height;
+        atlas.dpr = dpr;
+        atlas.canvas.width = Math.floor(width * dpr);
+        atlas.canvas.height = Math.floor(height * dpr);
+        atlas.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      function atlasCurrentNode() {
+        const atlas = state.neuralAtlas;
+        return atlas?.path[atlas.path.length - 1] || atlas?.nodes || projectMapToNeuralTree(projectMapRoot());
+      }
+      function atlasTotalCount(node) {
+        return 1 + (node.children || []).reduce((sum, child) => sum + atlasTotalCount(child), 0);
+      }
+      function atlasDaysSince(node) {
+        return Math.max(0, (Date.now() - (node.updatedAt || Date.now())) / 86400000);
+      }
+      function atlasVitality(node) {
+        const direct = (node.children || []).length;
+        const recent = Math.exp(-atlasDaysSince(node) / 120);
+        return Math.max(.05, Math.min(1, recent * .6 + Math.min(.4, direct / 12)));
+      }
+      function atlasFileBrightness(node) {
+        return Math.max(.05, Math.exp(-atlasDaysSince(node) / 280));
+      }
+      function atlasHash(text) {
+        let hash = 2166136261 >>> 0;
+        for (let i = 0; i < String(text).length; i++) {
+          hash ^= String(text).charCodeAt(i);
+          hash = Math.imul(hash, 16777619);
         }
-        return points;
+        return hash >>> 0;
       }
-      function atlasFileRingPoints(count, cx, cy, ring) {
-        if (!count) return [];
-        const points = [];
-        const max = Math.min(count, 28);
-        for (let i = 0; i < max; i++) {
-          const angle = -Math.PI / 2 + (Math.PI * 2 * i / max);
-          points.push({ x: cx + Math.cos(angle) * ring, y: cy + Math.sin(angle) * ring * .62 });
+      function atlasBg(atlas) {
+        const { ctx, width: W, height: H, t } = atlas;
+        const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H));
+        g.addColorStop(0, '#0a1738');
+        g.addColorStop(.45, '#05071c');
+        g.addColorStop(1, '#020208');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+        for (let i = 0; i < 110; i++) {
+          const x = (i * 137 + t * 6) % W;
+          const y = (i * 73 + t * 3) % H;
+          ctx.fillStyle = `rgba(170, 210, 255, ${(0.04 + 0.07 * Math.sin(t + i)).toFixed(2)})`;
+          ctx.fillRect(x, y, 1.6, 1.6);
         }
-        return points;
+        atlasBlob(ctx, W * .18, H * .78, 360, 'rgba(140, 90, 220, .12)');
+        atlasBlob(ctx, W * .82, H * .22, 320, 'rgba(70, 180, 220, .10)');
       }
-      function drawAtlasNode(ctx, x, y, r, node, center, selected) {
-        const hue = atlasHue(node);
-        ctx.save();
-        ctx.shadowColor = hue;
-        ctx.shadowBlur = selected ? 32 : 18;
-        const grd = ctx.createRadialGradient(x - r * .25, y - r * .35, 2, x, y, r);
-        grd.addColorStop(0, 'rgba(255,255,255,.72)');
-        grd.addColorStop(.16, hue);
-        grd.addColorStop(1, 'rgba(8, 14, 22, .82)');
-        ctx.fillStyle = grd;
+      function atlasBlob(ctx, x, y, r, color) {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, color);
+        g.addColorStop(1, 'transparent');
+        ctx.fillStyle = g;
         ctx.beginPath();
-        if (center) ctx.arc(x, y, r, 0, Math.PI * 2);
-        else if (String(node.visual_kind).toLowerCase() === 'shelf') atlasPolygon(ctx, x, y, r, 6);
-        else atlasPolygon(ctx, x, y, r, 8);
+        ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
-        ctx.lineWidth = selected ? 4 : 1.5;
-        ctx.strokeStyle = selected ? '#e8c86d' : 'rgba(241,246,255,.34)';
-        ctx.stroke();
-        ctx.restore();
-        ctx.fillStyle = '#f1f6ff';
-        ctx.font = center ? '700 22px system-ui, sans-serif' : '700 13px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(projectMapNodeLabel(node), x, y + r + (center ? 32 : 18));
       }
-      function drawAtlasFile(ctx, x, y, node, selected) {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(Math.PI / 4);
-        ctx.shadowColor = '#91b8ff';
-        ctx.shadowBlur = selected ? 20 : 8;
-        ctx.fillStyle = selected ? '#e8c86d' : 'rgba(145, 184, 255, .86)';
-        ctx.fillRect(-8, -8, 16, 16);
-        ctx.strokeStyle = 'rgba(241,246,255,.55)';
-        ctx.strokeRect(-8, -8, 16, 16);
-        ctx.restore();
+      function atlasNeuronRadius(node) {
+        return 10 + 12 * Math.log10(1 + atlasTotalCount(node));
       }
-      function drawAtlasLabel(ctx, x, y, label, stats) {
-        ctx.save();
-        ctx.textAlign = 'center';
-        ctx.font = '700 13px system-ui, sans-serif';
-        ctx.fillStyle = '#f1f6ff';
-        ctx.fillText(label, x, y);
-        ctx.font = '11px system-ui, sans-serif';
-        ctx.fillStyle = 'rgba(159,177,194,.86)';
-        ctx.fillText(`${stats.folders} folders / ${stats.files} files`, x, y + 16);
-        ctx.restore();
-      }
-      function atlasPolygon(ctx, x, y, r, sides) {
-        ctx.beginPath();
-        for (let i = 0; i < sides; i++) {
-          const angle = -Math.PI / 2 + i * Math.PI * 2 / sides;
-          const px = x + Math.cos(angle) * r;
-          const py = y + Math.sin(angle) * r;
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
-        }
-        ctx.closePath();
+      function atlasOrbitSpeed(node) {
+        const v = atlasVitality(node);
+        return .02 + Math.pow(v, 1.4) * .65;
       }
       function atlasHue(node) {
-        const kind = String(node?.visual_kind || '').toLowerCase();
-        if (kind === 'shelf') return '#70dcc0';
-        if (kind === 'book') return '#91b8ff';
-        if (kind === 'artifact') return '#b2b8c1';
-        let hash = 0;
-        const text = atlasNodePath(node) || node?.name || '';
-        for (let i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-        const palette = ['#70dcc0', '#e8c86d', '#91b8ff', '#ca8cff', '#ff9f7a'];
-        return palette[hash % palette.length];
+        return (190 + atlasVitality(node) * 90) | 0;
+      }
+      function atlasTiltPoint(atlas, cx, cy, dx, dy) {
+        return { x: cx + dx, y: cy + dy * Math.cos(atlas.tilt), depth: -dy * Math.sin(atlas.tilt) };
+      }
+      function atlasDrawNeuron(atlas, cx, cy, r, opts = {}) {
+        const { ctx, t } = atlas;
+        const hue = opts.hue ?? 220;
+        const beatRate = opts.beat ?? 1.4;
+        const dendrites = opts.dendrites ?? 8;
+        const isSuper = !!opts.isSuper;
+        ctx.save();
+        ctx.strokeStyle = `hsla(${hue}, 85%, 60%, .42)`;
+        ctx.lineWidth = 1;
+        for (let i = 0; i < dendrites; i++) {
+          const a = (i / dendrites) * Math.PI * 2 + cx * .0008;
+          const tip = r + 12 + Math.sin(t * .8 + i + cx * .02) * 5;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+          ctx.lineTo(cx + Math.cos(a) * tip, cy + Math.sin(a) * tip);
+          ctx.stroke();
+          ctx.fillStyle = `hsla(${hue}, 90%, 70%, ${(0.4 + 0.4 * Math.sin(t * 2 + i)).toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(cx + Math.cos(a) * tip, cy + Math.sin(a) * tip, 1.6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+        ctx.save();
+        ctx.shadowColor = `hsl(${hue}, 80%, 65%)`;
+        ctx.shadowBlur = isSuper ? 36 : 16;
+        ctx.fillStyle = `hsla(${hue}, 60%, ${isSuper ? 35 : 28}%, .85)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        const grad = ctx.createRadialGradient(cx - r * .3, cy - r * .4, 0, cx, cy, r);
+        grad.addColorStop(0, `hsla(${hue}, 100%, ${isSuper ? 95 : 90}%, .92)`);
+        grad.addColorStop(.4, `hsl(${hue}, 80%, ${isSuper ? 70 : 60}%)`);
+        grad.addColorStop(1, `hsla(${hue}, 70%, ${isSuper ? 25 : 18}%, 1)`);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        const beat = .4 + .45 * Math.sin(t * beatRate);
+        ctx.fillStyle = `hsla(${hue}, 100%, 88%, ${beat.toFixed(2)})`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * .42, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      function atlasDrawTether(atlas, ax, ay, bx, by, vit, hue) {
+        const { ctx, t } = atlas;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const bend = Math.min(28, len * .12) * Math.sin(t * .9 + ax * .01);
+        const cx1 = ax + dx * .35 + nx * bend;
+        const cy1 = ay + dy * .35 + ny * bend;
+        const cx2 = ax + dx * .65 - nx * bend;
+        const cy2 = ay + dy * .65 - ny * bend;
+        ctx.save();
+        ctx.shadowColor = `hsla(${hue}, 90%, 65%, .8)`;
+        ctx.shadowBlur = 14 + vit * 14;
+        ctx.strokeStyle = `hsla(${hue}, 80%, 60%, ${(0.20 + vit * .4).toFixed(2)})`;
+        ctx.lineWidth = 1.5 + vit * 2.5;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.bezierCurveTo(cx1, cy1, cx2, cy2, bx, by);
+        ctx.stroke();
+        ctx.restore();
+        ctx.strokeStyle = `hsla(${hue}, 90%, 80%, ${(0.45 + vit * .4).toFixed(2)})`;
+        ctx.lineWidth = .8 + vit * 1.3;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.bezierCurveTo(cx1, cy1, cx2, cy2, bx, by);
+        ctx.stroke();
+        const speed = .35 + vit;
+        for (let k = 0; k < 2; k++) {
+          const u = (t * speed + k * .5) % 1;
+          const m = 1 - u;
+          const px = m*m*m*ax + 3*m*m*u*cx1 + 3*m*u*u*cx2 + u*u*u*bx;
+          const py = m*m*m*ay + 3*m*m*u*cy1 + 3*m*u*u*cy2 + u*u*u*by;
+          ctx.fillStyle = '#fff';
+          ctx.shadowColor = `hsl(${hue}, 100%, 80%)`;
+          ctx.shadowBlur = 12;
+          ctx.beginPath();
+          ctx.arc(px, py, 2.2 + vit * 1.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      }
+      function atlasDrawSuperNeuron(atlas, cx, cy, opts = {}) {
+        const { ctx, mouse, hits } = atlas;
+        const centered = !!opts.centered;
+        const pushHit = opts.pushHit !== false;
+        const x = centered ? cx : cx + 220;
+        const y = centered ? cy : cy - 200;
+        const r = centered ? 90 : 60;
+        const over = (mouse.x - x) ** 2 + (mouse.y - y) ** 2 <= r * r;
+        const g = ctx.createRadialGradient(x, y, 4, x, y, r * 3.5);
+        g.addColorStop(0, 'hsla(50, 100%, 90%, .9)');
+        g.addColorStop(.15, 'hsla(45, 100%, 75%, .55)');
+        g.addColorStop(.5, 'hsla(35, 90%, 55%, .12)');
+        g.addColorStop(1, 'transparent');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, r * 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        atlasDrawNeuron(atlas, x, y, r, { hue: 45, beat: 1, dendrites: centered ? 16 : 10, isSuper: true });
+        if (over && !centered) {
+          ctx.strokeStyle = 'rgba(255, 240, 180, .85)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(x, y, r * .78, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.font = centered ? 'bold 11px ui-monospace, monospace' : '10px ui-monospace, monospace';
+        ctx.fillStyle = 'rgba(255, 220, 160, .65)';
+        ctx.textAlign = 'center';
+        if (centered) {
+          ctx.fillText('PRIMA', x, y + r + 26);
+          ctx.font = '10px ui-monospace, monospace';
+          ctx.fillStyle = 'rgba(255, 220, 160, .45)';
+          ctx.fillText('super-neuron · root', x, y + r + 42);
+        } else {
+          ctx.fillText('PRIMA · click for root', x, y + r + 18);
+        }
+        ctx.textAlign = 'left';
+        if (pushHit && !centered) hits.push({ kind: 'super', x, y, r });
+      }
+      function atlasDrawFileRing(atlas, cx, cy, ringR, files) {
+        if (!files.length) return;
+        const { ctx, t, tilt, hits } = atlas;
+        const cT = Math.cos(tilt);
+        const sT = Math.sin(tilt);
+        const baseAng = t * .08;
+        const projected = [];
+        for (let i = 0; i < files.length; i++) {
+          const a = baseAng + (i / files.length) * Math.PI * 2;
+          const dx = Math.cos(a) * ringR;
+          const dy = Math.sin(a) * ringR;
+          projected.push({ node: files[i], sx: cx + dx, sy: cy + dy * cT, depth: -dy * sT });
+        }
+        projected.sort((a, b) => b.depth - a.depth);
+        for (const item of projected) {
+          const brightness = atlasFileBrightness(item.node);
+          const color = brightness > .5 ? '#fff8c0' : (brightness > .2 ? '#a8d4ff' : '#5b7aa0');
+          ctx.save();
+          ctx.strokeStyle = `rgba(180, 220, 255, ${(0.10 + 0.25 * brightness).toFixed(2)})`;
+          ctx.lineWidth = .7;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(item.sx, item.sy);
+          ctx.stroke();
+          ctx.restore();
+          ctx.save();
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 6 * brightness;
+          ctx.fillStyle = color;
+          ctx.globalAlpha = .55 + .45 * brightness;
+          ctx.beginPath();
+          ctx.arc(item.sx, item.sy, 1.8 + brightness * 1.6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          hits.push({ kind: 'file', payload: item.node, x: item.sx, y: item.sy, r: 8 });
+        }
+      }
+      function atlasDrawCentralNeuron(atlas, cx, cy, r, node) {
+        const { ctx, hits } = atlas;
+        atlasDrawNeuron(atlas, cx, cy, r, { hue: atlasHue(node), beat: 1.2 + atlasVitality(node) * 1.4, dendrites: 14 });
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 22px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(node.name, cx, cy + r + 32);
+        ctx.fillStyle = 'rgba(180, 220, 255, .65)';
+        ctx.font = '11px ui-monospace, monospace';
+        ctx.fillText(`${atlasTotalCount(node)} nodes · v${(atlasVitality(node) * 100) | 0}%`, cx, cy + r + 52);
+        ctx.fillText(atlas.path.map(item => item.name.toLowerCase()).join(' / '), cx, cy + r + 68);
+        ctx.textAlign = 'left';
+        hits.push({ kind: 'centerBack', x: cx, y: cy, r });
+      }
+      function atlasDrawOrbitingNeuron(atlas, parent, moon) {
+        const { ctx, t, hits } = atlas;
+        const { node, p, r } = moon;
+        const hue = atlasHue(node);
+        const vit = atlasVitality(node);
+        atlasDrawTether(atlas, parent.x, parent.y, p.x, p.y, vit, hue);
+        atlasDrawNeuron(atlas, p.x, p.y, r, { hue, beat: 1.2 + vit * 1.4, dendrites: 8 });
+        const subFolders = (node.children || []).filter(child => child.type === 'folder').slice(0, 5);
+        const cT = Math.cos(atlas.tilt);
+        for (let i = 0; i < subFolders.length; i++) {
+          const child = subFolders[i];
+          const angle = t * atlasOrbitSpeed(child) * 1.5 + i * 1.3 + child.id.length;
+          const orbit = r * 1.7 + i * 8;
+          const sx = p.x + Math.cos(angle) * orbit;
+          const sy = p.y + Math.sin(angle) * orbit * cT;
+          const sr = Math.max(4, atlasNeuronRadius(child) * .32);
+          atlasDrawTether(atlas, p.x, p.y, sx, sy, atlasVitality(child) * .7, atlasHue(child));
+          atlasDrawNeuron(atlas, sx, sy, sr, { hue: atlasHue(child), beat: 1.6, dendrites: 5 });
+        }
+        const subFiles = (node.children || []).filter(child => child.type === 'file');
+        atlasDrawFileRing(atlas, p.x, p.y, r * 1.45, subFiles);
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px ui-monospace, monospace';
+        ctx.textAlign = 'center';
+        const textWidth = ctx.measureText(node.name).width + 14;
+        ctx.fillStyle = 'rgba(2, 4, 14, .65)';
+        atlasRoundRect(ctx, p.x - textWidth / 2, p.y + r + 6, textWidth, 18, 5);
+        ctx.fill();
+        ctx.fillStyle = '#e9efff';
+        ctx.textBaseline = 'top';
+        ctx.fillText(node.name, p.x, p.y + r + 9);
+        ctx.fillStyle = 'rgba(180,220,255,.55)';
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.fillText(`${atlasTotalCount(node)}n · v${(vit * 100) | 0}%`, p.x, p.y + r + 26);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        hits.push({ kind: 'neuron', payload: node, x: p.x, y: p.y, r: r + 6 });
+      }
+      function atlasDrawSystem(atlas) {
+        const { ctx, width: W, height: H, cam } = atlas;
+        ctx.save();
+        ctx.translate(-cam.focusX, -cam.focusY);
+        const cx = W / 2;
+        const cy = H / 2 + 30;
+        const node = atlasCurrentNode();
+        const isRoot = atlas.path.length === 1;
+        const folders = (node.children || []).filter(child => child.type === 'folder');
+        const files = (node.children || []).filter(child => child.type === 'file');
+        let centerR;
+        let centre;
+        if (isRoot) {
+          atlasDrawSuperNeuron(atlas, cx, cy, { centered: true });
+          centerR = 90;
+          centre = { x: cx, y: cy };
+          atlasDrawFileRing(atlas, cx, cy, centerR + 35, files);
+        } else {
+          atlasDrawSuperNeuron(atlas, cx, cy);
+          centerR = Math.min(75, 22 + 13 * Math.log10(1 + atlasTotalCount(node))) * cam.zoom;
+          atlasDrawCentralNeuron(atlas, cx, cy, centerR, node);
+          centre = { x: cx, y: cy };
+          atlasDrawFileRing(atlas, cx, cy, centerR + 25, files);
+        }
+        const moons = [];
+        const minOrbit = centerR + ((isRoot && files.length) ? 110 : 80);
+        const labelMargin = 100;
+        const hardMaxOrbit = Math.max(minOrbit + 80, Math.min(W / 2 - labelMargin, (H / 2 - labelMargin) / Math.cos(atlas.tilt)));
+        const naturalSpan = (folders.length - 1) * 105;
+        const maxOrbit = folders.length > 1 ? Math.min(hardMaxOrbit, minOrbit + Math.max(naturalSpan, (folders.length - 1) * 55)) : minOrbit;
+        const range = Math.max(0, maxOrbit - minOrbit);
+        const sinT = Math.abs(Math.sin(atlas.tilt));
+        for (let i = 0; i < folders.length; i++) {
+          const norm = folders.length > 1 ? i / (folders.length - 1) : .5;
+          const orbit = minOrbit + norm * range;
+          const angle = atlas.t * atlasOrbitSpeed(folders[i]) + i * 1.3;
+          const p = atlasTiltPoint(atlas, cx, cy, Math.cos(angle) * orbit, Math.sin(angle) * orbit);
+          const depthNorm = p.depth / Math.max(1, orbit * sinT);
+          const r = atlasNeuronRadius(folders[i]) * Math.max(.70, Math.min(1.30, 1 - depthNorm * .30));
+          moons.push({ node: folders[i], p, r, orbit });
+        }
+        if (atlas.transitioning && atlas.zoomTargetMoon) {
+          const target = moons.find(moon => moon.node === atlas.zoomTargetMoon);
+          if (target) {
+            cam.tfocusX = target.p.x - W / 2;
+            cam.tfocusY = target.p.y - H / 2;
+          }
+        }
+        moons.sort((a, b) => a.p.depth - b.p.depth);
+        for (const moon of moons) atlasDrawOrbitingNeuron(atlas, centre, moon);
+        ctx.restore();
+      }
+      function atlasDrawFile(atlas) {
+        const file = atlas.openedFile;
+        if (!file) return;
+        const { ctx, width: W, height: H, hits } = atlas;
+        ctx.fillStyle = 'rgba(2, 4, 12, .85)';
+        ctx.fillRect(0, 0, W, H);
+        const w = Math.min(960, W * .9);
+        const h = Math.min(640, H * .88);
+        const x = (W - w) / 2;
+        const y = (H - h) / 2;
+        ctx.fillStyle = '#0a132a';
+        ctx.strokeStyle = 'rgba(180, 220, 255, .35)';
+        ctx.lineWidth = 1;
+        atlasRoundRect(ctx, x, y, w, h, 16);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 22px system-ui, sans-serif';
+        ctx.fillText(file.name, x + 28, y + 56);
+        ctx.font = '11px ui-monospace, monospace';
+        ctx.fillStyle = 'rgba(180, 220, 255, .55)';
+        ctx.fillText(`synapse · ${atlas.path.map(item => item.name).join('/')} · ${file.kind}`, x + 28, y + 78);
+        ctx.font = '15px system-ui, sans-serif';
+        ctx.fillStyle = '#e0e8ff';
+        atlasWrap(ctx, file.body || '', x + 28, y + 120, w - 56, 22);
+        const closeX = x + w - 84;
+        const closeY = y + 14;
+        ctx.fillStyle = '#0a132a';
+        atlasRoundRect(ctx, closeX, closeY, 80, 28, 14);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(180,220,255,.5)';
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 11px ui-monospace, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('X CLOSE', closeX + 40, closeY + 14);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        hits.push({ kind: 'close', x: closeX, y: closeY, w: 80, h: 28 });
+      }
+      function atlasWrap(ctx, text, x, y, maxWidth, lineHeight) {
+        let cy = y;
+        for (const paragraph of String(text).split('\n')) {
+          const words = paragraph.split(' ');
+          let line = '';
+          for (const word of words) {
+            const test = line ? `${line} ${word}` : word;
+            if (ctx.measureText(test).width > maxWidth) {
+              ctx.fillText(line, x, cy);
+              cy += lineHeight;
+              line = word;
+            } else {
+              line = test;
+            }
+          }
+          if (line) {
+            ctx.fillText(line, x, cy);
+            cy += lineHeight;
+          }
+          cy += 6;
+        }
+      }
+      function atlasRoundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
       }
       function renderProjectMapTree(node) {
         if (!node) return '<div class="node root"><h3>Librarian</h3><div class="muted tiny">Knowledge base is empty.</div></div>';
