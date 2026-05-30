@@ -227,48 +227,176 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       height: 100dvh;
       min-height: 560px;
       display: grid;
-      grid-template-rows: minmax(0, 1fr) auto;
+      grid-template-rows: 64px minmax(0, 1fr) auto;
       overflow: hidden;
-    }
-    .topbar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 6;
-      height: 64px;
       pointer-events: none;
     }
-    .brand {
+    .app > * { pointer-events: auto; }
+    .shell {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+    }
+    .topbar {
+      position: relative;
+      z-index: 6;
+      height: 64px;
+      display: grid;
+      grid-template-columns: 60px minmax(0, 1fr) 60px;
+      align-items: start;
+      padding: 14px 22px 0;
+      gap: 16px;
+    }
+    .drawer {
       position: absolute;
       top: 0;
       left: 50%;
       transform: translateX(-50%);
-      min-width: 210px;
+      z-index: 5;
+      width: min(420px, calc(100vw - 200px));
+    }
+    .drawer-card {
       padding: 8px 22px 10px;
+      text-align: center;
       border: 1px solid var(--line);
       border-top: 0;
       border-radius: 0 0 18px 18px;
-      background: linear-gradient(180deg, rgba(18, 24, 32, .94), rgba(8, 12, 18, .90));
+      background:
+        radial-gradient(circle at 50% 0%, rgba(231,185,97,.12), transparent 55%),
+        rgba(10, 14, 30, .94);
       box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .05);
-      text-align: center;
+      backdrop-filter: blur(14px);
       line-height: 1.2;
-      font-weight: 800;
-      pointer-events: auto;
+      cursor: pointer;
+      transition: border-color .2s, box-shadow .2s;
     }
-    .brand span {
+    .drawer-card:hover {
+      border-color: var(--chrome);
+      box-shadow: 0 14px 32px rgba(0,0,0,.55), 0 0 26px rgba(231,185,97,.20);
+    }
+    .drawer-card::after {
+      content: "";
       display: block;
-      margin-top: 2px;
-      color: var(--accent);
-      font-size: 11px;
-      font-weight: 700;
+      width: 36px;
+      height: 3px;
+      border-radius: 3px;
+      margin: 7px auto -3px;
+      background: var(--line-strong);
+      transition: background .2s, width .2s;
     }
-    .brand .context {
-      color: var(--muted);
-      font-size: 10px;
+    .drawer.open .drawer-card::after { background: var(--chrome); width: 56px; }
+    .d-name {
+      font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
       font-style: italic;
+      font-size: 22px;
       font-weight: 500;
+      letter-spacing: .02em;
+      color: var(--chrome-hover);
+      line-height: 1.05;
     }
+    .d-context {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 10px;
+      letter-spacing: .3em;
+      color: var(--chrome);
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+    .drawer-extra {
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: max-height .35s ease, opacity .25s ease, margin-top .25s ease;
+      margin-top: 0;
+      text-align: left;
+    }
+    .drawer.open .drawer-extra {
+      max-height: 420px;
+      opacity: 1;
+      margin-top: 10px;
+    }
+    .d-slogan-inner {
+      text-align: center;
+      font-style: italic;
+      font-size: 12px;
+      color: var(--muted);
+      letter-spacing: .04em;
+      margin-bottom: 12px;
+    }
+    .d-row {
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1fr);
+      align-items: baseline;
+      padding: 8px 0;
+      border-top: 1px solid var(--line);
+    }
+    .d-row-label {
+      font-size: 9px;
+      letter-spacing: .28em;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+    .d-row-value {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 11.5px;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .d-row-value b { color: var(--chrome-hover); font-weight: 500; }
+    .sep { color: var(--dim); margin: 0 5px; }
+    .corner-btn {
+      width: 48px;
+      height: 48px;
+      min-height: 48px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      border: 1px solid var(--chrome);
+      background: rgba(10, 14, 30, .82);
+      backdrop-filter: blur(10px);
+      color: var(--chrome);
+      cursor: pointer;
+      transition: border-color .15s, background .15s, transform .15s, box-shadow .15s;
+      box-shadow: 0 8px 22px rgba(0,0,0,.45), 0 0 0 0 rgba(231,185,97,0);
+      position: relative;
+      padding: 0;
+    }
+    .corner-btn:hover {
+      border-color: var(--chrome-hover);
+      background: rgba(28, 38, 60, .92);
+      transform: translateY(-1px);
+      box-shadow: 0 12px 28px rgba(0,0,0,.55), 0 0 14px rgba(231,185,97,.35);
+    }
+    .corner-btn svg {
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .corner-btn[data-tip]::after {
+      content: attr(data-tip);
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      margin-top: 8px;
+      padding: 4px 8px;
+      font-size: 10px;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(8, 12, 24, .95);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .15s;
+    }
+    .corner-btn:hover[data-tip]::after { opacity: 1; }
     .icon-button {
       position: absolute;
       top: 10px;
@@ -284,10 +412,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       pointer-events: auto;
       transition: color .16s ease, transform .18s cubic-bezier(.2, 1.4, .4, 1);
     }
-    #settings-open { left: 12px; }
-    #projects-open { right: 12px; }
+    #settings-open { grid-column: 1; justify-self: start; }
+    #projects-open { grid-column: 3; justify-self: end; }
     #new-chat {
-      right: 66px;
+      grid-column: 3;
+      justify-self: end;
+      margin-right: 58px;
       font-size: 22px;
       font-weight: 700;
     }
@@ -349,19 +479,22 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .chat-log {
       min-height: 0;
       overflow: auto;
-      padding: 86px clamp(12px, var(--edge-control-space), 72px) 28px;
+      padding: 8px 22px 0;
       scroll-behavior: smooth;
       scrollbar-width: thin;
       scrollbar-color: var(--line-strong) transparent;
+      display: grid;
+      grid-template-columns: 1fr min(820px, 100%) 1fr;
     }
     .chat-log::-webkit-scrollbar { width: 6px; }
     .chat-log::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 6px; }
     .thread {
-      width: min(920px, calc(100vw - (var(--edge-control-space) * 2)));
-      margin: 0 auto;
+      grid-column: 2;
+      width: 100%;
       display: flex;
       flex-direction: column;
       gap: 18px;
+      padding: 28px 6px 80px;
     }
     .message {
       max-width: 100%;
@@ -578,10 +711,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     .composer {
       display: grid;
-      grid-template-columns: 1fr min(920px, calc(100vw - (var(--edge-control-space) * 2))) 1fr;
+      grid-template-columns: 1fr min(820px, 100%) 1fr;
       border-top: 0;
-      background: linear-gradient(180deg, rgba(9, 12, 18, 0), rgba(7, 10, 15, .82));
-      padding: 8px clamp(12px, var(--edge-control-space), 72px) 18px;
+      background: transparent;
+      padding: 8px 22px 18px;
       position: relative;
     }
     .composer-inner {
@@ -701,13 +834,89 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       inset: 0;
       z-index: 10;
       display: none;
-      grid-template-rows: 58px minmax(0, 1fr);
-      background:
-        radial-gradient(circle at 20% 12%, rgba(112, 220, 192, .09), transparent 26%),
-        radial-gradient(circle at 84% 16%, rgba(232, 200, 109, .08), transparent 30%),
-        var(--bg);
+      background: rgba(6, 8, 26, .82);
+      backdrop-filter: blur(8px);
     }
-    .overlay.open { display: grid; }
+    .overlay.open { display: flex; }
+    #projects-overlay.open {
+      display: grid;
+      grid-template-rows: 58px minmax(0, 1fr);
+    }
+    .settings-frame {
+      margin: 70px auto;
+      width: min(1160px, 92vw);
+      max-height: calc(100vh - 100px);
+      background: #0e1628;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .settings-head {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 18px 26px 0;
+    }
+    .settings-head h2 {
+      flex: 1;
+      margin: 0;
+      font-size: 18px;
+      font-weight: 500;
+      letter-spacing: .04em;
+      color: var(--chrome-hover);
+    }
+    .settings-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 14px 22px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .settings-tabs .tab-button {
+      padding: 10px 18px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      min-height: 38px;
+    }
+    .settings-tabs .tab-button:hover { color: var(--text); }
+    .settings-tabs .tab-button.active {
+      color: var(--chrome);
+      border-color: var(--chrome);
+      background: transparent;
+    }
+    .settings-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 22px 26px 30px;
+    }
+    .close-btn {
+      position: absolute;
+      top: 18px;
+      right: 22px;
+      width: 38px;
+      height: 38px;
+      min-height: 38px;
+      padding: 0;
+      border-radius: 50%;
+      border: 1px solid var(--line);
+      background: rgba(8, 12, 24, .85);
+      color: var(--chrome);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      z-index: 5;
+    }
+    .close-btn:hover { border-color: var(--chrome); }
+    .close-btn svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2; fill: none; }
     .overlay-head {
       display: grid;
       grid-template-columns: 64px minmax(0, 1fr) 64px;
@@ -1054,12 +1263,49 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
 </head>
 <body>
   <canvas id="atlas-bg" aria-hidden="true"></canvas>
-  <div class="app">
+  <div class="app shell">
     <header class="topbar">
-      <button id="settings-open" class="icon-button" type="button" aria-label="Settings" title="Settings"><span class="settings-icon"></span></button>
-      <div class="brand">Librarian<span id="motto-line">Smart. Silent. Steady.</span><span id="context-line" class="context">Context: Global conversation</span></div>
-      <button id="new-chat" class="icon-button" type="button" aria-label="New chat" title="New chat">+</button>
-      <button id="projects-open" class="icon-button" type="button" aria-label="Projects" title="Projects"><span class="map-icon"></span></button>
+      <button id="settings-open" class="corner-btn" data-tip="Settings" type="button" aria-label="Settings">
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3.2"/>
+          <line x1="12" y1="2" x2="12" y2="6"/>
+          <line x1="12" y1="18" x2="12" y2="22"/>
+          <line x1="2" y1="12" x2="6" y2="12"/>
+          <line x1="18" y1="12" x2="22" y2="12"/>
+          <line x1="4.9" y1="4.9" x2="7.8" y2="7.8"/>
+          <line x1="16.2" y1="16.2" x2="19.1" y2="19.1"/>
+          <line x1="4.9" y1="19.1" x2="7.8" y2="16.2"/>
+          <line x1="16.2" y1="7.8" x2="19.1" y2="4.9"/>
+        </svg>
+      </button>
+      <div class="drawer" id="drawer">
+        <div class="drawer-card" id="drawer-card">
+          <div class="d-name" id="drawer-name">Librarian</div>
+          <div class="d-context" id="context-line">GLOBAL CONVERSATION</div>
+          <div class="drawer-extra">
+            <div class="d-slogan-inner" id="motto-line">Smart. Silent. Steady.</div>
+            <div class="d-row"><div class="d-row-label">PATH</div><div class="d-row-value" id="drawer-path">Global conversation</div></div>
+            <div class="d-row"><div class="d-row-label">SESSION</div><div class="d-row-value" id="drawer-session">new chat</div></div>
+            <div class="d-row"><div class="d-row-label">MEMORY</div><div class="d-row-value" id="drawer-memory">loading</div></div>
+            <div class="d-row"><div class="d-row-label">WORKER</div><div class="d-row-value" id="drawer-worker">loading</div></div>
+            <div class="d-row"><div class="d-row-label">PROVIDER</div><div class="d-row-value" id="drawer-provider">Codex CLI</div></div>
+          </div>
+        </div>
+      </div>
+      <button id="new-chat" class="corner-btn" data-tip="New chat" type="button" aria-label="New chat">+</button>
+      <button id="projects-open" class="corner-btn" data-tip="Library" type="button" aria-label="Library">
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/>
+          <circle cx="4" cy="5" r="1.8"/>
+          <circle cx="20" cy="5" r="1.8"/>
+          <circle cx="4" cy="19" r="1.8"/>
+          <circle cx="20" cy="19" r="1.8"/>
+          <line x1="12" y1="12" x2="5.4" y2="5.8"/>
+          <line x1="12" y1="12" x2="18.6" y2="5.8"/>
+          <line x1="12" y1="12" x2="5.4" y2="18.2"/>
+          <line x1="12" y1="12" x2="18.6" y2="18.2"/>
+        </svg>
+      </button>
     </header>
     <main id="chat-log" class="chat-log">
       <div id="thread" class="thread">
@@ -1081,13 +1327,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
   </div>
 
   <section id="settings-overlay" class="overlay" aria-hidden="true">
-    <header class="overlay-head">
-      <button class="icon-button" type="button" data-close="settings-overlay" aria-label="Close settings">X</button>
-      <div class="overlay-title">Settings</div>
-      <span></span>
-    </header>
-    <div class="overlay-body">
-      <nav class="tabs">
+    <button class="close-btn" type="button" data-close="settings-overlay" aria-label="Close settings">
+      <svg viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <div class="settings-frame">
+      <div class="settings-head"><h2>SETTINGS</h2></div>
+      <nav class="settings-tabs">
         <button class="tab-button active" type="button" data-tab="overview">Overview</button>
         <button class="tab-button" type="button" data-tab="chats">Chats</button>
         <button class="tab-button" type="button" data-tab="providers">Providers</button>
@@ -1095,7 +1340,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         <button class="tab-button" type="button" data-tab="prompt">Prompt</button>
         <button class="tab-button" type="button" data-tab="system">System</button>
       </nav>
-      <div class="tab-content">
+      <div class="settings-body tab-content">
         <section class="tab-pane active" data-pane="overview"><h2>Overview</h2><div id="overview" class="grid"></div></section>
         <section class="tab-pane" data-pane="chats"><h2>Chats</h2><div id="chat-sessions" class="stack"></div></section>
         <section class="tab-pane" data-pane="providers"><h2>Providers</h2><div id="providers" class="grid"></div></section>
@@ -1464,8 +1709,17 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
       }
       function renderContext() {
-        document.querySelector('.brand').firstChild.nodeValue = assistantName();
-        el('context-line').textContent = `Context: ${currentContextLabel()}`;
+        el('drawer-name').textContent = assistantName();
+        const label = currentContextLabel();
+        el('context-line').textContent = label.toUpperCase();
+        el('drawer-path').innerHTML = htmlEscape(label).replace(/\s\+\s/g, ' <span class="sep">+</span> ');
+        el('drawer-session').textContent = state.chatSessionId ? `chat-${shortId(state.chatSessionId)}` : 'new chat';
+        const memory = state.health?.memory || {};
+        el('drawer-memory').innerHTML = `${memory.items ?? 0} items <span class="sep">·</span> ${memory.embedded_items ?? 0} embedded`;
+        const worker = state.health?.worker || {};
+        el('drawer-worker').innerHTML = `${worker.running_jobs ?? 0} running <span class="sep">·</span> ${worker.queued_jobs ?? 0} queued`;
+        const ready = (state.providers.diagnostics || []).find(item => item.provider === 'codex')?.status || 'Codex CLI';
+        el('drawer-provider').textContent = ready;
       }
       function assistantName() {
         const name = state.health?.chat?.assistant_name || 'Librarian';
@@ -2729,6 +2983,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
 
       el('settings-open').addEventListener('click', () => openOverlay('settings-overlay'));
       el('projects-open').addEventListener('click', () => openOverlay('projects-overlay'));
+      el('drawer-card').addEventListener('click', () => el('drawer').classList.toggle('open'));
+      document.addEventListener('click', event => {
+        if (el('drawer').classList.contains('open') && !el('drawer').contains(event.target)) {
+          el('drawer').classList.remove('open');
+        }
+      });
       el('composer-library').addEventListener('click', () => openOverlay('projects-overlay'));
       el('composer-context').addEventListener('click', () => {
         appendMessage('system', `Current context: ${currentContextLabel()}`, 'Context');
@@ -2883,54 +3143,108 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function drawAmbientAtlasBackground() {
         const canvas = el('atlas-bg');
         if (!canvas) return;
+        if (!state.ambientAtlas) {
+          const nodes = [];
+          for (let i = 0; i < 22; i++) {
+            nodes.push({
+              x: Math.random(),
+              y: Math.random(),
+              r: 10 + Math.random() * 22,
+              hue: 200 + Math.random() * 90,
+              phase: Math.random() * Math.PI * 2,
+              driftSpeed: 0.04 + Math.random() * 0.08
+            });
+          }
+          const links = [];
+          for (let i = 0; i < nodes.length; i++) {
+            let best = -1;
+            let bestDistance = Number.POSITIVE_INFINITY;
+            for (let j = 0; j < nodes.length; j++) {
+              if (i === j) continue;
+              const dx = nodes[i].x - nodes[j].x;
+              const dy = nodes[i].y - nodes[j].y;
+              const distance = dx * dx + dy * dy;
+              if (distance < bestDistance) {
+                bestDistance = distance;
+                best = j;
+              }
+            }
+            if (best > i) links.push({ a: i, b: best });
+          }
+          state.ambientAtlas = { nodes, links, t: 0, raf: null };
+        }
+        if (!state.ambientAtlas.raf) animateAmbientAtlasBackground();
+      }
+      function animateAmbientAtlasBackground() {
+        const canvas = el('atlas-bg');
+        const ambient = state.ambientAtlas;
+        if (!canvas || !ambient) return;
         const width = window.innerWidth;
         const height = window.innerHeight;
         const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
         canvas.width = Math.floor(width * dpr);
         canvas.height = Math.floor(height * dpr);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
         const ctx = canvas.getContext('2d');
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.clearRect(0, 0, width, height);
-        const gradient = ctx.createRadialGradient(width * .52, height * .34, 20, width * .52, height * .34, Math.max(width, height) * .74);
-        gradient.addColorStop(0, 'rgba(123,177,255,.12)');
-        gradient.addColorStop(.36, 'rgba(112,220,192,.06)');
-        gradient.addColorStop(1, 'rgba(6,8,26,.92)');
-        ctx.fillStyle = gradient;
+        ambient.t += 0.012;
+        ctx.fillStyle = '#06081a';
         ctx.fillRect(0, 0, width, height);
-        const nodes = [
-          [width * .18, height * .28, 4, '#e8c86d'],
-          [width * .34, height * .18, 3, '#70dcc0'],
-          [width * .62, height * .24, 5, '#7bb1ff'],
-          [width * .78, height * .38, 3, '#a58cff'],
-          [width * .46, height * .58, 4, '#e8c86d'],
-          [width * .22, height * .72, 3, '#7bb1ff'],
-          [width * .70, height * .76, 4, '#70dcc0']
-        ];
-        ctx.lineWidth = 1;
-        for (let i = 0; i < nodes.length; i++) {
-          for (let j = i + 1; j < nodes.length; j++) {
-            const dx = nodes[i][0] - nodes[j][0];
-            const dy = nodes[i][1] - nodes[j][1];
-            const dist = Math.hypot(dx, dy);
-            if (dist > Math.min(width, height) * .42) continue;
-            ctx.strokeStyle = `rgba(231,185,97,${Math.max(.03, .16 - dist / 2600)})`;
-            ctx.beginPath();
-            ctx.moveTo(nodes[i][0], nodes[i][1]);
-            ctx.lineTo(nodes[j][0], nodes[j][1]);
-            ctx.stroke();
-          }
-        }
-        for (const [x, y, r, color] of nodes) {
-          ctx.save();
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 18;
-          ctx.fillStyle = color;
-          ctx.globalAlpha = .75;
+        for (const [cx, cy, radius, color] of [
+          [width * 0.22, height * 0.78, 360, 'rgba(140, 90, 220, .12)'],
+          [width * 0.82, height * 0.22, 320, 'rgba(70, 180, 220, .10)'],
+          [width * 0.50, height * 0.50, 280, 'rgba(231, 185, 97, .04)']
+        ]) {
+          const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+          gradient.addColorStop(0, color);
+          gradient.addColorStop(1, 'transparent');
+          ctx.fillStyle = gradient;
           ctx.beginPath();
-          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        for (const link of ambient.links) {
+          const a = ambient.nodes[link.a];
+          const b = ambient.nodes[link.b];
+          const ax = a.x * width;
+          const ay = a.y * height;
+          const bx = b.x * width;
+          const by = b.y * height;
+          const hue = (a.hue + b.hue) / 2;
+          ctx.save();
+          ctx.strokeStyle = `hsla(${hue | 0}, 80%, 65%, .12)`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+          ctx.stroke();
+          const u = (ambient.t * a.driftSpeed * 2) % 1;
+          ctx.fillStyle = `hsla(${hue | 0}, 90%, 80%, .8)`;
+          ctx.beginPath();
+          ctx.arc(ax + (bx - ax) * u, ay + (by - ay) * u, 1.6, 0, Math.PI * 2);
           ctx.fill();
           ctx.restore();
         }
+        for (const node of ambient.nodes) {
+          const x = node.x * width;
+          const y = node.y * height;
+          const radius = Math.max(2, node.r * (0.85 + 0.15 * Math.sin(ambient.t + node.phase)));
+          ctx.save();
+          ctx.shadowColor = `hsl(${node.hue}, 80%, 65%)`;
+          ctx.shadowBlur = 12;
+          ctx.fillStyle = `hsla(${node.hue}, 70%, 30%, .58)`;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+          const beat = 0.4 + 0.45 * Math.sin(ambient.t * 1.4 + node.phase);
+          ctx.fillStyle = `hsla(${node.hue}, 100%, 88%, ${beat.toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(x, y, Math.max(1, radius * 0.42), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ambient.raf = requestAnimationFrame(animateAmbientAtlasBackground);
       }
     })();
   </script>
