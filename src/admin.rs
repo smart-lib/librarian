@@ -840,7 +840,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .overlay.open { display: flex; }
     #projects-overlay.open {
       display: grid;
-      grid-template-rows: 58px minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+    }
+    #projects-overlay .overlay-head {
+      display: none;
     }
     .settings-frame {
       margin: 70px auto;
@@ -1044,26 +1047,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       min-height: 100%;
       height: 100%;
     }
-    .project-tools {
-      position: absolute;
-      right: 22px;
-      top: 22px;
-      z-index: 3;
-      width: min(360px, 32vw);
-      min-height: 0;
-      max-height: calc(100% - 118px);
-      overflow: auto;
-      display: grid;
-      align-content: start;
-      gap: 12px;
-      pointer-events: auto;
-      opacity: .16;
-      transition: opacity .18s ease;
-    }
-    .project-tools:hover,
-    .project-tools:focus-within {
-      opacity: 1;
-    }
     .atlas-panel {
       position: relative;
       min-height: 0;
@@ -1081,20 +1064,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       cursor: default;
     }
     .atlas-canvas.clickable { cursor: pointer; }
-    .atlas-hud,
-    .atlas-bottom {
-      position: absolute;
-      left: clamp(12px, 2vw, 22px);
-      right: clamp(12px, 2vw, 22px);
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      pointer-events: none;
-    }
-    .atlas-hud {
-      top: clamp(12px, 2vw, 22px);
-      justify-content: space-between;
-    }
     .atlas-stamp,
     .atlas-help {
       position: absolute;
@@ -1142,35 +1111,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       font-size: 12px;
       white-space: nowrap;
       backdrop-filter: blur(12px);
-    }
-    .atlas-bottom {
-      bottom: clamp(12px, 2vw, 22px);
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-    .atlas-bottom button,
-    .atlas-side-actions button {
-      pointer-events: auto;
-      min-height: 42px;
-      border-radius: 999px;
-      border-color: rgba(255,255,255,.10);
-      background: rgba(9, 14, 21, .72);
-      color: var(--text);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-      backdrop-filter: blur(12px);
-    }
-    .atlas-bottom button.primary,
-    .atlas-side-actions button.primary {
-      background: linear-gradient(135deg, var(--accent), var(--chrome));
-      color: #06100d;
-    }
-    .atlas-side-actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-    .atlas-side-actions .wide {
-      grid-column: 1 / -1;
     }
     .atlas-detail {
       display: grid;
@@ -1257,7 +1197,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       .overlay-body { grid-template-columns: 180px minmax(0, 1fr); }
       #goal-input { height: 88px; }
       .project-layout { grid-template-columns: 1fr; }
-      .project-tools { max-height: 38vh; }
     }
   </style>
 </head>
@@ -2045,109 +1984,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }).join('') : '<div class="card muted">No system events.</div>';
       }
       function renderProjects() {
-        const createForm = `<form id="project-create-form" class="card stack">
-          <h3>Create project</h3>
-          <div class="form-grid">
-            <div><label for="project-name">Name</label><input id="project-name" required placeholder="My Project"></div>
-            <div><label for="project-library-path">Knowledge path</label><input id="project-library-path" placeholder="projects/my-project"></div>
-            <div class="wide"><label for="project-workspace-path">Existing workspace path</label><input id="project-workspace-path" placeholder="optional external directory"></div>
-            <button type="submit">Create</button>
-          </div>
-        </form>`;
-        const agentForm = state.projects.length ? `<form id="agent-launch-form" class="card stack">
-          <h3>Launch agent</h3>
-          <div class="form-grid">
-            <div><label for="agent-project">Project</label><select id="agent-project">${state.projects.map(project => `<option value="${htmlEscape(project.name)}" ${project.name === state.activeProject ? 'selected' : ''}>${htmlEscape(project.name)}</option>`).join('')}</select></div>
-            <div><label for="agent-provider">Provider</label><select id="agent-provider"><option value="codex">codex</option><option value="openrouter">openrouter</option><option value="claude-code">claude-code</option></select></div>
-            <div class="wide"><label for="agent-goal">Goal</label><input id="agent-goal" required placeholder="Inspect the project and summarize next steps"></div>
-            <button type="submit">Queue</button>
-          </div>
-          <div class="row"><label><input id="agent-read-only" type="checkbox" checked> read-only</label><label><input id="agent-network" type="checkbox"> network</label></div>
-        </form>` : '';
-        const currentNode = currentAtlasNode();
-        const selectedNode = selectedAtlasNode();
-        const selectedLabel = projectMapNodeLabel(selectedNode || currentNode);
-        const selectedPath = atlasNodePath(selectedNode || currentNode) || '/';
-        const selectedStats = atlasStats(selectedNode || currentNode);
-        const breadcrumbs = atlasBreadcrumbNodes().map((node, index) =>
-          `<button type="button" data-atlas-crumb="${index}">${htmlEscape(projectMapNodeLabel(node))}</button>`
-        ).join('');
-        const cards = state.projects.map(project => {
-          const active = currentContextProjects().some(active => active.id === project.id || active.name === project.name) ? ' active' : '';
-          return `<button type="button" class="compact-project${active}" data-project="${htmlEscape(project.name)}">
-            <strong>${htmlEscape(projectDisplayName(project) || project.name)}</strong>
-            <div class="muted tiny">Knowledge: ${htmlEscape(project.library_path || '-')}</div>
-            <div class="muted tiny">Workspace: ${htmlEscape(project.path)}</div>
-          </button>`;
-        }).join('');
-        const projectList = cards
-          ? `<div class="card stack"><h3>Registered workspaces</h3><div class="compact-project-list">${cards}</div><div class="row"><button class="secondary" type="button" id="attach-library-selected">Knowledge</button><button class="secondary" type="button" id="attach-workspace-selected">Workspace</button></div></div>`
-          : `<div class="card muted">No registered workspaces yet. The atlas still works with Library folders and notes.</div>`;
         el('project-stage').innerHTML = `<div class="project-layout">
-          <aside class="project-tools">
-            <div class="card atlas-detail">
-              <h3>${htmlEscape(selectedLabel)}</h3>
-              <div class="muted tiny">${htmlEscape(selectedPath)}</div>
-              <div class="atlas-breadcrumbs">${breadcrumbs}</div>
-              <div class="metric-grid">
-                <div class="metric"><b>${selectedStats.folders}</b><span>Folders</span></div>
-                <div class="metric"><b>${selectedStats.files}</b><span>Files</span></div>
-                <div class="metric"><b>${selectedStats.projects}</b><span>Linked projects</span></div>
-                <div class="metric"><b>${selectedStats.depth}</b><span>Depth</span></div>
-              </div>
-              <div class="atlas-side-actions">
-                <button class="primary wide" type="button" id="atlas-chat-context">Chat in this context</button>
-                <button type="button" id="atlas-use-context">Use context</button>
-                <button type="button" id="atlas-back">Back</button>
-                <button type="button" id="atlas-forward">Forward</button>
-                <button type="button" id="atlas-root">Root</button>
-              </div>
-            </div>
-            ${createForm}
-            ${agentForm}
-            ${projectList}
-          </aside>
           <section class="atlas-panel">
             <canvas id="neural-atlas" class="atlas-canvas" aria-label="Knowledge atlas"></canvas>
-            <div class="atlas-stamp">Neural Atlas · v1</div>
-            <div class="atlas-help">Neuron - zoom · core - back · prima - root · synapse - select</div>
-            <div class="atlas-bottom">
-              <button class="primary" type="button" id="atlas-bottom-chat">Chat in this context</button>
-              <button type="button" id="atlas-bottom-use">Use context</button>
-              <button type="button" id="atlas-bottom-back">Back</button>
-              <button type="button" id="atlas-bottom-root">Root</button>
-            </div>
+            <div class="atlas-stamp">Neural Atlas В· v1</div>
+            <div class="atlas-help">Neuron - zoom В· core - back В· prima - root В· synapse - select</div>
           </section>
         </div>`;
-        wireProjectForms();
-        qsa('[data-project]').forEach(button => button.addEventListener('click', () => {
-          state.activeProject = button.dataset.project || '';
-          const project = state.projects.find(project => project.name === state.activeProject);
-          state.activeContext = project ? [project] : [];
-          state.chatSessionId = null;
-          renderProjects();
-          renderContext();
-        }));
-        qsa('[data-atlas-crumb]').forEach(button => button.addEventListener('click', () => {
-          const node = atlasBreadcrumbNodes()[Number(button.dataset.atlasCrumb)];
-          if (node) atlasNavigateTo(atlasNodePath(node), true);
-        }));
-        const selectedProject = state.projects.find(project => currentContextProjects().some(active => active.id === project.id || active.name === project.name));
-        const attachLibrary = el('attach-library-selected');
-        if (attachLibrary) attachLibrary.addEventListener('click', async () => {
-          if (!selectedProject) return appendMessage('system', 'Choose a registered workspace first.', 'Atlas');
-          const value = prompt('Knowledge base path inside Librarian/Library', selectedProject.library_path || '');
-          if (!value) return;
-          await postJson(`/api/projects/${selectedProject.id}/attach-library`, { library_path: value });
-        });
-        const attachWorkspace = el('attach-workspace-selected');
-        if (attachWorkspace) attachWorkspace.addEventListener('click', async () => {
-          if (!selectedProject) return appendMessage('system', 'Choose a registered workspace first.', 'Atlas');
-          const value = prompt('Existing workspace directory path', selectedProject.path || '');
-          if (!value) return;
-          await postJson(`/api/projects/${selectedProject.id}/attach-workspace`, { workspace_path: value });
-        });
-        wireAtlasControls();
         renderNeuralAtlas();
       }
       function projectMapRoot() {
@@ -2233,18 +2076,6 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         renderProjects();
         if (closeAfter) closeOverlay('projects-overlay');
       }
-      function wireAtlasControls() {
-        const bind = (id, fn) => { const node = el(id); if (node) node.addEventListener('click', fn); };
-        bind('atlas-use-context', () => useAtlasContext(false));
-        bind('atlas-chat-context', () => useAtlasContext(true));
-        bind('atlas-bottom-chat', () => useAtlasContext(true));
-        bind('atlas-bottom-use', () => useAtlasContext(false));
-        bind('atlas-root', () => atlasNavigateTo('', true));
-        bind('atlas-bottom-root', () => atlasNavigateTo('', true));
-        bind('atlas-back', atlasBack);
-        bind('atlas-bottom-back', atlasBack);
-        bind('atlas-forward', atlasForward);
-      }
       function atlasBack() {
         const previous = state.atlasBackStack.pop();
         if (previous === undefined) {
@@ -2308,6 +2139,16 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           if (hit.kind === 'file') {
             atlas.openedFile = hit.payload;
             state.atlasSelectedPath = hit.payload.path || hit.payload.id || '';
+            return;
+          }
+          if (hit.kind === 'useContext') {
+            const node = atlasCurrentNode();
+            state.atlasSelectedPath = node?.path || '';
+            useAtlasContext(true);
+            return;
+          }
+          if (hit.kind === 'closeRoot') {
+            closeOverlay('projects-overlay');
             return;
           }
           if (hit.kind === 'neuron') {
@@ -2421,6 +2262,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         atlas.hits.length = 0;
         atlasBg(atlas);
         atlasDrawSystem(atlas);
+        atlasDrawUseContextButton(atlas);
         atlasDrawFile(atlas);
         atlas.raf = requestAnimationFrame(atlasTick);
       }
@@ -2733,6 +2575,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           atlasDrawSuperNeuron(atlas, cx, cy, { centered: true });
           centerR = 90;
           centre = { x: cx, y: cy };
+          atlas.hits.push({ kind: 'closeRoot', x: cx, y: cy, r: centerR + 18 });
           atlasDrawFileRing(atlas, cx, cy, centerR + 35, files);
         } else {
           atlasDrawSuperNeuron(atlas, cx, cy);
@@ -2768,6 +2611,40 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         moons.sort((a, b) => a.p.depth - b.p.depth);
         for (const moon of moons) atlasDrawOrbitingNeuron(atlas, centre, moon);
         ctx.restore();
+      }
+      function atlasDrawUseContextButton(atlas) {
+        if (atlas.openedFile) return;
+        const { ctx, width: W, height: H, hits } = atlas;
+        const node = atlasCurrentNode();
+        const label = 'USE AS CONTEXT';
+        const subtitle = atlasNodePath(node) || 'root';
+        const w = Math.min(240, Math.max(170, W * .18));
+        const h = 44;
+        const x = (W - w) / 2;
+        const y = H - 76;
+        ctx.save();
+        ctx.shadowColor = 'rgba(112,220,192,.32)';
+        ctx.shadowBlur = 28;
+        const gradient = ctx.createLinearGradient(x, y, x + w, y + h);
+        gradient.addColorStop(0, 'rgba(112,220,192,.94)');
+        gradient.addColorStop(1, 'rgba(232,200,109,.94)');
+        ctx.fillStyle = gradient;
+        atlasRoundRect(ctx, x, y, w, h, 22);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = 'rgba(255,255,255,.32)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = '#06100d';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 12px ui-monospace, monospace';
+        ctx.fillText(label, x + w / 2, y + 18);
+        ctx.globalAlpha = .62;
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.fillText(subtitle.length > 32 ? `${subtitle.slice(0, 29)}...` : subtitle, x + w / 2, y + 32);
+        ctx.restore();
+        hits.push({ kind: 'useContext', x, y, w, h });
       }
       function atlasDrawFile(atlas) {
         const file = atlas.openedFile;
@@ -2982,7 +2859,10 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
 
       el('settings-open').addEventListener('click', () => openOverlay('settings-overlay'));
-      el('projects-open').addEventListener('click', () => openOverlay('projects-overlay'));
+      el('projects-open').addEventListener('click', () => {
+        openOverlay('projects-overlay');
+        renderProjects();
+      });
       el('drawer-card').addEventListener('click', () => el('drawer').classList.toggle('open'));
       document.addEventListener('click', event => {
         if (el('drawer').classList.contains('open') && !el('drawer').contains(event.target)) {
