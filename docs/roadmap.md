@@ -487,10 +487,14 @@ Tasks:
 - Make chat the primary surface; move providers, schedules, secrets, budgets,
   and events behind a settings button and full-screen tabbed overlay. First
   pass done; richer settings controls can be restored inside tabs only.
-- Replace the temporary project-map/card surface with the literal Library UI
-  described above. The current `/api/project-map` and `/project map` data can
-  be reused only as backend tree data; the product UI should be a finished
-  library visualization, not a placeholder graph.
+- Replace the temporary project-map/card surface with the Library UI described
+  above. Current pass integrates the Opus shell direction with a live
+  canvas-based Knowledge Atlas powered by `/api/project-map`: every Library
+  node can be selected as chat context, users can drill into child folders,
+  return/back/root through atlas navigation, and registered workspaces remain
+  linkable from the selected-node panel. Next polish pass should tune the
+  selected visual metaphor, animations, previews, favorites/activity states,
+  and final responsive composition after manual UX review.
 - Keep low-level dispatch fields such as provider, project id, secret grant
   token, and network mode out of the main chat composer. First pass done with
   Codex as the default MVP provider and the selected/first project as context.
@@ -509,7 +513,9 @@ Tasks:
 - Define and implement hierarchical project contexts: every Library node can be
   a context/project; project records should attach to Library paths without
   forcing a flat `projects/{ProjectName}` namespace; parent/child paths should
-  drive memory retrieval and UI navigation.
+  drive memory retrieval and UI navigation. First UI pass now keeps arbitrary
+  Library nodes as selectable context instead of dropping them when they are not
+  registered workspace projects.
 - Add tree-aware memory retrieval: when the active context is `/Games`, the
   default search should include `/Games` and descendants, with options to
   narrow to current node only or include ancestors.

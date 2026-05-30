@@ -548,12 +548,35 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       overflow: auto;
       padding: 24px clamp(22px, 4vw, 54px);
     }
-    .tab-pane { display: none; max-width: 980px; }
+    .tab-pane { display: none; max-width: 1320px; }
     .tab-pane.active { display: block; }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 12px;
+    }
+    #providers.grid {
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      align-items: start;
+    }
+    #providers > .card:first-child {
+      grid-column: 1 / -1;
+    }
+    #providers .card {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .provider-runtime .form-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(150px, 220px) auto;
+    }
+    .provider-runtime .form-grid .wide {
+      grid-column: auto;
+    }
+    .provider-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      margin-top: 12px;
     }
     .card {
       border: 1px solid var(--line);
@@ -1287,7 +1310,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const providerTools = `<div class="card">
           <h3>Provider Setup</h3>
           <div class="muted tiny">Auth still opens in the host shell, but these commands match the current Librarian root.</div>
-          <div class="row">
+          <div class="provider-actions">
             <button type="button" class="secondary" data-provider-command="codex">Codex auth command</button>
             <button type="button" class="secondary" data-provider-command="claude">Claude auth command</button>
             <button type="button" class="secondary" data-provider-command="image">Build image</button>
@@ -1297,7 +1320,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           </div>
           <div class="muted tiny">Claude instruction file: ${htmlEscape(claude.instruction_file || 'CLAUDE.md')}</div>
         </div>`;
-        const codexForm = `<form id="codex-runtime-form" class="card stack">
+        const codexForm = `<form id="codex-runtime-form" class="card stack provider-runtime">
           <h3>Codex Runtime</h3>
           <div class="form-grid">
             <div class="wide"><label for="codex-host-home">Host profile path</label><input id="codex-host-home" value="${htmlEscape(codex.host_home || '')}" placeholder="/home/user/Librarian/.cfg/codex-home"></div>
@@ -1308,7 +1331,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             <label><input id="codex-mount-readonly" type="checkbox" ${codex.mount_read_only ? 'checked' : ''}> read-only</label>
           </div>
         </form>`;
-        const claudeForm = `<form id="claude-runtime-form" class="card stack">
+        const claudeForm = `<form id="claude-runtime-form" class="card stack provider-runtime">
           <h3>Claude Runtime</h3>
           <div class="form-grid">
             <div class="wide"><label for="claude-host-home">Host profile path</label><input id="claude-host-home" value="${htmlEscape(claude.host_home || '')}" placeholder="/home/user/.claude"></div>
