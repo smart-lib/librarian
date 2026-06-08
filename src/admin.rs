@@ -10123,6 +10123,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn context_slash_command_returns_ui_context_update() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-context-chat-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            library_tools::create_folder(&config, LibraryRoot::Library, "Games")
+                .expect("library folder");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let state = AppState {
+                db: db.clone(),
+                config: Arc::new(RwLock::new(config)),
+            };
+
+            let response = librarian_chat(
+                State(state),
+                Json(LibrarianChatRequest {
+                    message: "/context set Games".to_string(),
+                    project: None,
+                    project_context: None,
+                    project_context_scope: None,
+                    session_id: None,
+                }),
+            )
+            .await
+            .expect("chat response")
+            .into_response();
+
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            assert_eq!(payload["mode"], "slash-command");
+            assert_eq!(payload["ui"]["type"], "context_update");
+            assert_eq!(payload["ui"]["action"], "set");
+            assert_eq!(payload["ui"]["context"]["scope"], "subtree");
+            assert_eq!(
+                payload["ui"]["context"]["nodes"][0]["library_path"],
+                "Games"
+            );
+            assert!(payload["reply"]
+                .as_str()
+                .expect("reply")
+                .contains("Context set to Games"));
+            assert!(db.list_jobs().await.expect("jobs").is_empty());
+
+            let session_id = Uuid::parse_str(payload["session_id"].as_str().expect("session id"))
+                .expect("session uuid");
+            let turns = db.list_chat_turns(session_id).await.expect("chat turns");
+            assert_eq!(turns.len(), 2);
+            assert_eq!(turns[1].metadata["ui"]["type"], "context_update");
+            assert_eq!(
+                turns[1].metadata["ui"]["context"]["nodes"][0]["library_path"],
+                "Games"
+            );
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
     async fn memory_recent_hides_raw_transcript_turns() {
         let home = std::env::current_dir()
             .expect("current dir")

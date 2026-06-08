@@ -881,6 +881,9 @@ Tasks:
 - Add tests for chat transcript persistence. First pass extends the chat
   endpoint slash-flow test to assert returned `session_id`, ordered user and
   assistant turns, memory links, session listing, and turn retrieval.
+- Add tests for context slash commands as UI contracts. First pass covers
+  `/context set <library-path>` through `/api/chat`, asserts the
+  `context_update` UI payload, and verifies no background jobs are created.
 - Add tests that recent transcript turns are included in the Librarian prompt.
   First pass covers prompt construction for prior user/assistant turns plus the
   new user message.
