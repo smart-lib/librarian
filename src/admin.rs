@@ -1274,6 +1274,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       <nav class="settings-tabs">
         <button class="tab-button active" type="button" data-tab="overview">Overview</button>
         <button class="tab-button" type="button" data-tab="chats">Chats</button>
+        <button class="tab-button" type="button" data-tab="library">Library</button>
         <button class="tab-button" type="button" data-tab="providers">Providers</button>
         <button class="tab-button" type="button" data-tab="jobs">Jobs</button>
         <button class="tab-button" type="button" data-tab="prompt">Prompt</button>
@@ -1282,6 +1283,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       <div class="settings-body tab-content">
         <section class="tab-pane active" data-pane="overview"><h2>Overview</h2><div id="overview" class="grid"></div></section>
         <section class="tab-pane" data-pane="chats"><h2>Chats</h2><div id="chat-sessions" class="stack"></div></section>
+        <section class="tab-pane" data-pane="library"><h2>Library</h2><div id="library-settings" class="stack"></div></section>
         <section class="tab-pane" data-pane="providers"><h2>Providers</h2><div id="providers" class="grid"></div></section>
         <section class="tab-pane" data-pane="jobs"><h2>Jobs</h2><div id="jobs" class="stack"></div></section>
         <section class="tab-pane" data-pane="prompt"><h2>Prompt Blocks</h2><div id="prompt-builder" class="stack"></div></section>
@@ -1614,11 +1616,12 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         );
         renderOverview();
         renderChatSessions();
+        renderLibrarySettings();
         renderProviders();
         renderJobs();
         renderPromptBuilder();
         renderSystemEvents(events);
-        renderProjects();
+        if (el('projects-overlay').classList.contains('open')) renderProjects();
         renderContext();
       }
       async function restoreLatestChatSession() {
@@ -1746,6 +1749,53 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         qsa('[data-restore-chat]').forEach(button => button.addEventListener('click', async () => {
           await restoreChatSession(button.dataset.restoreChat, true);
           closeOverlay('settings-overlay');
+        }));
+      }
+      function renderLibrarySettings() {
+        const linkedCount = state.projectMap?.linked_project_count ?? 0;
+        const detachedCount = Array.isArray(state.projectMap?.detached_projects) ? state.projectMap.detached_projects.length : 0;
+        const projectCards = state.projects.length ? state.projects.map(project => {
+          const active = currentContextProjects().some(active => active.id === project.id || active.name === project.name) ? ' active' : '';
+          return `<div class="compact-project${active}">
+            <strong>${htmlEscape(projectDisplayName(project) || project.name)}</strong>
+            <div class="muted tiny">Knowledge: ${htmlEscape(project.library_path || '-')}</div>
+            <div class="muted tiny">Workspace: ${htmlEscape(project.path || '-')}</div>
+            <div class="row">
+              <button type="button" class="secondary" data-project-context="${htmlEscape(project.name)}">Use context</button>
+              <button type="button" class="secondary" data-attach-library="${htmlEscape(project.id)}">Attach knowledge</button>
+              <button type="button" class="secondary" data-attach-workspace="${htmlEscape(project.id)}">Attach workspace</button>
+            </div>
+          </div>`;
+        }).join('') : '<div class="card muted">No registered workspaces yet. Use the form below or slash commands such as /project create.</div>';
+        el('library-settings').innerHTML = `
+          <div class="grid">
+            ${card('Knowledge tree', `linked=${linkedCount}<br>detached=${detachedCount}<br><span class="muted">Open the Library atlas to choose any node as chat context.</span>`)}
+            ${card('Context scope', `${htmlEscape(state.contextScope || 'subtree')}<br><span class="muted">Default searches include the selected node and descendants.</span>`)}
+          </div>
+          <form id="project-create-form" class="card stack">
+            <h3>Create project</h3>
+            <div class="form-grid">
+              <div><label for="project-name">Name</label><input id="project-name" required placeholder="My Project"></div>
+              <div><label for="project-library-path">Knowledge path</label><input id="project-library-path" placeholder="Projects/MyProject"></div>
+              <div class="wide"><label for="project-workspace-path">Existing workspace path</label><input id="project-workspace-path" placeholder="optional existing directory"></div>
+              <button type="submit">Create</button>
+            </div>
+          </form>
+          <section class="card stack">
+            <h3>Registered workspaces</h3>
+            <div class="compact-project-list">${projectCards}</div>
+          </section>`;
+        wireProjectForms();
+        qsa('[data-project-context]').forEach(button => button.addEventListener('click', () => {
+          const project = state.projects.find(project => project.name === button.dataset.projectContext);
+          if (!project) return;
+          state.activeProject = project.name;
+          state.activeContext = [contextNodeFromMetadata(project)];
+          state.contextScope = 'subtree';
+          state.chatSessionId = null;
+          renderContext();
+          renderLibrarySettings();
+          appendMessage('system', `Context set to ${projectDisplayName(project) || project.name}.`);
         }));
       }
       function renderProviders() {
@@ -2747,11 +2797,13 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const value = prompt('Knowledge base path inside Librarian/Library');
           if (!value) return;
           await postJson(`/api/projects/${button.dataset.attachLibrary}/attach-library`, { library_path: value });
+          await refresh();
         }));
         qsa('[data-attach-workspace]').forEach(button => button.addEventListener('click', async () => {
           const value = prompt('Existing workspace directory path');
           if (!value) return;
           await postJson(`/api/projects/${button.dataset.attachWorkspace}/attach-workspace`, { workspace_path: value });
+          await refresh();
         }));
       }
       async function createProjectFromUi(event) {
@@ -2761,6 +2813,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           library_path: el('project-library-path').value || null,
           workspace_path: el('project-workspace-path').value || null
         });
+        await refresh();
       }
       async function launchAgentFromUi(event) {
         event.preventDefault();

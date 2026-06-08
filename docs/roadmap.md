@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.3`; bump at least the minor version when a visible
+- Current crate version: `0.2.4`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -490,11 +490,14 @@ Tasks:
 - Replace the temporary project-map/card surface with the Library UI described
   above. Current pass integrates the Opus shell direction with a live
   canvas-based Knowledge Atlas powered by `/api/project-map`: every Library
-  node can be selected as chat context, users can drill into child folders,
-  return/back/root through atlas navigation, and registered workspaces remain
-  linkable from the selected-node panel. Next polish pass should tune the
-  selected visual metaphor, animations, previews, favorites/activity states,
-  and final responsive composition after manual UX review.
+  node can be selected as chat context, users can drill into child folders, and
+  return/back/root through atlas navigation. The atlas overlay is now
+  canvas-only: no side CRUD panel, no duplicated bottom DOM controls, and the
+  context action is drawn inside the canvas. Registered workspace creation and
+  library/workspace linking moved to Settings -> Library so the atlas remains a
+  focused context browser. Next polish pass should tune the selected visual
+  metaphor, animations, previews, favorites/activity states, and final
+  responsive composition after manual UX review.
 - Keep low-level dispatch fields such as provider, project id, secret grant
   token, and network mode out of the main chat composer. First pass done with
   Codex as the default MVP provider and the selected/first project as context.
@@ -529,9 +532,10 @@ Tasks:
   optionally create the working directory under the default projects root, or
   attach an existing directory. First slash-command pass adds `/project list`,
   `/project status`, `/project create`, `/project attach-library`,
-  `/project detach-library`, and `/project attach-workspace`. First UI pass adds
-  admin project creation plus attach-library/attach-workspace controls backed by
-  `/api/projects` mutation routes.
+  `/project detach-library`, and `/project attach-workspace`. Current UI pass
+  places project creation plus attach-library/attach-workspace controls in
+  Settings -> Library, backed by `/api/projects` mutation routes, keeping
+  low-level management out of the atlas canvas.
 - When Librarian is launched from a directory that is not already known as a
   root or project, ask whether to register that directory as a working project
   and create/link the corresponding library folder.
