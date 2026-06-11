@@ -390,7 +390,8 @@ Tasks:
   a disposable parent/child Library context pair, writes child memory, and
   verifies that a parent subtree scan can find the child memory without a
   provider call. Current pass also verifies node-only exclusion and child
-  ancestor lookup.
+  ancestor lookup, plus dialogue-aware Library-node inference in ask and auto
+  modes.
 - Broad smoke now exposes `librarian smoke all`, which runs provider
   diagnostics, context/tree memory, tools/approval persistence, and MVP
   provider preflight in one command. Add `--run-agent` to make the final MVP
@@ -529,7 +530,10 @@ Tasks:
   narrow to current node only or include ancestors.
 - Add dialogue-aware context selection: Librarian should automatically infer
   the likely project/library node from the conversation when confidence is
-  high, otherwise ask the user or accept an explicit command.
+  high, otherwise ask the user or accept an explicit command. Current pass can
+  infer arbitrary Library nodes, not only registered workspace projects; ask
+  mode creates a context-switch proposal, while auto mode selects the single
+  high-confidence node.
 - Add approval UX for context switching when the policy is `ask`: proposed
   context changes should appear as normal chat cards with accept/reject buttons,
   not as raw ids or hidden backend state.

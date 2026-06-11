@@ -2393,6 +2393,8 @@ async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
         "   OK: ancestor scope found parent memory {}",
         parent_memory.id
     );
+    admin::run_dialogue_context_smoke(config, &slug).await?;
+    println!("   OK: dialogue inference suggested and auto-selected a Library node");
     println!("Context smoke passed.");
     Ok(())
 }

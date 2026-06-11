@@ -5451,34 +5451,7 @@ async fn resolve_chat_project_context(
         });
     }
 
-    let message_key = normalized_project_lookup_key(message);
-    let mut matches = known_projects
-        .iter()
-        .filter(|project| {
-            let name_key = normalized_project_lookup_key(&project.name);
-            let path_key = project
-                .library_path
-                .as_ref()
-                .map(|path| normalized_project_lookup_key(&path.to_string_lossy()))
-                .unwrap_or_default();
-            !name_key.is_empty()
-                && (message_key.contains(&name_key)
-                    || (!path_key.is_empty() && message_key.contains(&path_key)))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    matches.sort_by(|left, right| left.name.cmp(&right.name));
-    let inferred_nodes = if matches.len() == 1 {
-        matches
-            .into_iter()
-            .map(|project| ChatLibraryContextNode {
-                library_path: project.library_path.clone(),
-                project: Some(project),
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    let inferred_nodes = infer_context_nodes(config, &known_projects, message)?;
 
     match config.tool_permissions.context_switch {
         ToolPermissionPolicy::Auto if !inferred_nodes.is_empty() => Ok(ChatProjectContext {
@@ -5500,6 +5473,158 @@ async fn resolve_chat_project_context(
             source: "global",
         }),
     }
+}
+
+fn infer_context_nodes(
+    config: &Config,
+    known_projects: &[Project],
+    message: &str,
+) -> Result<Vec<ChatLibraryContextNode>> {
+    let message_key = normalized_project_lookup_key(message);
+    if message_key.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut matches = known_projects
+        .iter()
+        .filter(|project| {
+            let name_key = normalized_project_lookup_key(&project.name);
+            let path_key = project
+                .library_path
+                .as_ref()
+                .map(|path| normalized_project_lookup_key(&path.to_string_lossy()))
+                .unwrap_or_default();
+            !name_key.is_empty()
+                && (message_key.contains(&name_key)
+                    || (!path_key.is_empty() && message_key.contains(&path_key)))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| left.name.cmp(&right.name));
+    let mut nodes = matches
+        .into_iter()
+        .map(|project| ChatLibraryContextNode {
+            library_path: project.library_path.clone(),
+            project: Some(project),
+        })
+        .collect::<Vec<_>>();
+
+    let library_tree = library_tools::tree(config, LibraryRoot::Library, 8)?;
+    collect_inferred_library_nodes(&library_tree, known_projects, &message_key, &mut nodes);
+    nodes.sort_by(|left, right| {
+        library_context_display_label(left).cmp(&library_context_display_label(right))
+    });
+    nodes.dedup_by(|left, right| same_context_node(left, right));
+    if let Some(max_depth) = nodes.iter().map(context_node_depth).max() {
+        nodes.retain(|node| context_node_depth(node) == max_depth);
+    }
+    if nodes.len() == 1 {
+        Ok(nodes)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+fn context_node_depth(node: &ChatLibraryContextNode) -> usize {
+    node.library_path
+        .as_ref()
+        .map(|path| path.components().count())
+        .unwrap_or(0)
+}
+
+fn collect_inferred_library_nodes(
+    entry: &library_tools::LibraryEntry,
+    known_projects: &[Project],
+    message_key: &str,
+    output: &mut Vec<ChatLibraryContextNode>,
+) {
+    if !entry.path.is_empty() {
+        let path_key = normalized_project_lookup_key(&entry.path);
+        let name_key = normalized_project_lookup_key(&entry.name);
+        let label_key = normalized_project_lookup_key(&humanize_project_name(&entry.name));
+        if (!path_key.is_empty() && message_key.contains(&path_key))
+            || (!name_key.is_empty() && message_key.contains(&name_key))
+            || (!label_key.is_empty() && message_key.contains(&label_key))
+        {
+            let library_path = PathBuf::from(&entry.path);
+            let project = known_projects
+                .iter()
+                .find(|project| project.library_path.as_ref() == Some(&library_path))
+                .cloned();
+            output.push(ChatLibraryContextNode {
+                library_path: Some(library_path),
+                project,
+            });
+        }
+    }
+    for child in &entry.children {
+        collect_inferred_library_nodes(child, known_projects, message_key, output);
+    }
+}
+
+pub async fn run_dialogue_context_smoke(config: &Config, name: &str) -> Result<()> {
+    let slug = name
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let slug = if slug.is_empty() {
+        "dialogue-context-smoke".to_string()
+    } else {
+        slug
+    };
+    let library_path = format!("context-smoke/{slug}/DialogueNode");
+    library_tools::create_folder(config, LibraryRoot::Library, &library_path)?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+
+    let state = AppState {
+        db,
+        config: Arc::new(RwLock::new(config.clone())),
+    };
+    let ask_context = resolve_chat_project_context(
+        &state,
+        config,
+        &LibrarianChatRequest {
+            message: "What is the status of DialogueNode?".to_string(),
+            project: None,
+            project_context: None,
+            project_context_scope: None,
+            session_id: None,
+        },
+        "What is the status of DialogueNode?",
+    )
+    .await?;
+    if !ask_context.nodes.is_empty() || ask_context.suggested_nodes.len() != 1 {
+        anyhow::bail!("Dialogue context smoke expected one suggested Library node in ask mode");
+    }
+
+    let mut auto_config = config.clone();
+    auto_config.tool_permissions.context_switch = ToolPermissionPolicy::Auto;
+    let auto_context = resolve_chat_project_context(
+        &state,
+        &auto_config,
+        &LibrarianChatRequest {
+            message: format!("Open context {library_path}"),
+            project: None,
+            project_context: None,
+            project_context_scope: None,
+            session_id: None,
+        },
+        &format!("Open context {library_path}"),
+    )
+    .await?;
+    if auto_context.nodes.len() != 1 || !auto_context.suggested_nodes.is_empty() {
+        anyhow::bail!("Dialogue context smoke expected one selected Library node in auto mode");
+    }
+    Ok(())
 }
 
 fn parse_context_scope(value: &str) -> Result<ContextScope> {
@@ -10286,6 +10411,95 @@ mod tests {
                 .await,
                 vec![parent.id, child.id],
             );
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn dialogue_context_inference_suggests_library_node_without_project() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-context-infer-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            library_tools::create_folder(&config, LibraryRoot::Library, "Games/AdvenTableDays")
+                .expect("library folder");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let state = AppState {
+                db,
+                config: Arc::new(RwLock::new(config.clone())),
+            };
+            let context = resolve_chat_project_context(
+                &state,
+                &config,
+                &LibrarianChatRequest {
+                    message: "Что дальше по AdvenTableDays?".to_string(),
+                    project: None,
+                    project_context: None,
+                    project_context_scope: None,
+                    session_id: None,
+                },
+                "Что дальше по AdvenTableDays?",
+            )
+            .await
+            .expect("context");
+
+            assert!(context.nodes.is_empty());
+            assert_eq!(context.suggested_nodes.len(), 1);
+            assert_eq!(
+                context.suggested_nodes[0].library_path.as_deref(),
+                Some(Path::new("Games/AdvenTableDays"))
+            );
+            assert_eq!(context.source, "suggested");
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn dialogue_context_inference_auto_selects_library_node() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-context-auto-{}", Uuid::new_v4()));
+
+        {
+            let mut config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.tool_permissions.context_switch = ToolPermissionPolicy::Auto;
+            config.ensure_layout().expect("layout");
+            library_tools::create_folder(&config, LibraryRoot::Library, "Games/AdvenTableDays")
+                .expect("library folder");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let state = AppState {
+                db,
+                config: Arc::new(RwLock::new(config.clone())),
+            };
+            let context = resolve_chat_project_context(
+                &state,
+                &config,
+                &LibrarianChatRequest {
+                    message: "Открой контекст Games/AdvenTableDays".to_string(),
+                    project: None,
+                    project_context: None,
+                    project_context_scope: None,
+                    session_id: None,
+                },
+                "Открой контекст Games/AdvenTableDays",
+            )
+            .await
+            .expect("context");
+
+            assert!(context.suggested_nodes.is_empty());
+            assert_eq!(context.nodes.len(), 1);
+            assert_eq!(
+                context.nodes[0].library_path.as_deref(),
+                Some(Path::new("Games/AdvenTableDays"))
+            );
+            assert_eq!(context.source, "auto");
         }
 
         std::fs::remove_dir_all(home).ok();
