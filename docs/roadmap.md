@@ -1096,7 +1096,10 @@ readiness or a later planned milestone.
 
 - Run a real containerized Codex self-hosting task after Podman/Docker is
   connected, the agent image is built, and host Codex auth is present. Covered
-  by MVP Priority 3 and user environment setup.
+  by MVP Priority 3 and user environment setup. First preflight pass adds
+  `librarian smoke self-host`, which registers the Librarian repository as a
+  managed project, verifies context memory retrieval, and prepares a read-only
+  self-host agent job; `--run-agent` performs the real provider call.
 - Add richer structured parsing for provider responses and CLI error formats.
 - Add estimated-cost reservation before dispatch once provider adapters can
   predict request cost, so budget checks can account for the pending run instead

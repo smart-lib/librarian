@@ -262,6 +262,18 @@ enum SmokeCommand {
         #[arg(long, default_value = "LibrarianToolsSmoke")]
         name: String,
     },
+    SelfHost {
+        #[arg(long, value_enum, default_value_t = ProviderArg::Codex)]
+        provider: ProviderArg,
+        #[arg(long)]
+        project_path: Option<PathBuf>,
+        #[arg(long)]
+        run_agent: bool,
+        #[arg(long)]
+        allow_network: bool,
+        #[arg(long)]
+        secret_grant_token: Option<String>,
+    },
     Providers {
         #[arg(long)]
         require_ready: bool,
@@ -904,6 +916,23 @@ async fn main() -> Result<()> {
             }
             SmokeCommand::Tools { name } => {
                 run_tools_smoke(&config, &name).await?;
+            }
+            SmokeCommand::SelfHost {
+                provider,
+                project_path,
+                run_agent,
+                allow_network,
+                secret_grant_token,
+            } => {
+                run_self_host_smoke(
+                    &config,
+                    provider.into(),
+                    project_path.as_deref(),
+                    run_agent,
+                    allow_network,
+                    secret_grant_token.as_deref(),
+                )
+                .await?;
             }
             SmokeCommand::Providers { require_ready } => {
                 run_provider_smoke(&config, require_ready).await?;
@@ -2220,6 +2249,201 @@ async fn run_mvp_smoke(
     }
     println!();
     println!("Smoke passed.");
+    Ok(())
+}
+
+async fn run_self_host_smoke(
+    config: &Config,
+    provider: ProviderKind,
+    project_path: Option<&Path>,
+    run_agent: bool,
+    allow_network: bool,
+    secret_grant_token: Option<&str>,
+) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+
+    let project_path = match project_path {
+        Some(path) => path.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+    let project_path = project_path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project_path.display()))?;
+    let cargo_toml = project_path.join("Cargo.toml");
+    let cargo_manifest = fs::read_to_string(&cargo_toml).with_context(|| {
+        format!(
+            "Self-host smoke expects a Rust project at {}",
+            cargo_toml.display()
+        )
+    })?;
+    if !cargo_manifest.contains("name = \"librarian\"") {
+        anyhow::bail!(
+            "Self-host smoke expects the Librarian repository; {} does not declare package `librarian`",
+            cargo_toml.display()
+        );
+    }
+    let display_project_path = user_facing_path(&project_path);
+
+    println!("Librarian self-host smoke");
+    println!("  root: {}", config.home.display());
+    println!("  project path: {}", display_project_path.display());
+    println!("  provider: {}", provider_arg_name(&provider));
+    println!(
+        "  mode: {}",
+        if run_agent {
+            "preflight + real read-only agent run"
+        } else {
+            "preflight only"
+        }
+    );
+
+    println!();
+    println!("1. Registering Librarian as a managed project...");
+    let existing = db.list_projects().await?.into_iter().find(|project| {
+        project
+            .path
+            .canonicalize()
+            .ok()
+            .is_some_and(|path| path == project_path)
+    });
+    let project = match existing {
+        Some(project) => project,
+        None => db.add_project("Librarian Self Host", &project_path).await?,
+    };
+    let library_path = Path::new("projects/librarian-self-host");
+    library_tools::create_folder(
+        config,
+        library_tools::LibraryRoot::Library,
+        &library_path.to_string_lossy(),
+    )?;
+    let project = db
+        .attach_project_library_path(project.id, library_path)
+        .await?;
+    let overview_path = "projects/librarian-self-host/overview.md";
+    if library_tools::read_markdown(config, overview_path).is_err() {
+        library_tools::write_markdown(
+            config,
+            overview_path,
+            "# Librarian Self Host\n\nThis note anchors the Librarian repository as a managed project for supervised agent work.\n",
+        )?;
+    }
+    println!(
+        "   OK: project={} library={}",
+        project.id,
+        project
+            .library_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "-".to_string())
+    );
+
+    println!("2. Adding self-host readiness memory...");
+    let marker = format!(
+        "self-host smoke marker {}",
+        Utc::now().format("%Y%m%d%H%M%S")
+    );
+    let memory_item = db
+        .add_memory_item(
+            Some(project.id),
+            None,
+            MemoryKind::Status,
+            Some("self-host-readiness"),
+            &format!("{marker}: Librarian repository is registered for supervised self-hosting preflight."),
+            Some("cli:smoke-self-host"),
+            json!({
+                "scope": "self-host",
+                "repository": project_path,
+                "provider": provider_arg_name(&provider),
+            }),
+        )
+        .await?;
+    memory::embed_item(&db, config, &memory_item).await?;
+    let context_pack = memory::retrieve_context_with_config(
+        &db,
+        Some(config),
+        memory::RetrievalRequest {
+            query: marker.clone(),
+            project_id: Some(project.id),
+            activity_id: None,
+            limit: memory::default_hit_limit(),
+        },
+    )
+    .await?;
+    if !context_pack
+        .hits
+        .iter()
+        .any(|hit| hit.item.id == memory_item.id)
+    {
+        anyhow::bail!("Self-host smoke did not retrieve its readiness memory marker");
+    }
+    println!(
+        "   OK: memory={} context_hits={}",
+        memory_item.id,
+        context_pack.hits.len()
+    );
+
+    println!("3. Queueing read-only self-host agent job and running preflight...");
+    let network_mode = router::default_network_mode_for_provider(
+        &provider,
+        allow_network,
+        secret_grant_token.is_some(),
+    );
+    let goal = "Inspect this Librarian repository and reply with one concise self-hosting readiness summary. Do not edit files.";
+    let job = db
+        .create_job(
+            project.id,
+            provider.clone(),
+            goal,
+            MountMode::ReadOnly,
+            network_mode,
+            secret_grant_token,
+        )
+        .await?;
+    db.add_job_event(
+        job.id,
+        "context_pack",
+        json!({
+            "query": context_pack.query,
+            "generated_at": context_pack.generated_at,
+            "hits": context_pack.hits,
+        }),
+    )
+    .await?;
+    let report = worker::preflight_job(config.clone(), db.clone(), job.id).await?;
+    println!(
+        "   OK: job={} prompt_chars={} instruction_files={}",
+        report.job_id,
+        report.prompt_chars,
+        report.instruction_files.len()
+    );
+    println!(
+        "   events: {} jobs events {}",
+        doctor_command_prefix(config),
+        job.id
+    );
+
+    if !run_agent {
+        println!();
+        println!("Self-host preflight passed.");
+        println!(
+            "To run the real read-only provider call: {} smoke self-host --provider {} --run-agent --project-path \"{}\"",
+            doctor_command_prefix(config),
+            provider_arg_name(&provider),
+            display_project_path.display()
+        );
+        return Ok(());
+    }
+
+    println!("4. Running the selected provider in the agent container...");
+    worker::run_job_by_id(config.clone(), db.clone(), job.id).await?;
+    let job = db.get_job(job.id).await?;
+    println!("   status: {:?}", job.status);
+    if !matches!(job.status, JobStatus::Completed) {
+        anyhow::bail!("Self-host agent run did not complete successfully");
+    }
+    println!("Self-host smoke passed.");
     Ok(())
 }
 

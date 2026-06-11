@@ -204,6 +204,15 @@ The same broad local/preflight smoke suite can also run through doctor:
 librarian --home "$HOME/Librarian" doctor --smoke
 ```
 
+Check whether the current Librarian repository is ready for supervised
+self-hosted agent work:
+
+```bash
+librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD"
+```
+
+Add `--run-agent` to run the real read-only provider call after preflight.
+
 API-proxy providers such as OpenRouter can use the same smoke runner after a
 secret grant exists:
 
