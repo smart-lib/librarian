@@ -172,6 +172,14 @@ Exporting a rendered prompt target creates an approval proposal first:
 librarian --home "$HOME/Librarian" prompt export-proposal librarian prompt-exports/librarian.md
 ```
 
+Prompt-builder presets can also be exported as portable JSON from chat/admin
+slash commands and imported on another install:
+
+```text
+/prompt export-presets librarian
+/prompt import-presets <preset-json> --yes
+```
+
 Run provider health diagnostics without launching containers:
 
 ```bash

@@ -1121,7 +1121,9 @@ Tasks:
   mounted into the container as additional read-only files, or both, so agents
   can reread their operating instructions during a run.
 - Add import/export for prompt-builder presets so a working Librarian identity
-  can be shared across installs.
+  can be shared across installs. First slash-command pass exports portable JSON
+  without database ids and imports idempotently by `target + name`, with an
+  explicit `--yes` gate and smoke coverage.
 - Add diff/review UI for prompt changes before applying them to the active
   chat or agent profile.
 

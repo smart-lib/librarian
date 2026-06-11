@@ -12,6 +12,7 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
@@ -1370,6 +1371,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         ['/mem recent', 'Show recent durable memory'],
         ['/approval list', 'Review pending approvals'],
         ['/prompt blocks', 'List prompt blocks'],
+        ['/prompt export-presets ', 'Export prompt blocks as portable JSON'],
+        ['/prompt import-presets ', 'Import portable prompt preset JSON'],
         ['/settings tool-permissions', 'Show tool permission policy'],
         ['/agent list', 'List background agent jobs'],
         ['/agent preflight ', 'Prepare a job command without running it'],
@@ -4033,6 +4036,8 @@ async fn slash_commands(State(state): State<AppState>) -> impl IntoResponse {
         serde_json::json!({"command": "/mem recent", "description": "Show recent durable memory", "group": "memory"}),
         serde_json::json!({"command": "/approval list", "description": "Review pending approvals", "group": "approval"}),
         serde_json::json!({"command": "/prompt blocks", "description": "List prompt blocks", "group": "prompt"}),
+        serde_json::json!({"command": "/prompt export-presets ", "description": "Export prompt blocks as portable JSON", "group": "prompt"}),
+        serde_json::json!({"command": "/prompt import-presets ", "description": "Import portable prompt preset JSON", "group": "prompt"}),
         serde_json::json!({"command": "/settings tool-permissions", "description": "Show tool permission policy", "group": "settings"}),
         serde_json::json!({"command": "/agent list", "description": "List background agent jobs", "group": "agent"}),
         serde_json::json!({"command": "/agent preflight ", "description": "Prepare a job command without running it", "group": "agent"}),
@@ -6099,6 +6104,56 @@ pub async fn run_prompt_defaults_smoke(config: &Config) -> Result<()> {
     let exported = library_tools::read_markdown(config, "prompt-smoke/librarian-export.md")?;
     if !exported.contains("You are Librarian") {
         anyhow::bail!("Prompt defaults smoke expected approved export to write rendered prompt");
+    }
+
+    let preset_export = execute_prompt_slash_command(
+        &state,
+        config,
+        &["export-presets".to_string(), "librarian".to_string()],
+    )
+    .await?;
+    let preset = preset_export
+        .trace
+        .first()
+        .and_then(|trace| trace.get("preset"))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Prompt preset export smoke did not return JSON preset"))?;
+    let preset_json = serde_json::to_string(&preset)?;
+    let import_gate = execute_prompt_slash_command(
+        &state,
+        config,
+        &["import-presets".to_string(), preset_json.clone()],
+    )
+    .await?;
+    if import_gate
+        .trace
+        .first()
+        .and_then(|trace| trace.get("status"))
+        .and_then(serde_json::Value::as_str)
+        != Some("needs_explicit_confirmation")
+    {
+        anyhow::bail!("Prompt defaults smoke expected import confirmation gate");
+    }
+    let before_import_count = db.list_prompt_blocks(None).await?.len();
+    let imported = execute_prompt_slash_command(
+        &state,
+        config,
+        &[
+            "import-presets".to_string(),
+            preset_json,
+            "--yes".to_string(),
+        ],
+    )
+    .await?;
+    let imported_count = imported
+        .trace
+        .first()
+        .and_then(|trace| trace.get("imported"))
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if imported_count == 0 || before_import_count != db.list_prompt_blocks(None).await?.len() {
+        anyhow::bail!("Prompt defaults smoke expected preset import to update idempotently");
     }
     Ok(())
 }
@@ -9007,6 +9062,79 @@ async fn execute_prompt_slash_command(
                 }),
             )
         }
+        "export-presets" | "export-json" => {
+            let target = args.get(1).map(String::as_str);
+            let blocks = state.db.list_prompt_blocks(target).await?;
+            let document = prompt_preset_document(target, &blocks);
+            let json = serde_json::to_string_pretty(&document)?;
+            slash_reply(
+                &format!(
+                    "Prompt preset export: {} block(s).\n\n```json\n{json}\n```",
+                    document.blocks.len()
+                ),
+                serde_json::json!({
+                    "tool": "prompt",
+                    "command": command,
+                    "target": target,
+                    "preset": document,
+                }),
+            )
+        }
+        "import-presets" | "import-json" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            if args.len() < 2 {
+                anyhow::bail!("Usage: /prompt import-presets <preset-json> --yes");
+            }
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                return Ok(slash_reply(
+                    "Importing prompt presets changes Librarian instructions. Use: /prompt import-presets <preset-json> --yes",
+                    serde_json::json!({
+                        "tool": "prompt",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                    }),
+                ));
+            }
+            let json = args
+                .iter()
+                .skip(1)
+                .filter(|arg| *arg != "--yes" && *arg != "--approve")
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let document: PromptPresetDocument = serde_json::from_str(&json)
+                .map_err(|error| anyhow::anyhow!("Invalid prompt preset JSON: {error}"))?;
+            let imported = import_prompt_preset_document(&state.db, &document).await?;
+            state
+                .db
+                .add_system_event(
+                    "prompt_tool",
+                    serde_json::json!({
+                        "action": "import_presets",
+                        "source": "slash-command",
+                        "imported": imported.iter().map(|block| serde_json::json!({
+                            "id": block.id,
+                            "target": block.target,
+                            "name": block.name,
+                        })).collect::<Vec<_>>(),
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!("Imported {} prompt preset block(s).", imported.len()),
+                serde_json::json!({
+                    "tool": "prompt",
+                    "command": command,
+                    "imported": imported,
+                }),
+            )
+        }
         "render" => {
             let target = args
                 .get(1)
@@ -9194,6 +9322,23 @@ struct PromptBlockPreset {
     content: &'static str,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PromptPresetDocument {
+    schema: String,
+    target: Option<String>,
+    blocks: Vec<PromptPresetBlock>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PromptPresetBlock {
+    target: String,
+    name: String,
+    content: String,
+    enabled: bool,
+    position: i64,
+    markdown: bool,
+}
+
 fn default_prompt_block_presets() -> Vec<PromptBlockPreset> {
     vec![
         PromptBlockPreset {
@@ -9229,6 +9374,81 @@ fn default_prompt_block_presets() -> Vec<PromptBlockPreset> {
     ]
 }
 
+fn prompt_preset_document(
+    target: Option<&str>,
+    blocks: &[crate::domain::PromptBlock],
+) -> PromptPresetDocument {
+    PromptPresetDocument {
+        schema: "librarian.prompt-presets.v1".to_string(),
+        target: target.map(ToOwned::to_owned),
+        blocks: blocks
+            .iter()
+            .map(|block| PromptPresetBlock {
+                target: block.target.clone(),
+                name: block.name.clone(),
+                content: block.content.clone(),
+                enabled: block.enabled,
+                position: block.position,
+                markdown: block.markdown,
+            })
+            .collect(),
+    }
+}
+
+async fn import_prompt_preset_document(
+    db: &Database,
+    document: &PromptPresetDocument,
+) -> Result<Vec<crate::domain::PromptBlock>> {
+    if document.schema != "librarian.prompt-presets.v1" {
+        anyhow::bail!("Unsupported prompt preset schema `{}`", document.schema);
+    }
+    let mut imported = Vec::new();
+    for preset in &document.blocks {
+        if preset.target.trim().is_empty()
+            || preset.name.trim().is_empty()
+            || preset.content.trim().is_empty()
+        {
+            anyhow::bail!("Prompt preset blocks require non-empty target, name, and content");
+        }
+        let existing = db
+            .list_prompt_blocks(Some(&preset.target))
+            .await?
+            .into_iter()
+            .find(|block| block.name == preset.name);
+        let block = if let Some(block) = existing {
+            db.update_prompt_block(
+                block.id,
+                Some(&preset.name),
+                Some(&preset.content),
+                Some(preset.enabled),
+                Some(preset.position),
+                Some(preset.markdown),
+            )
+            .await?
+        } else {
+            let block = db
+                .create_prompt_block(
+                    &preset.target,
+                    &preset.name,
+                    &preset.content,
+                    preset.markdown,
+                )
+                .await?;
+            db.update_prompt_block(
+                block.id,
+                None,
+                None,
+                Some(preset.enabled),
+                Some(preset.position),
+                Some(preset.markdown),
+            )
+            .await?
+        };
+        imported.push(block);
+    }
+    Ok(imported)
+}
+
 fn slash_prompt_block_id_arg(args: &[String], usage: &str) -> Result<Uuid> {
     args.get(1)
         .ok_or_else(|| anyhow::anyhow!("Usage: {usage}"))?
@@ -9247,7 +9467,7 @@ fn render_prompt_blocks(blocks: &[crate::domain::PromptBlock]) -> String {
 }
 
 fn prompt_slash_help() -> &'static str {
-    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt seed-defaults --yes\n/prompt add-block <target> <name> <content> [--plain]\n/prompt update <block-id> [--name name] [--content content] [--position n] [--markdown|--plain] [--enable|--disable] --yes\n/prompt delete <block-id> --yes\n/prompt export-proposal <target> <library-md-path>\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
+    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt seed-defaults --yes\n/prompt add-block <target> <name> <content> [--plain]\n/prompt update <block-id> [--name name] [--content content] [--position n] [--markdown|--plain] [--enable|--disable] --yes\n/prompt delete <block-id> --yes\n/prompt export-proposal <target> <library-md-path>\n/prompt export-presets [target]\n/prompt import-presets <preset-json> --yes\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
 }
 
 async fn execute_memory_slash_command(
