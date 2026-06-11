@@ -384,8 +384,8 @@ Tasks:
   pass now exposes `librarian smoke mvp --provider codex --run-agent`, which
   creates a disposable project, exercises Library/Projects file-tool sandbox
   operations, writes searchable memory, runs job preflight, and optionally runs
-  that exact provider job. `doctor --smoke` runs the same preflight smoke from
-  the readiness command.
+  that exact provider job. `doctor --smoke` now runs the same broad smoke suite
+  as `smoke all`, so readiness output and one-command validation stay aligned.
 - Context/tree memory smoke now exposes `librarian smoke context`, which creates
   a disposable parent/child Library context pair, writes child memory, and
   verifies that a parent subtree scan can find the child memory without a

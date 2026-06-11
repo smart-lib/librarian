@@ -802,7 +802,7 @@ async fn main() -> Result<()> {
             run_doctor(&config).await?;
             if smoke {
                 println!();
-                run_mvp_smoke(
+                run_all_smoke(
                     &config,
                     smoke_provider.into(),
                     smoke_run_agent,
@@ -810,6 +810,7 @@ async fn main() -> Result<()> {
                     None,
                     None,
                     "LibrarianDoctorSmoke",
+                    false,
                 )
                 .await?;
             }
@@ -2982,11 +2983,12 @@ fn launch_context_registration_check_for(
     if path_eq_or_within(&cwd, &home) && !path_eq_or_within(&cwd, &projects_root)
         || paths_equivalent(&cwd, &projects_root)
     {
+        let display_cwd = user_facing_path(&cwd);
         return DoctorCheck::ok(
             "launch context registration",
             format!(
                 "{} is inside Librarian root/internal storage",
-                cwd.display()
+                display_cwd.display()
             ),
         );
     }
@@ -2995,11 +2997,12 @@ fn launch_context_registration_check_for(
         || path_eq_or_within(&cwd, &mdb)
         || path_eq_or_within(&cwd, &library)
     {
+        let display_cwd = user_facing_path(&cwd);
         return DoctorCheck::ok(
             "launch context registration",
             format!(
                 "{} is Librarian-managed context, not a new workspace",
-                cwd.display()
+                display_cwd.display()
             ),
         );
     }
@@ -3007,11 +3010,12 @@ fn launch_context_registration_check_for(
         .iter()
         .find(|project| path_eq_or_within(&cwd, &normalized_existing_path(&project.path)))
     {
+        let display_cwd = user_facing_path(&cwd);
         return DoctorCheck::ok(
             "launch context registration",
             format!(
                 "{} is already covered by project `{}`",
-                cwd.display(),
+                display_cwd.display(),
                 project.name
             ),
         );
@@ -3022,13 +3026,17 @@ fn launch_context_registration_check_for(
         .and_then(|name| name.to_str())
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("Imported Project");
+    let display_cwd = user_facing_path(&cwd);
     DoctorCheck::warn(
         "launch context registration",
-        format!("{} is not registered as a Librarian project", cwd.display()),
+        format!(
+            "{} is not registered as a Librarian project",
+            display_cwd.display()
+        ),
         format!(
             "Register it when you want agents to use this folder: {} project add {} --name {}",
             doctor_command_prefix(config),
-            shell_path(&cwd),
+            shell_path(&display_cwd),
             shell_word(&humanize_project_name(name))
         ),
     )
@@ -3036,6 +3044,15 @@ fn launch_context_registration_check_for(
 
 fn normalized_existing_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn user_facing_path(path: &Path) -> PathBuf {
+    let text = path.display().to_string();
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
+    }
 }
 
 fn path_eq_or_within(path: &Path, parent: &Path) -> bool {
