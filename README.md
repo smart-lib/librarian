@@ -147,7 +147,8 @@ librarian --home "$HOME/Librarian" smoke tools
 
 This checks Library Markdown edits, Projects sandbox file operations, project
 context registration, durable memory retrieval, approval persistence, chat-card
-contracts, job cancel/retry lifecycle, and launch-context hints.
+contracts, job cancel/retry lifecycle, launch-context hints, and `/project`
+create/attach/status/map workflow.
 
 Run provider health diagnostics without launching containers:
 

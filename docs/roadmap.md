@@ -549,7 +549,9 @@ Tasks:
   `/project detach-library`, and `/project attach-workspace`. Current UI pass
   places project creation plus attach-library/attach-workspace controls in
   Settings -> Library, backed by `/api/projects` mutation routes, keeping
-  low-level management out of the atlas canvas.
+  low-level management out of the atlas canvas. Current smoke pass verifies
+  `/project create`, `status`, `map`, `attach-library`, and `attach-workspace`
+  through `smoke tools`.
 - When Librarian is launched from a directory that is not already known as a
   root or project, ask whether to register that directory as a working project
   and create/link the corresponding library folder. First diagnostic pass adds

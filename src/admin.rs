@@ -5805,6 +5805,124 @@ pub async fn run_agent_action_ui_smoke(config: &Config, name: &str) -> Result<()
     Ok(())
 }
 
+pub async fn run_project_slash_smoke(config: &Config, name: &str) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+    let state = AppState {
+        db: db.clone(),
+        config: Arc::new(RwLock::new(config.clone())),
+    };
+
+    let slug = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    let slug = if slug.is_empty() {
+        "project-slash-smoke".to_string()
+    } else {
+        slug
+    };
+    let project_name = format!("Project Slash Smoke {slug}");
+    let initial_library = format!("project-slash-smoke/{slug}/initial");
+    let attached_library = format!("project-slash-smoke/{slug}/attached");
+    let initial_workspace = config
+        .home
+        .join("Projects")
+        .join("_smoke")
+        .join("project-slash")
+        .join(&slug)
+        .join("initial");
+    let attached_workspace = config
+        .home
+        .join("Projects")
+        .join("_smoke")
+        .join("project-slash")
+        .join(&slug)
+        .join("attached");
+    std::fs::create_dir_all(&initial_workspace)?;
+    std::fs::create_dir_all(&attached_workspace)?;
+
+    let create = execute_project_slash_command(
+        &state,
+        config,
+        &[
+            "create".to_string(),
+            project_name.clone(),
+            "--library".to_string(),
+            initial_library.clone(),
+            "--workspace".to_string(),
+            initial_workspace.display().to_string(),
+        ],
+    )
+    .await?;
+    if !create.reply.contains("Created project") {
+        anyhow::bail!("Project slash smoke expected create reply");
+    }
+    let project = db.get_project_by_name_or_id(&project_name).await?;
+    if project.library_path.as_deref() != Some(Path::new(&initial_library)) {
+        anyhow::bail!("Project slash smoke did not attach initial Library path");
+    }
+
+    execute_project_slash_command(
+        &state,
+        config,
+        &[
+            "attach-library".to_string(),
+            project_name.clone(),
+            attached_library.clone(),
+        ],
+    )
+    .await?;
+    execute_project_slash_command(
+        &state,
+        config,
+        &[
+            "attach-workspace".to_string(),
+            project_name.clone(),
+            attached_workspace.display().to_string(),
+        ],
+    )
+    .await?;
+    let project = db.get_project_by_name_or_id(&project_name).await?;
+    if project.library_path.as_deref() != Some(Path::new(&attached_library))
+        || project.path != attached_workspace.canonicalize()?
+    {
+        anyhow::bail!("Project slash smoke did not persist attached paths");
+    }
+
+    let status = execute_project_slash_command(
+        &state,
+        config,
+        &["status".to_string(), project_name.clone()],
+    )
+    .await?;
+    if !status.reply.contains(&project_name) {
+        anyhow::bail!("Project slash smoke expected status reply to include project name");
+    }
+    let map = execute_project_slash_command(&state, config, &["map".to_string()]).await?;
+    if map
+        .trace
+        .first()
+        .and_then(|trace| trace.get("map"))
+        .and_then(|map| map.get("linked_project_count"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+        == 0
+    {
+        anyhow::bail!("Project slash smoke expected project map to include linked projects");
+    }
+    Ok(())
+}
+
 fn parse_context_scope(value: &str) -> Result<ContextScope> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "node" | "current" => Ok(ContextScope::Node),

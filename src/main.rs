@@ -2592,6 +2592,10 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     }
     println!("   OK: known context is accepted; unknown context suggests registration.");
 
+    println!("7. Exercising project slash workflow...");
+    admin::run_project_slash_smoke(config, &slug).await?;
+    println!("   OK: /project create/status/map/attach paths are functional.");
+
     println!("Tools smoke passed.");
     Ok(())
 }
