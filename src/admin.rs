@@ -1369,6 +1369,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         ['/mem help', 'Durable memory tools'],
         ['/remember ', 'Remember a durable fact'],
         ['/mem recent', 'Show recent durable memory'],
+        ['/mem cleanup-legacy-local-responder', 'Clean old placeholder memory replies'],
         ['/approval list', 'Review pending approvals'],
         ['/prompt blocks', 'List prompt blocks'],
         ['/prompt export-presets ', 'Export prompt blocks as portable JSON'],
@@ -4034,6 +4035,7 @@ async fn slash_commands(State(state): State<AppState>) -> impl IntoResponse {
         serde_json::json!({"command": "/mem help", "description": "Durable memory tools", "group": "memory"}),
         serde_json::json!({"command": "/remember ", "description": "Remember a durable fact", "group": "memory"}),
         serde_json::json!({"command": "/mem recent", "description": "Show recent durable memory", "group": "memory"}),
+        serde_json::json!({"command": "/mem cleanup-legacy-local-responder", "description": "Clean old placeholder memory replies", "group": "memory"}),
         serde_json::json!({"command": "/approval list", "description": "Review pending approvals", "group": "approval"}),
         serde_json::json!({"command": "/prompt blocks", "description": "List prompt blocks", "group": "prompt"}),
         serde_json::json!({"command": "/prompt export-presets ", "description": "Export prompt blocks as portable JSON", "group": "prompt"}),
@@ -6154,6 +6156,56 @@ pub async fn run_prompt_defaults_smoke(config: &Config) -> Result<()> {
         .unwrap_or(0);
     if imported_count == 0 || before_import_count != db.list_prompt_blocks(None).await?.len() {
         anyhow::bail!("Prompt defaults smoke expected preset import to update idempotently");
+    }
+    Ok(())
+}
+
+pub async fn run_memory_cleanup_smoke(config: &Config) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+    let legacy = db
+        .add_memory_item(
+            None,
+            None,
+            MemoryKind::AssistantMessage,
+            Some("librarian-chat"),
+            "I am here as Librarian, not as a background agent runner.\n\nLegacy smoke item.",
+            Some("admin:librarian-chat"),
+            serde_json::json!({
+                "mode": "local-memory-responder",
+                "scope": "global",
+            }),
+        )
+        .await?;
+    let gate = execute_memory_slash_command(
+        &db,
+        config,
+        None,
+        &["cleanup-legacy-local-responder".to_string()],
+    )
+    .await?;
+    if gate
+        .trace
+        .first()
+        .and_then(|trace| trace.get("status"))
+        .and_then(serde_json::Value::as_str)
+        != Some("needs_explicit_confirmation")
+    {
+        anyhow::bail!("Memory cleanup smoke expected explicit confirmation gate");
+    }
+    execute_memory_slash_command(
+        &db,
+        config,
+        None,
+        &[
+            "cleanup-legacy-local-responder".to_string(),
+            "--yes".to_string(),
+        ],
+    )
+    .await?;
+    if db.get_memory_item(legacy.id).await.is_ok() {
+        anyhow::bail!("Memory cleanup smoke expected legacy responder item to be deleted");
     }
     Ok(())
 }
@@ -9621,6 +9673,73 @@ async fn execute_memory_slash_command(
                 }),
             )
         }
+        "cleanup-legacy-local-responder" | "cleanup-local-responder" | "cleanup-legacy" => {
+            ensure_tool_permission(
+                db,
+                config,
+                "memory.write",
+                config.tool_permissions.memory_write,
+            )
+            .await?;
+            let limit = args
+                .iter()
+                .position(|arg| arg == "--limit")
+                .and_then(|index| args.get(index + 1))
+                .map(|value| value.parse::<i64>())
+                .transpose()
+                .map_err(|error| anyhow::anyhow!("Invalid --limit value: {error}"))?
+                .unwrap_or(100)
+                .clamp(1, 10_000);
+            let total = db.count_legacy_local_memory_responder_items().await?;
+            let candidates = db.legacy_local_memory_responder_items(limit).await?;
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                let mut reply = format!(
+                    "Legacy local responder cleanup found {total} candidate(s); showing {}.",
+                    candidates.len()
+                );
+                for item in candidates.iter().take(5) {
+                    reply.push_str(&format!(
+                        "\n{} {} {:?}: {}",
+                        item.observed_at.format("%Y-%m-%d %H:%M"),
+                        item.id,
+                        item.kind,
+                        item.content.chars().take(120).collect::<String>()
+                    ));
+                }
+                reply.push_str("\nRun `/mem cleanup-legacy-local-responder --yes` to delete them.");
+                return Ok(slash_reply(
+                    &reply,
+                    serde_json::json!({
+                        "tool": "memory",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                        "candidate_count": total,
+                        "shown_count": candidates.len(),
+                    }),
+                ));
+            }
+            let ids = candidates.iter().map(|item| item.id).collect::<Vec<_>>();
+            let deleted = db.delete_memory_items(&ids).await?;
+            db.add_system_event(
+                "memory_tool",
+                serde_json::json!({
+                    "action": "cleanup_legacy_local_responder",
+                    "source": "slash-command",
+                    "deleted": deleted,
+                    "candidate_count": total,
+                }),
+            )
+            .await?;
+            slash_reply(
+                &format!("Deleted {deleted} legacy local responder memory item(s)."),
+                serde_json::json!({
+                    "tool": "memory",
+                    "command": command,
+                    "deleted": deleted,
+                    "candidate_count": total,
+                }),
+            )
+        }
         "recent" => {
             let limit = args
                 .get(1)
@@ -9666,7 +9785,7 @@ async fn execute_memory_slash_command(
 }
 
 fn memory_slash_help() -> &'static str {
-    "Memory commands live under /mem:\n/mem remember <fact|decision|instruction|status|summary> <content>\n/mem supersede <old-memory-id> <kind> <content>\n/mem contradict <old-memory-id> <kind> <content>\n/remember <content> - shortcut for /mem remember fact <content>\n/mem recent [limit]\n\nMemory is stored in the current chat scope: selected project when present, otherwise global."
+    "Memory commands live under /mem:\n/mem remember <fact|decision|instruction|status|summary> <content>\n/mem supersede <old-memory-id> <kind> <content>\n/mem contradict <old-memory-id> <kind> <content>\n/remember <content> - shortcut for /mem remember fact <content>\n/mem recent [limit]\n/mem cleanup-legacy-local-responder [--limit n] --yes\n\nMemory is stored in the current chat scope: selected project when present, otherwise global."
 }
 
 async fn execute_settings_slash_command(

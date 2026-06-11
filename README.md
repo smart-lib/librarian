@@ -180,6 +180,13 @@ slash commands and imported on another install:
 /prompt import-presets <preset-json> --yes
 ```
 
+Clean old placeholder memories from the early local responder with a gated
+memory command:
+
+```text
+/mem cleanup-legacy-local-responder --yes
+```
+
 Run provider health diagnostics without launching containers:
 
 ```bash

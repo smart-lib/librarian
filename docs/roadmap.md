@@ -1160,8 +1160,9 @@ Findings and tasks:
   First split done: iterative chat loop, Codex chat runner, prompt assembly,
   directive parsing, and chat-loop tests now live in `src/chat.rs`.
 - Legacy `local-memory-responder` memories may remain in existing user
-  databases. Keep filtering them from chat context and add a cleanup/backfill
-  command later.
+  databases. Filtering keeps them out of chat context; first cleanup pass adds
+  `/mem cleanup-legacy-local-responder --yes` with dry-run confirmation and
+  smoke coverage.
 - The previous hardcoded `looks_like_agent_request` intent detector had mojibake
   Russian literals and was removed. Do not reintroduce multilingual intent
   heuristics; use slash commands and the tool/permission intent layer.

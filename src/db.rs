@@ -2127,6 +2127,65 @@ impl Database {
         }
     }
 
+    pub async fn legacy_local_memory_responder_items(&self, limit: i64) -> Result<Vec<MemoryItem>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, project_id, activity_id, kind, topic, content, source, observed_at,
+                   valid_from, valid_until, confidence, salience, supersedes_id,
+                   contradicts_id, metadata, created_at, updated_at
+            FROM memory_items
+            WHERE kind = 'AssistantMessage'
+              AND (
+                metadata LIKE '%local-memory-responder%'
+                OR content LIKE 'I am here as Librarian, not as a background agent runner.%'
+              )
+            ORDER BY observed_at ASC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit.clamp(1, 10_000))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(row_to_memory_item).collect()
+    }
+
+    pub async fn count_legacy_local_memory_responder_items(&self) -> Result<i64> {
+        let row = sqlx::query(
+            r#"
+            SELECT COUNT(*) AS count
+            FROM memory_items
+            WHERE kind = 'AssistantMessage'
+              AND (
+                metadata LIKE '%local-memory-responder%'
+                OR content LIKE 'I am here as Librarian, not as a background agent runner.%'
+              )
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get("count"))
+    }
+
+    pub async fn delete_memory_items(&self, ids: &[Uuid]) -> Result<usize> {
+        let mut deleted = 0usize;
+        for id in ids {
+            sqlx::query("DELETE FROM memory_embeddings WHERE memory_id = ?")
+                .bind(id.to_string())
+                .execute(&self.pool)
+                .await?;
+            sqlx::query("DELETE FROM memory_fts WHERE memory_id = ?")
+                .bind(id.to_string())
+                .execute(&self.pool)
+                .await?;
+            let result = sqlx::query("DELETE FROM memory_items WHERE id = ?")
+                .bind(id.to_string())
+                .execute(&self.pool)
+                .await?;
+            deleted += result.rows_affected() as usize;
+        }
+        Ok(deleted)
+    }
+
     pub async fn upsert_memory_embedding(
         &self,
         memory_id: Uuid,

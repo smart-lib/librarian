@@ -2505,7 +2505,11 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     }
     println!("   OK: project={} memory={}", project.id, memory_item.id);
 
-    println!("4. Exercising approval persistence...");
+    println!("4. Exercising legacy memory cleanup...");
+    admin::run_memory_cleanup_smoke(config).await?;
+    println!("   OK: legacy local responder cleanup is gated and executable.");
+
+    println!("5. Exercising approval persistence...");
     let approval = db
         .create_tool_approval(
             "library",
@@ -2529,7 +2533,7 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     admin::run_agent_action_ui_smoke(config, &slug).await?;
     println!("   OK: agent launch returns chat action card metadata");
 
-    println!("5. Exercising job cancel/retry lifecycle...");
+    println!("6. Exercising job cancel/retry lifecycle...");
     let lifecycle_job = db
         .create_job(
             project.id,
@@ -2565,7 +2569,7 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
         lifecycle_job.id, retry.id
     );
 
-    println!("6. Exercising launch-context registration hints...");
+    println!("7. Exercising launch-context registration hints...");
     let projects = db.list_projects().await?;
     let known_context = launch_context_registration_check_for(config, &projects, &workspace_path);
     if known_context.severity != DoctorSeverity::Ok {
@@ -2592,11 +2596,11 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     }
     println!("   OK: known context is accepted; unknown context suggests registration.");
 
-    println!("7. Exercising project slash workflow...");
+    println!("8. Exercising project slash workflow...");
     admin::run_project_slash_smoke(config, &slug).await?;
     println!("   OK: /project create/status/map/attach paths are functional.");
 
-    println!("8. Exercising prompt default presets...");
+    println!("9. Exercising prompt default presets...");
     admin::run_prompt_defaults_smoke(config).await?;
     println!("   OK: prompt seed/update/delete/export flows are confirmed and renderable.");
 
