@@ -2528,6 +2528,42 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     admin::run_agent_action_ui_smoke(config, &slug).await?;
     println!("   OK: agent launch returns chat action card metadata");
 
+    println!("5. Exercising job cancel/retry lifecycle...");
+    let lifecycle_job = db
+        .create_job(
+            project.id,
+            ProviderKind::Codex,
+            "cancel and retry lifecycle smoke",
+            MountMode::ReadOnly,
+            crate::domain::NetworkMode::Provider,
+            None,
+        )
+        .await?;
+    db.request_cancel_job(lifecycle_job.id).await?;
+    let cancelled = db.get_job(lifecycle_job.id).await?;
+    if !matches!(cancelled.status, JobStatus::Cancelled) || cancelled.cancel_requested_at.is_none()
+    {
+        anyhow::bail!("Tools smoke expected queued job cancellation to persist Cancelled status");
+    }
+    let cancel_events = db.list_job_events(lifecycle_job.id).await?;
+    if !cancel_events
+        .iter()
+        .any(|event| event.kind == "cancel_requested")
+    {
+        anyhow::bail!("Tools smoke expected cancel_requested job event");
+    }
+    let retry = db.retry_job(lifecycle_job.id).await?;
+    let retry_events = db.list_job_events(retry.id).await?;
+    if !matches!(retry.status, JobStatus::Queued)
+        || !retry_events.iter().any(|event| event.kind == "retry_of")
+    {
+        anyhow::bail!("Tools smoke expected retry job to remain queued with retry_of event");
+    }
+    println!(
+        "   OK: cancelled job={} and queued retry={}",
+        lifecycle_job.id, retry.id
+    );
+
     println!("Tools smoke passed.");
     Ok(())
 }

@@ -739,6 +739,9 @@ Tasks:
 - Confirm status transitions, stdout/stderr events, provider diagnostics, usage
   observation, knowledge-base run summary, and memory run observation.
 - Retry a failed job and cancel a queued/running job.
+  First no-container smoke pass now cancels a queued disposable job, verifies
+  persisted cancellation state/events, retries it, and verifies the new queued
+  retry lineage event.
 - Add chat-visible compact action blocks for explicit agent launch, preflight,
   progress, and result artifacts.
 - First project-overlay agent form can queue explicit `/api/jobs` work from a
