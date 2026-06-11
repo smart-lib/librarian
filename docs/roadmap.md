@@ -518,7 +518,10 @@ Tasks:
   live there. Do not place chat controls in the right corner where they collide
   with the Library button.
 - Move background agent launch into explicit project actions and command blocks,
-  so agents can run without interrupting the Librarian conversation.
+  so agents can run without interrupting the Librarian conversation. Current
+  pass makes explicit `/agent ...` slash results render as chat action cards
+  with job status, technical details, and event/preflight refresh controls;
+  normal chat still never creates jobs implicitly.
 - Define and implement hierarchical project contexts: every Library node can be
   a context/project; project records should attach to Library paths without
   forcing a flat `projects/{ProjectName}` namespace; parent/child paths should
@@ -1007,7 +1010,10 @@ readiness or a later planned milestone.
   knowledge-base summary, retry source. Covered by MVP Priority 6.
 - Add compact expandable action blocks in chat for command execution, task
   creation, agent launch, memory retrieval, scheduling decisions, and provider
-  routing.
+  routing. First agent pass returns `agent_action` metadata for `/agent list`,
+  `/agent status`, `/agent events`, `/agent preflight`, `/agent launch`,
+  `/agent cancel`, and `/agent retry`; the chat UI renders it as a compact
+  card and restores it from chat history.
 - Replace raw approval slash output with first-class chat approval cards:
   summarize the requested action in human language, show affected paths and
   risk level, and provide Approve/Reject buttons. Keep approval ids available

@@ -591,6 +591,15 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .message.approval::before {
       content: "APPROVAL";
     }
+    .message.agent-card {
+      border-color: rgba(123, 177, 255, .42);
+      background: linear-gradient(180deg, rgba(123, 177, 255, .13), rgba(112, 220, 192, .045));
+      box-shadow: 0 0 28px rgba(123, 177, 255, .10);
+    }
+    .message.agent-card::before {
+      content: "AGENT";
+      color: var(--accent-2);
+    }
     .message blockquote,
     .message .quote {
       margin: 10px 0;
@@ -678,6 +687,20 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       margin-top: 10px;
       color: var(--muted);
       font-size: 13px;
+    }
+    .agent-event-list {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 11.5px;
+    }
+    .agent-event-list div {
+      padding: 7px 9px;
+      border: 1px solid rgba(123,177,255,.14);
+      border-radius: 8px;
+      background: rgba(0,0,0,.18);
     }
     .thinking-dots {
       display: inline-flex;
@@ -1511,6 +1534,66 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         });
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
       }
+      function agentJobFromUi(ui) {
+        return ui?.job || (Array.isArray(ui?.jobs) ? ui.jobs[0] : null) || null;
+      }
+      function agentJobStatus(job) {
+        return job?.status || job?.state || job?.status_label || 'Queued';
+      }
+      function setAgentActionCard(article, ui, fallbackText, detail) {
+        const job = agentJobFromUi(ui);
+        const jobId = ui?.job_id || job?.id || '';
+        const command = ui?.command || 'agent';
+        const status = ui?.status || (job ? agentJobStatus(job) : 'ready');
+        const project = ui?.project || job?.project_name || job?.project || '';
+        const goal = ui?.goal || job?.goal || fallbackText || '';
+        const title = command === 'launch' || command === 'queue'
+          ? 'Background agent queued'
+          : command === 'preflight'
+            ? 'Agent preflight'
+            : command === 'list'
+              ? 'Agent jobs'
+              : 'Agent action';
+        const rows = [];
+        if (project) rows.push(`Project: ${project}`);
+        if (jobId) rows.push(`Job: ${jobId}`);
+        if (goal) rows.push(`Goal: ${goal}`);
+        if (Array.isArray(ui?.jobs)) rows.push(`Jobs shown: ${ui.jobs.length}`);
+        article.className = 'message assistant agent-card';
+        article.innerHTML = `
+          <div class="approval-head"><span>${htmlEscape(title)}</span><span class="approval-risk">${htmlEscape(status)}</span></div>
+          <div class="approval-summary">${htmlEscape(goal || fallbackText || 'Agent command completed.')}</div>
+          <div class="approval-paths">${rows.length ? rows.map(row => `<div>${htmlEscape(row)}</div>`).join('') : '<div>No job metadata returned.</div>'}</div>
+          <div class="approval-actions">
+            ${jobId ? '<button type="button" data-agent-events>Refresh events</button>' : ''}
+            ${jobId ? '<button type="button" data-agent-preflight>Preflight</button>' : ''}
+          </div>
+          <div class="agent-event-list" data-agent-event-list hidden></div>
+          <details><summary>Technical details</summary><pre>${htmlEscape(JSON.stringify(ui, null, 2))}</pre></details>
+        `;
+        if (detail) {
+          const small = document.createElement('small');
+          small.textContent = detail;
+          article.appendChild(small);
+        }
+        const eventList = article.querySelector('[data-agent-event-list]');
+        async function loadAgentEvents(runPreflight) {
+          if (!jobId) return;
+          if (runPreflight) {
+            await fetch(`/api/jobs/${encodeURIComponent(jobId)}/preflight`, { method: 'POST' }).catch(() => {});
+          }
+          const events = await loadJson(`/api/jobs/${encodeURIComponent(jobId)}/events`, []);
+          eventList.hidden = false;
+          const recent = Array.isArray(events) ? events.slice(-5).reverse() : [];
+          eventList.innerHTML = recent.length
+            ? recent.map(event => `<div>${htmlEscape(`${event.created_at || ''} ${event.kind || 'event'} ${JSON.stringify(event.payload || {})}`)}</div>`).join('')
+            : '<div>No events yet.</div>';
+          el('chat-log').scrollTop = el('chat-log').scrollHeight;
+        }
+        article.querySelector('[data-agent-events]')?.addEventListener('click', () => loadAgentEvents(false));
+        article.querySelector('[data-agent-preflight]')?.addEventListener('click', () => loadAgentEvents(true));
+        el('chat-log').scrollTop = el('chat-log').scrollHeight;
+      }
       async function decideApproval(article, approvalId, decision) {
         if (!approvalId) return;
         const buttons = Array.from(article.querySelectorAll('[data-approval-decision]'));
@@ -1644,6 +1727,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             setApprovalCard(article, turn.metadata.ui.approval, turn.content, assistantName());
           } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'context_switch') {
             setContextSwitchCard(article, turn.metadata.ui, assistantName());
+          } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'agent_action') {
+            setAgentActionCard(article, turn.metadata.ui, turn.content, assistantName());
           }
         }
         if (!transcript.turns.length && announce) {
@@ -2900,6 +2985,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             setMessage(pending, data.reply || 'Context updated.', detail, data.ui.context?.label || contextLabelFromProjects(nodes));
           } else if (data.ui?.type === 'approval') {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
+          } else if (data.ui?.type === 'agent_action') {
+            setAgentActionCard(pending, data.ui, data.reply || 'Agent action completed.', detail);
           } else {
             if (data.mode === 'slash-command') pending.className = 'message system command';
             setMessage(pending, data.reply || 'I am here.', detail, data.context_label || contextLabel);
@@ -5663,6 +5750,61 @@ pub async fn run_approval_ui_smoke(config: &Config) -> Result<()> {
     Ok(())
 }
 
+pub async fn run_agent_action_ui_smoke(config: &Config, name: &str) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+    let workspace_dir = config
+        .home
+        .join("Projects")
+        .join(format!("_smoke/agent-action-ui/{name}"));
+    std::fs::create_dir_all(&workspace_dir).map_err(|error| {
+        anyhow::anyhow!("Failed to create {}: {error}", workspace_dir.display())
+    })?;
+    let workspace_dir = workspace_dir.canonicalize().map_err(|error| {
+        anyhow::anyhow!("Failed to resolve {}: {error}", workspace_dir.display())
+    })?;
+    let project_name = format!("Agent Action UI {name}");
+    let project = db.add_project(&project_name, &workspace_dir).await?;
+    let state = AppState {
+        db: db.clone(),
+        config: Arc::new(RwLock::new(config.clone())),
+    };
+    let result = execute_agent_slash_command(
+        &state,
+        config,
+        &[
+            "launch".to_string(),
+            project.name.clone(),
+            "summarize smoke action card".to_string(),
+            "--provider".to_string(),
+            "codex".to_string(),
+            "--read-only".to_string(),
+            "--yes".to_string(),
+        ],
+    )
+    .await?;
+    let ui = result
+        .ui
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Agent action UI smoke expected UI metadata"))?;
+    if ui.get("type").and_then(serde_json::Value::as_str) != Some("agent_action") {
+        anyhow::bail!("Agent action UI smoke expected an agent_action payload");
+    }
+    if ui.get("job").is_none() {
+        anyhow::bail!("Agent action UI smoke expected queued job metadata");
+    }
+    let jobs = db.list_jobs().await?;
+    let matching = jobs
+        .iter()
+        .filter(|job| job.project_id == project.id && job.goal == "summarize smoke action card")
+        .count();
+    if matching != 1 {
+        anyhow::bail!("Agent action UI smoke expected exactly one queued job, got {matching}");
+    }
+    Ok(())
+}
+
 fn parse_context_scope(value: &str) -> Result<ContextScope> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "node" | "current" => Ok(ContextScope::Node),
@@ -6779,6 +6921,43 @@ fn slash_reply_with_ui(
         mode: "slash-command",
         ui: Some(ui),
     }
+}
+
+fn agent_action_ui(command: &str, trace: &serde_json::Value) -> serde_json::Value {
+    let mut ui = serde_json::json!({
+        "type": "agent_action",
+        "command": command,
+    });
+    if let Some(value) = trace.get("status") {
+        ui["status"] = value.clone();
+    }
+    if let Some(value) = trace.get("job") {
+        ui["job"] = value.clone();
+    }
+    if let Some(value) = trace.get("jobs") {
+        ui["jobs"] = value.clone();
+    }
+    if let Some(value) = trace.get("job_id") {
+        ui["job_id"] = value.clone();
+    }
+    if let Some(value) = trace.get("source_job_id") {
+        ui["source_job_id"] = value.clone();
+    }
+    if let Some(value) = trace.get("project") {
+        ui["project"] = value.clone();
+    }
+    if let Some(value) = trace.get("report") {
+        ui["report"] = value.clone();
+    }
+    if let Some(value) = trace.get("events") {
+        ui["events"] = value.clone();
+    }
+    ui
+}
+
+fn agent_slash_reply(reply: &str, command: &str, trace: serde_json::Value) -> LibrarianChatResult {
+    let ui = agent_action_ui(command, &trace);
+    slash_reply_with_ui(reply, trace, ui)
 }
 
 fn slash_help() -> &'static str {
@@ -8980,8 +9159,9 @@ async fn execute_agent_slash_command(
             for job in jobs.iter().take(limit) {
                 reply.push_str(&format!("\n{}", format_job_summary(job)));
             }
-            slash_reply(
+            agent_slash_reply(
                 &reply,
+                &command,
                 serde_json::json!({
                     "tool": "agent",
                     "command": command,
@@ -8992,8 +9172,9 @@ async fn execute_agent_slash_command(
         "status" => {
             let job_id = slash_job_id_arg(args, "/agent status <job-id>")?;
             let job = state.db.get_job(job_id).await?;
-            slash_reply(
+            agent_slash_reply(
                 &format_job_summary(&job),
+                &command,
                 serde_json::json!({ "tool": "agent", "command": command, "job": job }),
             )
         }
@@ -9009,8 +9190,9 @@ async fn execute_agent_slash_command(
                     event.payload
                 ));
             }
-            slash_reply(
+            agent_slash_reply(
                 &reply,
+                &command,
                 serde_json::json!({
                     "tool": "agent",
                     "command": command,
@@ -9022,11 +9204,12 @@ async fn execute_agent_slash_command(
         "preflight" => {
             let job_id = slash_job_id_arg(args, "/agent preflight <job-id>")?;
             let report = worker::preflight_job(config.clone(), state.db.clone(), job_id).await?;
-            slash_reply(
+            agent_slash_reply(
                 &format!(
                     "Preflight for job {job_id}:\n\n{}",
                     serde_json::to_string_pretty(&report)?
                 ),
+                &command,
                 serde_json::json!({
                     "tool": "agent",
                     "command": command,
@@ -9045,8 +9228,9 @@ async fn execute_agent_slash_command(
             .await?;
             let request = parse_agent_launch_args(&args[1..])?;
             if !request.confirmed {
-                return Ok(slash_reply(
+                return Ok(agent_slash_reply(
                     "Agent launch requires explicit confirmation. Use: /agent launch <project> <goal> --yes",
+                    &command,
                     serde_json::json!({
                         "tool": "agent",
                         "command": command,
@@ -9110,16 +9294,18 @@ async fn execute_agent_slash_command(
                     }),
                 )
                 .await?;
-            slash_reply(
+            agent_slash_reply(
                 &format!(
                     "Queued background agent job.\n{}\n\nRun `librarian worker --once` or keep a worker running to execute it.",
                     format_job_summary(&job)
                 ),
+                &command,
                 serde_json::json!({
                     "tool": "agent",
                     "command": command,
                     "job": job,
                     "project": project.name,
+                    "goal": request.goal,
                 }),
             )
         }
@@ -9133,8 +9319,9 @@ async fn execute_agent_slash_command(
             .await?;
             let job_id = slash_job_id_arg(args, "/agent cancel <job-id> --yes")?;
             if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
-                return Ok(slash_reply(
+                return Ok(agent_slash_reply(
                     "Cancel changes job state. Use: /agent cancel <job-id> --yes",
+                    &command,
                     serde_json::json!({
                         "tool": "agent",
                         "command": command,
@@ -9144,8 +9331,9 @@ async fn execute_agent_slash_command(
                 ));
             }
             state.db.request_cancel_job(job_id).await?;
-            slash_reply(
+            agent_slash_reply(
                 &format!("Cancel requested for job {job_id}."),
+                &command,
                 serde_json::json!({ "tool": "agent", "command": command, "job_id": job_id }),
             )
         }
@@ -9159,8 +9347,9 @@ async fn execute_agent_slash_command(
             .await?;
             let job_id = slash_job_id_arg(args, "/agent retry <job-id> --yes")?;
             if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
-                return Ok(slash_reply(
+                return Ok(agent_slash_reply(
                     "Retry creates a new queued job. Use: /agent retry <job-id> --yes",
+                    &command,
                     serde_json::json!({
                         "tool": "agent",
                         "command": command,
@@ -9170,8 +9359,9 @@ async fn execute_agent_slash_command(
                 ));
             }
             let retry = state.db.retry_job(job_id).await?;
-            slash_reply(
+            agent_slash_reply(
                 &format!("Queued retry job.\n{}", format_job_summary(&retry)),
+                &command,
                 serde_json::json!({
                     "tool": "agent",
                     "command": command,
@@ -10812,6 +11002,10 @@ mod tests {
                 .as_str()
                 .expect("reply")
                 .contains("Queued background agent job"));
+            assert_eq!(payload["ui"]["type"], "agent_action");
+            assert_eq!(payload["ui"]["command"], "launch");
+            assert_eq!(payload["ui"]["project"], "Launch Test");
+            assert_eq!(payload["ui"]["job"]["goal"], "summarize state");
 
             let jobs = db.list_jobs().await.expect("jobs");
             assert_eq!(jobs.len(), 1);

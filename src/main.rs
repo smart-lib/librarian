@@ -2525,6 +2525,8 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     println!("   OK: approval={} rejected", rejected.id);
     admin::run_approval_ui_smoke(config).await?;
     println!("   OK: approval proposal returns chat UI card metadata");
+    admin::run_agent_action_ui_smoke(config, &slug).await?;
+    println!("   OK: agent launch returns chat action card metadata");
 
     println!("Tools smoke passed.");
     Ok(())
