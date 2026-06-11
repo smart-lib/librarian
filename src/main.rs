@@ -2640,6 +2640,31 @@ async fn run_provider_smoke(config: &Config, require_ready: bool) -> Result<()> 
         }
     }
 
+    println!();
+    println!("Broker proxy policy:");
+    let proxy_routes = broker::provider_proxy_policy_routes();
+    for route in &proxy_routes {
+        if !broker::provider_proxy_policy_allows(route.provider, route.method, route.path) {
+            anyhow::bail!(
+                "Provider proxy policy route is listed but not allowed: {} {} /{}",
+                route.provider,
+                route.method,
+                route.path
+            );
+        }
+        println!("[OK] {} {} /{}", route.provider, route.method, route.path);
+    }
+    for (provider, method, path) in [
+        ("openrouter", "GET", "api/v1/chat/completions"),
+        ("openrouter", "POST", "api/v1/credits"),
+        ("openrouter", "POST", "api/v1/../secrets"),
+    ] {
+        if broker::provider_proxy_policy_allows(provider, method, path) {
+            anyhow::bail!("Provider proxy policy unexpectedly allowed {provider} {method} /{path}");
+        }
+    }
+    println!("[OK] denied unsafe OpenRouter probe paths before grant use");
+
     if require_ready && !not_ready.is_empty() {
         anyhow::bail!(
             "Provider smoke requires ready providers; not ready: {}",

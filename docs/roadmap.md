@@ -956,7 +956,9 @@ Tasks:
 - Add provider-specific proxy policies for allowed paths and HTTP methods.
   First broker pass allowlists OpenRouter `POST /api/v1/chat/completions`
   and OpenAI `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
-  while rejecting empty/traversal paths before consuming a grant.
+  while rejecting empty/traversal paths before consuming a grant. Second pass
+  exposes the policy to `smoke providers`, which now verifies listed routes and
+  denied OpenRouter probe paths without network calls or secret-grant use.
 - Keep Codex CLI as the primary chat and agent path until the basic flows work.
 - Add OpenRouter as the first API provider once chat/agent boundaries are
   stable.
@@ -992,7 +994,8 @@ Tasks:
   `librarian smoke providers`, which reports Codex/OpenRouter/Claude health
   without launching containers and can fail with `--require-ready`. Second pass
   makes `doctor` use the same shared provider diagnostics layer as the admin
-  API so CLI and UI readiness output cannot drift apart.
+  API so CLI and UI readiness output cannot drift apart. Third pass reports and
+  validates broker API-proxy allowlist routes in the same smoke command.
 - Add Claude auth bootstrap parity with Codex. First pass adds
   `librarian auth claude --enable-container-mount --claude-home <path>` so the
   saved profile path and mount flags can be configured from CLI and surfaced in

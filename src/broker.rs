@@ -12,6 +12,13 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{config::Config, db::Database, secrets};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProviderProxyPolicyRoute {
+    pub provider: &'static str,
+    pub method: &'static str,
+    pub path: &'static str,
+}
+
 #[derive(Clone)]
 struct BrokerState {
     db: Database,
@@ -116,7 +123,7 @@ fn provider_base_url(provider: &str) -> Result<&'static str> {
 fn ensure_proxy_policy(provider: &str, method: Method, path: &str) -> Result<()> {
     let normalized = normalize_proxy_path(path)?;
     let method_label = method.as_str().to_string();
-    if !proxy_policy_allows(provider, method, &normalized) {
+    if !proxy_policy_allows_normalized(provider, method, &normalized) {
         anyhow::bail!(
             "Provider proxy `{provider}` does not allow {} /{}",
             method_label,
@@ -140,7 +147,42 @@ fn normalize_proxy_path(path: &str) -> Result<String> {
     Ok(normalized)
 }
 
-fn proxy_policy_allows(provider: &str, method: Method, path: &str) -> bool {
+pub(crate) fn provider_proxy_policy_routes() -> Vec<ProviderProxyPolicyRoute> {
+    vec![
+        ProviderProxyPolicyRoute {
+            provider: "openrouter",
+            method: "POST",
+            path: "api/v1/chat/completions",
+        },
+        ProviderProxyPolicyRoute {
+            provider: "openai",
+            method: "POST",
+            path: "v1/chat/completions",
+        },
+        ProviderProxyPolicyRoute {
+            provider: "openai",
+            method: "POST",
+            path: "v1/responses",
+        },
+        ProviderProxyPolicyRoute {
+            provider: "openai",
+            method: "POST",
+            path: "v1/embeddings",
+        },
+    ]
+}
+
+pub(crate) fn provider_proxy_policy_allows(provider: &str, method: &str, path: &str) -> bool {
+    let Ok(method) = method.parse::<Method>() else {
+        return false;
+    };
+    let Ok(normalized) = normalize_proxy_path(path) else {
+        return false;
+    };
+    proxy_policy_allows_normalized(provider, method, &normalized)
+}
+
+fn proxy_policy_allows_normalized(provider: &str, method: Method, path: &str) -> bool {
     if method != Method::POST {
         return false;
     }
@@ -182,27 +224,58 @@ mod tests {
 
     #[test]
     fn proxy_policy_allows_only_expected_provider_paths() {
-        assert!(proxy_policy_allows(
+        assert!(proxy_policy_allows_normalized(
             "openrouter",
             Method::POST,
             "api/v1/chat/completions"
         ));
-        assert!(proxy_policy_allows("openai", Method::POST, "v1/responses"));
-        assert!(proxy_policy_allows("openai", Method::POST, "v1/embeddings"));
-        assert!(!proxy_policy_allows(
+        assert!(proxy_policy_allows_normalized(
+            "openai",
+            Method::POST,
+            "v1/responses"
+        ));
+        assert!(proxy_policy_allows_normalized(
+            "openai",
+            Method::POST,
+            "v1/embeddings"
+        ));
+        assert!(!proxy_policy_allows_normalized(
             "openrouter",
             Method::POST,
             "api/v1/credits"
         ));
-        assert!(!proxy_policy_allows(
+        assert!(!proxy_policy_allows_normalized(
             "openrouter",
             Method::GET,
             "api/v1/chat/completions"
         ));
-        assert!(!proxy_policy_allows(
+        assert!(!proxy_policy_allows_normalized(
             "unknown",
             Method::POST,
             "v1/chat/completions"
+        ));
+    }
+
+    #[test]
+    fn exported_proxy_policy_matches_runtime_checks() {
+        let routes = provider_proxy_policy_routes();
+        assert_eq!(routes.len(), 4);
+        for route in routes {
+            assert!(provider_proxy_policy_allows(
+                route.provider,
+                route.method,
+                route.path
+            ));
+        }
+        assert!(!provider_proxy_policy_allows(
+            "openrouter",
+            "GET",
+            "api/v1/chat/completions"
+        ));
+        assert!(!provider_proxy_policy_allows(
+            "openrouter",
+            "POST",
+            "api/v1/../secrets"
         ));
     }
 

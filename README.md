@@ -178,8 +178,10 @@ Run provider health diagnostics without launching containers:
 librarian --home "$HOME/Librarian" smoke providers
 ```
 
-Add `--require-ready` when you want the command to fail if any configured
-provider is not ready.
+This also verifies the local API-proxy allowlist, including the OpenRouter and
+OpenAI routes that can be used through the broker without exposing raw secrets
+to agent containers. Add `--require-ready` when you want the command to fail if
+any configured provider is not ready.
 
 The same broad local/preflight smoke suite can also run through doctor:
 
