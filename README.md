@@ -103,7 +103,22 @@ From Windows with WSL2, open:
 http://127.0.0.1:17377
 ```
 
-Run the MVP integration smoke test with one command:
+Run the broad local/preflight smoke suite with one command:
+
+```bash
+librarian --home "$HOME/Librarian" smoke all --provider codex
+```
+
+This runs provider diagnostics, context/tree memory checks, Library/Projects
+tool checks, approval persistence, and the MVP provider preflight. Add
+`--run-agent` when you want the final MVP step to call the real provider in the
+agent container:
+
+```bash
+librarian --home "$HOME/Librarian" smoke all --provider codex --run-agent
+```
+
+Run only the MVP integration smoke test:
 
 ```bash
 librarian --home "$HOME/Librarian" smoke mvp --provider codex --run-agent

@@ -224,6 +224,22 @@ enum RuntimeCommand {
 
 #[derive(Debug, Subcommand)]
 enum SmokeCommand {
+    All {
+        #[arg(long, value_enum, default_value_t = ProviderArg::Codex)]
+        provider: ProviderArg,
+        #[arg(long)]
+        run_agent: bool,
+        #[arg(long)]
+        allow_network: bool,
+        #[arg(long)]
+        secret_grant_token: Option<String>,
+        #[arg(long)]
+        secret: Option<String>,
+        #[arg(long, default_value = "LibrarianSmoke")]
+        name: String,
+        #[arg(long)]
+        require_providers_ready: bool,
+    },
     Mvp {
         #[arg(long, value_enum, default_value_t = ProviderArg::Codex)]
         provider: ProviderArg,
@@ -840,6 +856,28 @@ async fn main() -> Result<()> {
             }
         },
         Command::Smoke { command } => match command {
+            SmokeCommand::All {
+                provider,
+                run_agent,
+                allow_network,
+                secret_grant_token,
+                secret,
+                name,
+                require_providers_ready,
+            } => {
+                let provider = provider.into();
+                run_all_smoke(
+                    &config,
+                    provider,
+                    run_agent,
+                    allow_network,
+                    secret_grant_token.as_deref(),
+                    secret.as_deref(),
+                    &name,
+                    require_providers_ready,
+                )
+                .await?;
+            }
             SmokeCommand::Mvp {
                 provider,
                 run_agent,
@@ -1869,7 +1907,11 @@ fn print_runtime_smoke_plan(config: &Config, project: &str) {
     };
     println!("Librarian runtime smoke plan");
     println!();
-    println!("One-command MVP smoke:");
+    println!("One-command broad smoke:");
+    println!("   {binary} --home \"{home}\" smoke all --provider codex");
+    println!("   {binary} --home \"{home}\" smoke all --provider codex --run-agent");
+    println!();
+    println!("Focused MVP smoke:");
     println!("   {binary} --home \"{home}\" smoke mvp --provider codex --run-agent");
     println!();
     println!("Local tool smoke without provider calls:");
@@ -1905,6 +1947,57 @@ fn print_runtime_smoke_plan(config: &Config, project: &str) {
     println!();
     println!("Admin UI during the smoke:");
     println!("   {binary} --home \"{home}\" admin --bind 0.0.0.0:17377");
+}
+
+async fn run_all_smoke(
+    config: &Config,
+    provider: ProviderKind,
+    run_agent: bool,
+    allow_network: bool,
+    secret_grant_token: Option<&str>,
+    secret_ref: Option<&str>,
+    name: &str,
+    require_providers_ready: bool,
+) -> Result<()> {
+    println!("Librarian full smoke");
+    println!("  root: {}", config.home.display());
+    println!("  provider: {}", router::provider_name(&provider));
+    println!(
+        "  mode: providers + context + tools + mvp{}",
+        if run_agent {
+            " + real agent run"
+        } else {
+            " preflight"
+        }
+    );
+    println!();
+
+    println!("== Provider diagnostics ==");
+    run_provider_smoke(config, require_providers_ready).await?;
+    println!();
+
+    println!("== Context/tree memory ==");
+    run_context_smoke(config, &format!("{name}Context")).await?;
+    println!();
+
+    println!("== Tools and approvals ==");
+    run_tools_smoke(config, &format!("{name}Tools")).await?;
+    println!();
+
+    println!("== MVP provider flow ==");
+    run_mvp_smoke(
+        config,
+        provider,
+        run_agent,
+        allow_network,
+        secret_grant_token,
+        secret_ref,
+        name,
+    )
+    .await?;
+    println!();
+    println!("Full smoke passed.");
+    Ok(())
 }
 
 async fn run_mvp_smoke(
@@ -2174,14 +2267,15 @@ async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
         .attach_project_library_path(child.id, Path::new(&child_library))
         .await?;
 
-    let marker = format!("context smoke marker {slug}");
-    let memory_item = db
+    let child_marker = format!("context smoke child marker {slug}");
+    let parent_marker = format!("context smoke parent marker {slug}");
+    let child_memory = db
         .add_memory_item(
             Some(child.id),
             None,
             MemoryKind::Fact,
             Some("context-smoke"),
-            &format!("{marker}: child memory must be visible from parent subtree context."),
+            &format!("{child_marker}: child memory must be visible from parent subtree context."),
             Some("cli:smoke-context"),
             json!({
                 "context_path": child_library,
@@ -2190,7 +2284,23 @@ async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
             }),
         )
         .await?;
-    memory::embed_item(&db, config, &memory_item).await?;
+    memory::embed_item(&db, config, &child_memory).await?;
+    let parent_memory = db
+        .add_memory_item(
+            Some(parent.id),
+            None,
+            MemoryKind::Fact,
+            Some("context-smoke"),
+            &format!("{parent_marker}: parent memory must be visible from child ancestor context."),
+            Some("cli:smoke-context"),
+            json!({
+                "context_path": parent_library,
+                "child_context_path": child_library,
+                "scope": "context-smoke",
+            }),
+        )
+        .await?;
+    memory::embed_item(&db, config, &parent_memory).await?;
 
     let descendants = db
         .list_projects()
@@ -2208,31 +2318,81 @@ async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
         anyhow::bail!("Context smoke expected parent and child projects in subtree");
     }
 
-    let mut found = false;
+    let mut subtree_found_child = false;
     for project in descendants {
         let pack = memory::retrieve_context_with_config(
             &db,
             Some(config),
             memory::RetrievalRequest {
-                query: marker.clone(),
+                query: child_marker.clone(),
                 project_id: Some(project.id),
                 activity_id: None,
                 limit: memory::default_hit_limit(),
             },
         )
         .await?;
-        if pack.hits.iter().any(|hit| hit.item.id == memory_item.id) {
-            found = true;
+        if pack.hits.iter().any(|hit| hit.item.id == child_memory.id) {
+            subtree_found_child = true;
             break;
         }
     }
-    if !found {
+    if !subtree_found_child {
         anyhow::bail!("Context smoke did not retrieve child memory from parent subtree scan");
+    }
+
+    let parent_node_pack = memory::retrieve_context_with_config(
+        &db,
+        Some(config),
+        memory::RetrievalRequest {
+            query: child_marker.clone(),
+            project_id: Some(parent.id),
+            activity_id: None,
+            limit: memory::default_hit_limit(),
+        },
+    )
+    .await?;
+    if parent_node_pack
+        .hits
+        .iter()
+        .any(|hit| hit.item.id == child_memory.id)
+    {
+        anyhow::bail!("Context smoke node-only parent retrieval unexpectedly found child memory");
+    }
+
+    let ancestor_ids = [child.id, parent.id];
+    let mut ancestor_found_parent = false;
+    for project_id in ancestor_ids {
+        let pack = memory::retrieve_context_with_config(
+            &db,
+            Some(config),
+            memory::RetrievalRequest {
+                query: parent_marker.clone(),
+                project_id: Some(project_id),
+                activity_id: None,
+                limit: memory::default_hit_limit(),
+            },
+        )
+        .await?;
+        if pack.hits.iter().any(|hit| hit.item.id == parent_memory.id) {
+            ancestor_found_parent = true;
+            break;
+        }
+    }
+    if !ancestor_found_parent {
+        anyhow::bail!("Context smoke did not retrieve parent memory from child ancestor scan");
     }
 
     println!("   OK: parent project {} ({})", parent.name, parent.id);
     println!("   OK: child project {} ({})", child.name, child.id);
-    println!("   OK: subtree memory retrieval found {}", memory_item.id);
+    println!(
+        "   OK: subtree scope found child memory {}",
+        child_memory.id
+    );
+    println!("   OK: node scope excluded child memory from parent-only retrieval");
+    println!(
+        "   OK: ancestor scope found parent memory {}",
+        parent_memory.id
+    );
     println!("Context smoke passed.");
     Ok(())
 }

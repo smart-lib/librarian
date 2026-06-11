@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.4`; bump at least the minor version when a visible
+- Current crate version: `0.2.5`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -389,7 +389,12 @@ Tasks:
 - Context/tree memory smoke now exposes `librarian smoke context`, which creates
   a disposable parent/child Library context pair, writes child memory, and
   verifies that a parent subtree scan can find the child memory without a
-  provider call.
+  provider call. Current pass also verifies node-only exclusion and child
+  ancestor lookup.
+- Broad smoke now exposes `librarian smoke all`, which runs provider
+  diagnostics, context/tree memory, tools/approval persistence, and MVP
+  provider preflight in one command. Add `--run-agent` to make the final MVP
+  step call the real provider.
 
 ## Priority 1B: Literal Project Library and Friendly Admin UX
 
@@ -884,6 +889,10 @@ Tasks:
 - Add tests for context slash commands as UI contracts. First pass covers
   `/context set <library-path>` through `/api/chat`, asserts the
   `context_update` UI payload, and verifies no background jobs are created.
+- Add tests for tree-aware context retrieval scope. Current pass verifies that
+  `node`, `subtree`, `ancestors`, `node+ancestors`, and `context-set` select the
+  expected project ids; `ancestors` now means ancestors only, while
+  `node+ancestors` includes the current node.
 - Add tests that recent transcript turns are included in the Librarian prompt.
   First pass covers prompt construction for prior user/assistant turns plus the
   new user message.

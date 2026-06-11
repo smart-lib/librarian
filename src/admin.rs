@@ -5793,7 +5793,10 @@ async fn context_project_ids_for_retrieval(
                 let include = match chat_context.scope {
                     ContextScope::Node => project_path == library_path,
                     ContextScope::Subtree => library_path_contains(library_path, project_path),
-                    ContextScope::Ancestors => library_path_contains(project_path, library_path),
+                    ContextScope::Ancestors => {
+                        project_path != library_path
+                            && library_path_contains(project_path, library_path)
+                    }
                     ContextScope::NodeAndAncestors => {
                         project_path == library_path
                             || library_path_contains(project_path, library_path)
@@ -6758,7 +6761,7 @@ fn context_update_reply(
 }
 
 fn context_slash_help() -> &'static str {
-    "Context commands live under /context:\n/context show - show the current chat context\n/context scope <node|subtree|ancestors|node+ancestors|context-set> - change memory scope\n/context set <library-path|project-name|project-id> - replace the context\n/context add <library-path|project-name|project-id> - add a context node\n/context remove <library-path|project-name|project-id> - remove a context node\n/context clear - return to global conversation"
+    "Context commands live under /context:\n/context show - show the current chat context\n/context scope <node|subtree|ancestors|node+ancestors|context-set> - change memory scope; ancestors excludes the current node, node+ancestors includes it\n/context set <library-path|project-name|project-id> - replace the context\n/context add <library-path|project-name|project-id> - add a context node\n/context remove <library-path|project-name|project-id> - remove a context node\n/context clear - return to global conversation"
 }
 
 fn library_slash_help() -> &'static str {
@@ -10181,6 +10184,107 @@ mod tests {
             assert_eq!(
                 turns[1].metadata["ui"]["context"]["nodes"][0]["library_path"],
                 "Games"
+            );
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn context_retrieval_scope_selects_expected_project_ids() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-context-scope-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let parent_workspace = config.home.join("Projects").join("Games");
+            let child_workspace = parent_workspace.join("AdvenTableDays");
+            let sibling_workspace = config.home.join("Projects").join("Tools");
+            std::fs::create_dir_all(&child_workspace).expect("child workspace");
+            std::fs::create_dir_all(&sibling_workspace).expect("sibling workspace");
+            let parent = db
+                .add_project("Games", &parent_workspace)
+                .await
+                .expect("parent");
+            let parent = db
+                .attach_project_library_path(parent.id, Path::new("Games"))
+                .await
+                .expect("parent library");
+            let child = db
+                .add_project("AdvenTableDays", &child_workspace)
+                .await
+                .expect("child");
+            let child = db
+                .attach_project_library_path(child.id, Path::new("Games/AdvenTableDays"))
+                .await
+                .expect("child library");
+            let sibling = db
+                .add_project("Tools", &sibling_workspace)
+                .await
+                .expect("sibling");
+            let _sibling = db
+                .attach_project_library_path(sibling.id, Path::new("Tools"))
+                .await
+                .expect("sibling library");
+            let node = ChatLibraryContextNode {
+                library_path: Some(PathBuf::from("Games")),
+                project: Some(parent.clone()),
+            };
+            let child_node = ChatLibraryContextNode {
+                library_path: Some(PathBuf::from("Games/AdvenTableDays")),
+                project: Some(child.clone()),
+            };
+
+            let ids_for = |scope, nodes: Vec<ChatLibraryContextNode>| {
+                let db = db.clone();
+                async move {
+                    context_project_ids_for_retrieval(
+                        &db,
+                        &ChatProjectContext {
+                            nodes,
+                            suggested_nodes: Vec::new(),
+                            scope,
+                            source: "test",
+                        },
+                    )
+                    .await
+                    .expect("ids")
+                }
+            };
+
+            fn assert_ids(mut actual: Vec<Uuid>, mut expected: Vec<Uuid>) {
+                actual.sort();
+                expected.sort();
+                assert_eq!(actual, expected);
+            }
+
+            assert_ids(
+                ids_for(ContextScope::Node, vec![node.clone()]).await,
+                vec![parent.id],
+            );
+            assert_ids(
+                ids_for(ContextScope::Subtree, vec![node.clone()]).await,
+                vec![parent.id, child.id],
+            );
+            assert_ids(
+                ids_for(ContextScope::Ancestors, vec![child_node.clone()]).await,
+                vec![parent.id],
+            );
+            assert_ids(
+                ids_for(ContextScope::NodeAndAncestors, vec![child_node.clone()]).await,
+                vec![parent.id, child.id],
+            );
+            assert_ids(
+                ids_for(
+                    ContextScope::ContextSet,
+                    vec![node.clone(), child_node.clone()],
+                )
+                .await,
+                vec![parent.id, child.id],
             );
         }
 
