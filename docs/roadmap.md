@@ -696,7 +696,9 @@ Tasks:
   markdown toggles, and position editing so the builder is usable without
   browser prompt dialogs. Current slash pass adds `/prompt update ... --yes`
   and `/prompt delete ... --yes` so edit/delete/move-style changes are
-  available from CLI and covered by `smoke tools`.
+  available from CLI and covered by `smoke tools`; `/prompt export-proposal`
+  now creates approval-card metadata for writing rendered targets into Library
+  markdown, also covered by smoke.
 - Support presets for Librarian identity, operating principles, memory policy,
   tool permissions, git policy, Obsidian/knowledge-base behavior, task planning style,
   project goals, and provider caveats. First backend pass adds

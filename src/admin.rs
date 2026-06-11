@@ -6067,6 +6067,39 @@ pub async fn run_prompt_defaults_smoke(config: &Config) -> Result<()> {
     if db.get_prompt_block(scratch.id).await.is_ok() {
         anyhow::bail!("Prompt defaults smoke expected slash delete to remove the block");
     }
+
+    let export = execute_prompt_slash_command(
+        &state,
+        config,
+        &[
+            "export-proposal".to_string(),
+            "librarian".to_string(),
+            "prompt-smoke/librarian-export.md".to_string(),
+        ],
+    )
+    .await?;
+    if export
+        .ui
+        .as_ref()
+        .and_then(|ui| ui.get("type"))
+        .and_then(serde_json::Value::as_str)
+        != Some("approval")
+    {
+        anyhow::bail!("Prompt defaults smoke expected export proposal approval UI");
+    }
+    let approval_id = export
+        .trace
+        .first()
+        .and_then(|trace| trace.get("approval"))
+        .and_then(|approval| approval.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Prompt export smoke did not return approval id"))?
+        .to_string();
+    execute_approval_slash_command(&state, config, &["approve".to_string(), approval_id]).await?;
+    let exported = library_tools::read_markdown(config, "prompt-smoke/librarian-export.md")?;
+    if !exported.contains("You are Librarian") {
+        anyhow::bail!("Prompt defaults smoke expected approved export to write rendered prompt");
+    }
     Ok(())
 }
 
@@ -8921,6 +8954,59 @@ async fn execute_prompt_slash_command(
                 serde_json::json!({ "tool": "prompt", "command": command, "block_id": id }),
             )
         }
+        "export-proposal" | "propose-export" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            if args.len() < 3 {
+                anyhow::bail!("Usage: /prompt export-proposal <target> <library-md-path>");
+            }
+            let target = args[1].trim();
+            let path = library_tools::normalize_tool_relative_path(args[2].trim())?;
+            let blocks = state.db.list_prompt_blocks(Some(target)).await?;
+            let rendered = render_prompt_blocks(&blocks);
+            let approval = state
+                .db
+                .create_tool_approval(
+                    "library",
+                    "write_markdown",
+                    serde_json::json!({
+                        "path": path,
+                        "content": rendered,
+                        "target": target,
+                        "summary": format!("Export prompt target `{target}` to Library markdown."),
+                    }),
+                )
+                .await?;
+            state
+                .db
+                .add_system_event(
+                    "tool_approval",
+                    serde_json::json!({
+                        "action": "propose_prompt_export",
+                        "source": "slash-command",
+                        "approval_id": approval.id,
+                        "target": target,
+                    }),
+                )
+                .await?;
+            slash_reply_with_ui(
+                "Review this prompt export proposal.",
+                serde_json::json!({
+                    "tool": "prompt",
+                    "command": command,
+                    "approval": approval,
+                }),
+                serde_json::json!({
+                    "type": "approval",
+                    "approval": approval,
+                }),
+            )
+        }
         "render" => {
             let target = args
                 .get(1)
@@ -9161,7 +9247,7 @@ fn render_prompt_blocks(blocks: &[crate::domain::PromptBlock]) -> String {
 }
 
 fn prompt_slash_help() -> &'static str {
-    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt seed-defaults --yes\n/prompt add-block <target> <name> <content> [--plain]\n/prompt update <block-id> [--name name] [--content content] [--position n] [--markdown|--plain] [--enable|--disable] --yes\n/prompt delete <block-id> --yes\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
+    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt seed-defaults --yes\n/prompt add-block <target> <name> <content> [--plain]\n/prompt update <block-id> [--name name] [--content content] [--position n] [--markdown|--plain] [--enable|--disable] --yes\n/prompt delete <block-id> --yes\n/prompt export-proposal <target> <library-md-path>\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
 }
 
 async fn execute_memory_slash_command(

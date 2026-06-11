@@ -166,6 +166,12 @@ librarian --home "$HOME/Librarian" prompt update <block-id> --content "New text"
 librarian --home "$HOME/Librarian" prompt delete <block-id> --yes
 ```
 
+Exporting a rendered prompt target creates an approval proposal first:
+
+```bash
+librarian --home "$HOME/Librarian" prompt export-proposal librarian prompt-exports/librarian.md
+```
+
 Run provider health diagnostics without launching containers:
 
 ```bash
