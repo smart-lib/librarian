@@ -2598,7 +2598,7 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
 
     println!("8. Exercising prompt default presets...");
     admin::run_prompt_defaults_smoke(config).await?;
-    println!("   OK: prompt seed-defaults is confirmed, idempotent, and renderable.");
+    println!("   OK: prompt seed/update/delete flows are confirmed and renderable.");
 
     println!("Tools smoke passed.");
     Ok(())

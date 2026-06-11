@@ -5990,6 +5990,83 @@ pub async fn run_prompt_defaults_smoke(config: &Config) -> Result<()> {
     if !claude.reply.contains("project-local guidance") {
         anyhow::bail!("Prompt defaults smoke expected Claude instruction preset");
     }
+
+    let scratch = db
+        .create_prompt_block("librarian", "Smoke scratch", "temporary", true)
+        .await?;
+    let update_gate = execute_prompt_slash_command(
+        &state,
+        config,
+        &[
+            "update".to_string(),
+            scratch.id.to_string(),
+            "--content".to_string(),
+            "updated scratch".to_string(),
+        ],
+    )
+    .await?;
+    if update_gate
+        .trace
+        .first()
+        .and_then(|trace| trace.get("status"))
+        .and_then(serde_json::Value::as_str)
+        != Some("needs_explicit_confirmation")
+    {
+        anyhow::bail!("Prompt defaults smoke expected update confirmation gate");
+    }
+    execute_prompt_slash_command(
+        &state,
+        config,
+        &[
+            "update".to_string(),
+            scratch.id.to_string(),
+            "--name".to_string(),
+            "Smoke scratch updated".to_string(),
+            "--content".to_string(),
+            "updated scratch".to_string(),
+            "--position".to_string(),
+            "1".to_string(),
+            "--plain".to_string(),
+            "--yes".to_string(),
+        ],
+    )
+    .await?;
+    let updated = db.get_prompt_block(scratch.id).await?;
+    if updated.name != "Smoke scratch updated"
+        || updated.content != "updated scratch"
+        || updated.markdown
+        || updated.position != 1
+    {
+        anyhow::bail!("Prompt defaults smoke expected slash update to persist fields");
+    }
+    let delete_gate = execute_prompt_slash_command(
+        &state,
+        config,
+        &["delete".to_string(), scratch.id.to_string()],
+    )
+    .await?;
+    if delete_gate
+        .trace
+        .first()
+        .and_then(|trace| trace.get("status"))
+        .and_then(serde_json::Value::as_str)
+        != Some("needs_explicit_confirmation")
+    {
+        anyhow::bail!("Prompt defaults smoke expected delete confirmation gate");
+    }
+    execute_prompt_slash_command(
+        &state,
+        config,
+        &[
+            "delete".to_string(),
+            scratch.id.to_string(),
+            "--yes".to_string(),
+        ],
+    )
+    .await?;
+    if db.get_prompt_block(scratch.id).await.is_ok() {
+        anyhow::bail!("Prompt defaults smoke expected slash delete to remove the block");
+    }
     Ok(())
 }
 
@@ -8754,6 +8831,96 @@ async fn execute_prompt_slash_command(
                 serde_json::json!({ "tool": "prompt", "command": command, "block": block }),
             )
         }
+        "update" | "edit" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            let request = parse_prompt_update_args(&args[1..])?;
+            if !request.confirmed {
+                return Ok(slash_reply(
+                    "Updating prompt blocks changes Librarian instructions. Use: /prompt update <block-id> [--name name] [--content content] [--position n] [--markdown|--plain] [--enable|--disable] --yes",
+                    serde_json::json!({
+                        "tool": "prompt",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                        "block_id": request.id,
+                    }),
+                ));
+            }
+            let block = state
+                .db
+                .update_prompt_block(
+                    request.id,
+                    request.name.as_deref(),
+                    request.content.as_deref(),
+                    request.enabled,
+                    request.position,
+                    request.markdown,
+                )
+                .await?;
+            state
+                .db
+                .add_system_event(
+                    "prompt_tool",
+                    serde_json::json!({
+                        "action": "update_block",
+                        "source": "slash-command",
+                        "block_id": block.id,
+                        "target": block.target,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!(
+                    "Updated prompt block {} [{}] {}.",
+                    block.id, block.target, block.name
+                ),
+                serde_json::json!({ "tool": "prompt", "command": command, "block": block }),
+            )
+        }
+        "delete" | "remove" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            let id = slash_prompt_block_id_arg(args, "/prompt delete <block-id> --yes")?;
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                return Ok(slash_reply(
+                    "Deleting prompt blocks changes Librarian instructions. Use: /prompt delete <block-id> --yes",
+                    serde_json::json!({
+                        "tool": "prompt",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                        "block_id": id,
+                    }),
+                ));
+            }
+            let block = state.db.get_prompt_block(id).await?;
+            state.db.delete_prompt_block(id).await?;
+            state
+                .db
+                .add_system_event(
+                    "prompt_tool",
+                    serde_json::json!({
+                        "action": "delete_block",
+                        "source": "slash-command",
+                        "block_id": id,
+                        "target": block.target,
+                    }),
+                )
+                .await?;
+            slash_reply(
+                &format!("Deleted prompt block {id}."),
+                serde_json::json!({ "tool": "prompt", "command": command, "block_id": id }),
+            )
+        }
         "render" => {
             let target = args
                 .get(1)
@@ -8790,6 +8957,16 @@ struct PromptAddBlockSlashRequest {
     markdown: bool,
 }
 
+struct PromptUpdateSlashRequest {
+    id: Uuid,
+    name: Option<String>,
+    content: Option<String>,
+    enabled: Option<bool>,
+    position: Option<i64>,
+    markdown: Option<bool>,
+    confirmed: bool,
+}
+
 fn parse_prompt_add_block_args(args: &[String]) -> Result<PromptAddBlockSlashRequest> {
     if args.len() < 3 {
         anyhow::bail!("Usage: /prompt add-block <target> <name> <content> [--plain]");
@@ -8814,6 +8991,80 @@ fn parse_prompt_add_block_args(args: &[String]) -> Result<PromptAddBlockSlashReq
         name,
         content,
         markdown,
+    })
+}
+
+fn parse_prompt_update_args(args: &[String]) -> Result<PromptUpdateSlashRequest> {
+    let id = args
+        .first()
+        .ok_or_else(|| {
+            anyhow::anyhow!("Usage: /prompt update <block-id> [--name name] [--content content] [--position n] [--markdown|--plain] [--enable|--disable] --yes")
+        })?
+        .parse::<Uuid>()
+        .map_err(|error| anyhow::anyhow!("Invalid prompt block id: {error}"))?;
+    let mut name = None;
+    let mut content = None;
+    let mut enabled = None;
+    let mut position = None;
+    let mut markdown = None;
+    let mut confirmed = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--name" => {
+                index += 1;
+                name = Some(
+                    args.get(index)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| anyhow::anyhow!("--name requires a value"))?
+                        .clone(),
+                );
+            }
+            "--content" => {
+                index += 1;
+                content = Some(
+                    args.get(index)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| anyhow::anyhow!("--content requires a value"))?
+                        .clone(),
+                );
+            }
+            "--position" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("--position requires a value"))?;
+                position = Some(
+                    value
+                        .parse::<i64>()
+                        .map_err(|error| anyhow::anyhow!("Invalid position `{value}`: {error}"))?,
+                );
+            }
+            "--markdown" => markdown = Some(true),
+            "--plain" => markdown = Some(false),
+            "--enable" => enabled = Some(true),
+            "--disable" => enabled = Some(false),
+            "--yes" | "--approve" => confirmed = true,
+            value => anyhow::bail!("Unknown /prompt update flag `{value}`"),
+        }
+        index += 1;
+    }
+    if name.is_none()
+        && content.is_none()
+        && enabled.is_none()
+        && position.is_none()
+        && markdown.is_none()
+    {
+        anyhow::bail!("Prompt update needs at least one changed field");
+    }
+    Ok(PromptUpdateSlashRequest {
+        id,
+        name,
+        content,
+        enabled,
+        position,
+        markdown,
+        confirmed,
     })
 }
 
@@ -8910,7 +9161,7 @@ fn render_prompt_blocks(blocks: &[crate::domain::PromptBlock]) -> String {
 }
 
 fn prompt_slash_help() -> &'static str {
-    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt seed-defaults --yes\n/prompt add-block <target> <name> <content> [--plain]\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
+    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt seed-defaults --yes\n/prompt add-block <target> <name> <content> [--plain]\n/prompt update <block-id> [--name name] [--content content] [--position n] [--markdown|--plain] [--enable|--disable] --yes\n/prompt delete <block-id> --yes\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
 }
 
 async fn execute_memory_slash_command(

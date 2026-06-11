@@ -158,6 +158,14 @@ and AGENTS.md:
 librarian --home "$HOME/Librarian" prompt seed-defaults --yes
 ```
 
+Prompt blocks can also be edited from the CLI, with explicit confirmation for
+mutating operations:
+
+```bash
+librarian --home "$HOME/Librarian" prompt update <block-id> --content "New text" --yes
+librarian --home "$HOME/Librarian" prompt delete <block-id> --yes
+```
+
 Run provider health diagnostics without launching containers:
 
 ```bash

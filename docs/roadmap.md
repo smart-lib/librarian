@@ -694,7 +694,9 @@ Tasks:
   moves, and export proposals that create approvals instead of writing files
   directly. Third UI pass groups blocks by target, adds inline textarea editing,
   markdown toggles, and position editing so the builder is usable without
-  browser prompt dialogs.
+  browser prompt dialogs. Current slash pass adds `/prompt update ... --yes`
+  and `/prompt delete ... --yes` so edit/delete/move-style changes are
+  available from CLI and covered by `smoke tools`.
 - Support presets for Librarian identity, operating principles, memory policy,
   tool permissions, git policy, Obsidian/knowledge-base behavior, task planning style,
   project goals, and provider caveats. First backend pass adds
