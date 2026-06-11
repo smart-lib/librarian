@@ -552,7 +552,10 @@ Tasks:
   low-level management out of the atlas canvas.
 - When Librarian is launched from a directory that is not already known as a
   root or project, ask whether to register that directory as a working project
-  and create/link the corresponding library folder.
+  and create/link the corresponding library folder. First diagnostic pass adds
+  doctor launch-context registration hints: internal Librarian folders and
+  registered workspaces are accepted, while unknown workspace folders warn with
+  a ready `project add` command; `smoke tools` covers both classifications.
 - Capture the launched-from-unknown-folder behavior as a default reusable
   agent-instruction block once the visual instruction builder exists.
 

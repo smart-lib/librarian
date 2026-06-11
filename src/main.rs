@@ -34,7 +34,7 @@ use config::Config;
 use db::Database;
 use docker_runner::DockerRunner;
 use domain::{
-    JobStatus, MemoryKind, MountMode, ProviderKind, ScheduleKind, ScheduleStatus,
+    JobStatus, MemoryKind, MountMode, Project, ProviderKind, ScheduleKind, ScheduleStatus,
     ToolApprovalStatus,
 };
 use secrets::SecretVault;
@@ -2564,6 +2564,33 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
         lifecycle_job.id, retry.id
     );
 
+    println!("6. Exercising launch-context registration hints...");
+    let projects = db.list_projects().await?;
+    let known_context = launch_context_registration_check_for(config, &projects, &workspace_path);
+    if known_context.severity != DoctorSeverity::Ok {
+        anyhow::bail!("Tools smoke expected registered workspace launch context to be OK");
+    }
+    let unknown_context_dir = config
+        .home
+        .join("Projects")
+        .join("_smoke")
+        .join("launch-context")
+        .join(&slug);
+    fs::create_dir_all(&unknown_context_dir)?;
+    let unknown_context =
+        launch_context_registration_check_for(config, &projects, &unknown_context_dir);
+    if unknown_context.severity != DoctorSeverity::Warn
+        || unknown_context
+            .next_step
+            .as_deref()
+            .is_none_or(|step| !step.contains("project add"))
+    {
+        anyhow::bail!(
+            "Tools smoke expected unknown launch context to warn with project add next step"
+        );
+    }
+    println!("   OK: known context is accepted; unknown context suggests registration.");
+
     println!("Tools smoke passed.");
     Ok(())
 }
@@ -2839,10 +2866,14 @@ async fn run_doctor(config: &Config) -> Result<()> {
     ];
 
     let mut provider_states = Vec::new();
-    checks.push(match Database::connect(config).await {
+    let sqlite_check = match Database::connect(config).await {
         Ok(db) => match db.migrate().await {
             Ok(()) => {
                 provider_states = db.list_provider_states().await.unwrap_or_default();
+                checks.push(launch_context_registration_check(
+                    config,
+                    &db.list_projects().await?,
+                ));
                 DoctorCheck::ok(
                     "sqlite",
                     format!("opened and migrated {}", config.database_path.display()),
@@ -2859,7 +2890,8 @@ async fn run_doctor(config: &Config) -> Result<()> {
             format!("could not open {}: {error}", config.database_path.display()),
             "Check LIBRARIAN_HOME and file permissions, then rerun `librarian init`.",
         ),
-    });
+    };
+    checks.push(sqlite_check);
 
     checks.push(runtime_check("container runtime", config, &["--version"]).await);
     checks.push(runtime_check("runtime engine", config, &["info"]).await);
@@ -2921,6 +2953,114 @@ async fn run_doctor(config: &Config) -> Result<()> {
     print_doctor_next_steps(color_enabled, &checks, config);
 
     Ok(())
+}
+
+fn launch_context_registration_check(config: &Config, projects: &[Project]) -> DoctorCheck {
+    match std::env::current_dir() {
+        Ok(path) => launch_context_registration_check_for(config, projects, &path),
+        Err(error) => DoctorCheck::warn(
+            "launch context registration",
+            format!("could not inspect current directory: {error}"),
+            "Run Librarian from the directory you want to use as context, or pass an explicit project path.",
+        ),
+    }
+}
+
+fn launch_context_registration_check_for(
+    config: &Config,
+    projects: &[Project],
+    cwd: &Path,
+) -> DoctorCheck {
+    let cwd = normalized_existing_path(cwd);
+    let home = normalized_existing_path(&config.home);
+    let app = home.join(".app");
+    let cfg = home.join(".cfg");
+    let mdb = home.join(".mdb");
+    let library = normalized_existing_path(&config.vault_path);
+    let projects_root = home.join("Projects");
+
+    if path_eq_or_within(&cwd, &home) && !path_eq_or_within(&cwd, &projects_root)
+        || paths_equivalent(&cwd, &projects_root)
+    {
+        return DoctorCheck::ok(
+            "launch context registration",
+            format!(
+                "{} is inside Librarian root/internal storage",
+                cwd.display()
+            ),
+        );
+    }
+    if path_eq_or_within(&cwd, &app)
+        || path_eq_or_within(&cwd, &cfg)
+        || path_eq_or_within(&cwd, &mdb)
+        || path_eq_or_within(&cwd, &library)
+    {
+        return DoctorCheck::ok(
+            "launch context registration",
+            format!(
+                "{} is Librarian-managed context, not a new workspace",
+                cwd.display()
+            ),
+        );
+    }
+    if let Some(project) = projects
+        .iter()
+        .find(|project| path_eq_or_within(&cwd, &normalized_existing_path(&project.path)))
+    {
+        return DoctorCheck::ok(
+            "launch context registration",
+            format!(
+                "{} is already covered by project `{}`",
+                cwd.display(),
+                project.name
+            ),
+        );
+    }
+
+    let name = cwd
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Imported Project");
+    DoctorCheck::warn(
+        "launch context registration",
+        format!("{} is not registered as a Librarian project", cwd.display()),
+        format!(
+            "Register it when you want agents to use this folder: {} project add {} --name {}",
+            doctor_command_prefix(config),
+            shell_path(&cwd),
+            shell_word(&humanize_project_name(name))
+        ),
+    )
+}
+
+fn normalized_existing_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_eq_or_within(path: &Path, parent: &Path) -> bool {
+    paths_equivalent(path, parent) || path.starts_with(parent)
+}
+
+fn humanize_project_name(name: &str) -> String {
+    let mut output = String::new();
+    let mut previous_was_separator = true;
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            if previous_was_separator && !output.is_empty() {
+                output.push(' ');
+            }
+            output.push(character);
+            previous_was_separator = false;
+        } else {
+            previous_was_separator = true;
+        }
+    }
+    if output.trim().is_empty() {
+        "Imported Project".to_string()
+    } else {
+        output
+    }
 }
 
 fn print_doctor_next_steps(color_enabled: bool, checks: &[DoctorCheck], config: &Config) {
