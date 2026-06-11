@@ -300,10 +300,23 @@ enum ProjectCommand {
 #[derive(Debug, Subcommand)]
 enum JobsCommand {
     List,
-    Events { job_id: uuid::Uuid },
-    Preflight { job_id: uuid::Uuid },
-    Cancel { job_id: uuid::Uuid },
-    Retry { job_id: uuid::Uuid },
+    Events {
+        job_id: uuid::Uuid,
+    },
+    Preflight {
+        job_id: uuid::Uuid,
+    },
+    Review {
+        job_id: uuid::Uuid,
+        #[arg(long)]
+        run_tests: bool,
+    },
+    Cancel {
+        job_id: uuid::Uuid,
+    },
+    Retry {
+        job_id: uuid::Uuid,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1193,6 +1206,10 @@ async fn main() -> Result<()> {
                 }
                 JobsCommand::Preflight { job_id } => {
                     let report = worker::preflight_job(config.clone(), db.clone(), job_id).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                JobsCommand::Review { job_id, run_tests } => {
+                    let report = review_job_changes(&db, job_id, run_tests).await?;
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 }
                 JobsCommand::Cancel { job_id } => {
@@ -2424,6 +2441,20 @@ async fn run_self_host_smoke(
         job.id
     );
 
+    println!("4. Recording self-host review snapshot...");
+    let review = review_job_changes(&db, job.id, false).await?;
+    println!(
+        "   OK: has_changes={} recommendation={}",
+        review
+            .get("has_worktree_changes")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        review
+            .get("recommendation")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+    );
+
     if !run_agent {
         println!();
         println!("Self-host preflight passed.");
@@ -2436,7 +2467,7 @@ async fn run_self_host_smoke(
         return Ok(());
     }
 
-    println!("4. Running the selected provider in the agent container...");
+    println!("5. Running the selected provider in the agent container...");
     worker::run_job_by_id(config.clone(), db.clone(), job.id).await?;
     let job = db.get_job(job.id).await?;
     println!("   status: {:?}", job.status);
@@ -2445,6 +2476,114 @@ async fn run_self_host_smoke(
     }
     println!("Self-host smoke passed.");
     Ok(())
+}
+
+async fn review_job_changes(
+    db: &Database,
+    job_id: uuid::Uuid,
+    run_tests: bool,
+) -> Result<serde_json::Value> {
+    let job = db.get_job(job_id).await?;
+    let project = db.get_project_by_id(job.project_id).await?;
+    let project_path = project
+        .path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project.path.display()))?;
+    let git_status = run_project_command(&project_path, "git", &["status", "--short"]).await?;
+    let git_diff_stat = run_project_command(&project_path, "git", &["diff", "--stat"]).await?;
+    let git_diff_name_status =
+        run_project_command(&project_path, "git", &["diff", "--name-status"]).await?;
+    let staged_diff_stat =
+        run_project_command(&project_path, "git", &["diff", "--cached", "--stat"]).await?;
+    let has_worktree_changes = !git_status.stdout.trim().is_empty();
+    let cargo_manifest = project_path.join("Cargo.toml");
+    let test_result = if run_tests {
+        if cargo_manifest.exists() {
+            Some(run_project_command(&project_path, "cargo", &["test", "--quiet"]).await?)
+        } else {
+            Some(ProjectCommandOutput {
+                command: "cargo test --quiet".to_string(),
+                status: None,
+                success: false,
+                stdout: String::new(),
+                stderr: format!(
+                    "Skipped: {} does not exist",
+                    user_facing_path(&cargo_manifest).display()
+                ),
+            })
+        }
+    } else {
+        None
+    };
+    let tests_ok = test_result
+        .as_ref()
+        .map(|result| result.success)
+        .unwrap_or(false);
+    let recommendation = if run_tests && !tests_ok {
+        "tests_failed_or_missing"
+    } else if has_worktree_changes {
+        "review_diff_before_commit"
+    } else {
+        "no_worktree_changes"
+    };
+    let report = json!({
+        "job_id": job.id,
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "path": user_facing_path(&project_path),
+        },
+        "run_tests": run_tests,
+        "has_worktree_changes": has_worktree_changes,
+        "recommendation": recommendation,
+        "git": {
+            "status": git_status,
+            "diff_stat": git_diff_stat,
+            "diff_name_status": git_diff_name_status,
+            "staged_diff_stat": staged_diff_stat,
+        },
+        "tests": test_result,
+    });
+    db.add_job_event(job.id, "review", report.clone()).await?;
+    Ok(report)
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ProjectCommandOutput {
+    command: String,
+    status: Option<i32>,
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+async fn run_project_command(
+    project_path: &Path,
+    command: &str,
+    args: &[&str],
+) -> Result<ProjectCommandOutput> {
+    let output = TokioCommand::new(command)
+        .args(args)
+        .current_dir(project_path)
+        .output()
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to run `{}` in {}",
+                command,
+                user_facing_path(project_path).display()
+            )
+        })?;
+    Ok(ProjectCommandOutput {
+        command: std::iter::once(command)
+            .chain(args.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" "),
+        status: output.status.code(),
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    })
 }
 
 async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {

@@ -1101,6 +1101,10 @@ readiness or a later planned milestone.
   managed project, verifies context memory retrieval, and prepares a read-only
   self-host agent job; `--run-agent` performs the real provider call.
 - Add richer structured parsing for provider responses and CLI error formats.
+- Add a stronger agent patch review loop before self-hosted write/commit
+  cycles. First CLI pass adds `jobs review <job-id> [--run-tests]`, which
+  records git status, diff summary, staged diff summary, optional Cargo test
+  output, and a recommendation as a job event.
 - Add estimated-cost reservation before dispatch once provider adapters can
   predict request cost, so budget checks can account for the pending run instead
   of only already-observed `cost_usd`.

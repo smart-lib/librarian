@@ -213,6 +213,12 @@ librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD"
 
 Add `--run-agent` to run the real read-only provider call after preflight.
 
+Review a job's project worktree before approving follow-up work or commits:
+
+```bash
+librarian --home "$HOME/Librarian" jobs review <job-id> --run-tests
+```
+
 API-proxy providers such as OpenRouter can use the same smoke runner after a
 secret grant exists:
 
