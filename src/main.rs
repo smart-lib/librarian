@@ -311,6 +311,11 @@ enum JobsCommand {
         #[arg(long)]
         run_tests: bool,
     },
+    Gate {
+        job_id: uuid::Uuid,
+        #[arg(long, value_enum)]
+        action: GitGateActionArg,
+    },
     Cancel {
         job_id: uuid::Uuid,
     },
@@ -522,6 +527,12 @@ enum ProviderArg {
     Codex,
     OpenRouter,
     ClaudeCode,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum GitGateActionArg {
+    Commit,
+    Push,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -1210,6 +1221,10 @@ async fn main() -> Result<()> {
                 }
                 JobsCommand::Review { job_id, run_tests } => {
                     let report = review_job_changes(&db, job_id, run_tests).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                JobsCommand::Gate { job_id, action } => {
+                    let report = gate_job_git_action(&db, job_id, action).await?;
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 }
                 JobsCommand::Cancel { job_id } => {
@@ -2455,6 +2470,19 @@ async fn run_self_host_smoke(
             .unwrap_or("unknown")
     );
 
+    println!("5. Checking commit policy gate...");
+    let gate = gate_job_git_action(&db, job.id, GitGateActionArg::Commit).await?;
+    println!(
+        "   OK: allowed={} blockers={}",
+        gate.get("allowed")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        gate.get("blockers")
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0)
+    );
+
     if !run_agent {
         println!();
         println!("Self-host preflight passed.");
@@ -2467,7 +2495,7 @@ async fn run_self_host_smoke(
         return Ok(());
     }
 
-    println!("5. Running the selected provider in the agent container...");
+    println!("6. Running the selected provider in the agent container...");
     worker::run_job_by_id(config.clone(), db.clone(), job.id).await?;
     let job = db.get_job(job.id).await?;
     println!("   status: {:?}", job.status);
@@ -2546,6 +2574,120 @@ async fn review_job_changes(
     });
     db.add_job_event(job.id, "review", report.clone()).await?;
     Ok(report)
+}
+
+async fn gate_job_git_action(
+    db: &Database,
+    job_id: uuid::Uuid,
+    action: GitGateActionArg,
+) -> Result<serde_json::Value> {
+    let job = db.get_job(job_id).await?;
+    let project = db.get_project_by_id(job.project_id).await?;
+    let project_path = project
+        .path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project.path.display()))?;
+    let branch = run_project_command(&project_path, "git", &["branch", "--show-current"]).await?;
+    let status = run_project_command(&project_path, "git", &["status", "--short"]).await?;
+    let upstream = run_project_command(
+        &project_path,
+        "git",
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .await?;
+    let branch_name = branch.stdout.trim().to_string();
+    let dirty = !status.stdout.trim().is_empty();
+    let protected = project
+        .git_policy
+        .protected_branches
+        .iter()
+        .any(|protected| protected == &branch_name);
+    let mut blockers = Vec::new();
+    let mut warnings = Vec::new();
+
+    if branch_name.is_empty() {
+        blockers.push("detached_or_unknown_branch".to_string());
+    }
+    match action {
+        GitGateActionArg::Commit => {
+            if !project.git_policy.allow_commit {
+                blockers.push("project_policy_disallows_commit".to_string());
+            }
+            if !dirty {
+                blockers.push("no_worktree_changes_to_commit".to_string());
+            }
+        }
+        GitGateActionArg::Push => {
+            if !project.git_policy.allow_push {
+                blockers.push("project_policy_disallows_push".to_string());
+            }
+            if dirty {
+                blockers.push("worktree_has_uncommitted_changes".to_string());
+            }
+            if !upstream.success {
+                warnings.push("no_upstream_branch_detected".to_string());
+            }
+        }
+    }
+    if protected {
+        blockers.push(format!("protected_branch:{branch_name}"));
+    }
+    if let Some(pattern) = &project.git_policy.require_branch_pattern {
+        if !branch_pattern_matches(pattern, &branch_name) {
+            blockers.push(format!("branch_does_not_match_required_pattern:{pattern}"));
+        }
+    }
+
+    let allowed = blockers.is_empty();
+    let report = json!({
+        "job_id": job.id,
+        "action": match action {
+            GitGateActionArg::Commit => "commit",
+            GitGateActionArg::Push => "push",
+        },
+        "allowed": allowed,
+        "blockers": blockers,
+        "warnings": warnings,
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "path": user_facing_path(&project_path),
+            "git_policy": project.git_policy,
+        },
+        "git": {
+            "branch": branch,
+            "status": status,
+            "upstream": upstream,
+            "dirty": dirty,
+            "protected": protected,
+        },
+    });
+    db.add_job_event(job.id, "policy_gate", report.clone())
+        .await?;
+    Ok(report)
+}
+
+fn branch_pattern_matches(pattern: &str, branch: &str) -> bool {
+    fn inner(pattern: &[u8], branch: &[u8]) -> bool {
+        match pattern.split_first() {
+            None => branch.is_empty(),
+            Some((&b'*', rest)) => {
+                inner(rest, branch)
+                    || branch
+                        .split_first()
+                        .is_some_and(|(_, branch_rest)| inner(pattern, branch_rest))
+            }
+            Some((&b'?', rest)) => branch
+                .split_first()
+                .is_some_and(|(_, branch_rest)| inner(rest, branch_rest)),
+            Some((&expected, rest)) => {
+                branch.split_first().is_some_and(|(&actual, branch_rest)| {
+                    expected == actual && inner(rest, branch_rest)
+                })
+            }
+        }
+    }
+    inner(pattern.as_bytes(), branch.as_bytes())
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

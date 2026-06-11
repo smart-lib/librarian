@@ -219,6 +219,13 @@ Review a job's project worktree before approving follow-up work or commits:
 librarian --home "$HOME/Librarian" jobs review <job-id> --run-tests
 ```
 
+Check whether project git policy allows a future commit or push:
+
+```bash
+librarian --home "$HOME/Librarian" jobs gate <job-id> --action commit
+librarian --home "$HOME/Librarian" jobs gate <job-id> --action push
+```
+
 API-proxy providers such as OpenRouter can use the same smoke runner after a
 secret grant exists:
 

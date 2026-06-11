@@ -12,7 +12,8 @@ project-scoped context, prepare containerized agent jobs, mount provider
 profiles, pass prompt-builder instruction files, record job events, collect a
 worktree review snapshot, and keep run summaries in the knowledge base. That is
 enough for cautious read-only inspection tasks and small manually reviewed
-implementation tasks.
+implementation tasks. Commit/push policy can now be checked explicitly before
+any human or future automated approval step.
 
 It is not yet ready for unattended autonomous development loops. The missing
 pieces are stronger self-host smoke coverage with real provider runs, richer
@@ -37,6 +38,13 @@ Review a job's repository state before continuing:
 
 ```bash
 librarian --home "$HOME/Librarian" jobs review <job-id> --run-tests
+```
+
+Check commit/push policy gates:
+
+```bash
+librarian --home "$HOME/Librarian" jobs gate <job-id> --action commit
+librarian --home "$HOME/Librarian" jobs gate <job-id> --action push
 ```
 
 Broad local checks:
@@ -64,6 +72,8 @@ librarian --home "$HOME/Librarian" smoke providers
   and Markdown run summaries.
 - `jobs review` records git status, diff summaries, optional Cargo test output,
   and a machine-readable recommendation as a job event.
+- `jobs gate` records whether commit or push is allowed by project policy,
+  branch protection, branch pattern, dirty state, and upstream state.
 - Context retrieval supports project-scoped memory and tree-aware context
   primitives.
 - Tool permissions and approvals exist for file/project/memory/settings
@@ -78,9 +88,9 @@ librarian --home "$HOME/Librarian" smoke providers
 
 - A real containerized self-host Codex task still needs repeated validation on
   the user's target Ubuntu host.
-- Agent-written patches still need UI approval cards, commit policy enforcement,
-  and rollback guidance. CLI diff/test review now exists as the first machine
-  contract.
+- Agent-written patches still need UI approval cards and rollback guidance. CLI
+  diff/test review and commit/push policy gates now exist as machine contracts,
+  but they do not yet perform commits or pushes.
 - Automatic write tasks should require project policy gates, not only prompt
   instructions.
 - Budget/cost control is observed-spend based; estimated reservations before
@@ -101,9 +111,10 @@ Use Librarian for supervised self-development in short loops:
 2. Launch a read-only agent inspection or preflight first.
 3. Review job events and generated run summary.
 4. Run `jobs review <job-id> --run-tests`.
-5. Only then launch a narrow write task or approve follow-up work.
-6. Run `cargo test` or `doctor --smoke`.
-7. Commit manually or through an explicit approved action.
+5. Run `jobs gate <job-id> --action commit` before any commit.
+6. Only then launch a narrow write task or approve follow-up work.
+7. Run `cargo test` or `doctor --smoke`.
+8. Commit manually or through an explicit approved action.
 
 Avoid unattended multi-agent write loops until patch review, policy gates, and
 provider-specific smoke runs are stronger.
