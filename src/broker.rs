@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{
     body::Bytes,
     extract::{Path as AxumPath, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -71,6 +71,7 @@ async fn proxy_provider(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<impl IntoResponse, ApiError> {
+    ensure_proxy_policy(&provider, Method::POST, &path)?;
     let token = headers
         .get("x-librarian-grant-token")
         .and_then(|value| value.to_str().ok())
@@ -112,6 +113,47 @@ fn provider_base_url(provider: &str) -> Result<&'static str> {
     }
 }
 
+fn ensure_proxy_policy(provider: &str, method: Method, path: &str) -> Result<()> {
+    let normalized = normalize_proxy_path(path)?;
+    let method_label = method.as_str().to_string();
+    if !proxy_policy_allows(provider, method, &normalized) {
+        anyhow::bail!(
+            "Provider proxy `{provider}` does not allow {} /{}",
+            method_label,
+            normalized
+        );
+    }
+    Ok(())
+}
+
+fn normalize_proxy_path(path: &str) -> Result<String> {
+    let normalized = path.trim().trim_start_matches('/').to_ascii_lowercase();
+    if normalized.is_empty() {
+        anyhow::bail!("Provider proxy path must not be empty");
+    }
+    if normalized
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        anyhow::bail!("Provider proxy path is not allowed");
+    }
+    Ok(normalized)
+}
+
+fn proxy_policy_allows(provider: &str, method: Method, path: &str) -> bool {
+    if method != Method::POST {
+        return false;
+    }
+    match provider {
+        "openrouter" => matches!(path, "api/v1/chat/completions"),
+        "openai" => matches!(
+            path,
+            "v1/chat/completions" | "v1/responses" | "v1/embeddings"
+        ),
+        _ => false,
+    }
+}
+
 #[derive(Debug)]
 struct ApiError(anyhow::Error);
 
@@ -131,5 +173,48 @@ where
 {
     fn from(value: E) -> Self {
         Self(value.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_policy_allows_only_expected_provider_paths() {
+        assert!(proxy_policy_allows(
+            "openrouter",
+            Method::POST,
+            "api/v1/chat/completions"
+        ));
+        assert!(proxy_policy_allows("openai", Method::POST, "v1/responses"));
+        assert!(proxy_policy_allows("openai", Method::POST, "v1/embeddings"));
+        assert!(!proxy_policy_allows(
+            "openrouter",
+            Method::POST,
+            "api/v1/credits"
+        ));
+        assert!(!proxy_policy_allows(
+            "openrouter",
+            Method::GET,
+            "api/v1/chat/completions"
+        ));
+        assert!(!proxy_policy_allows(
+            "unknown",
+            Method::POST,
+            "v1/chat/completions"
+        ));
+    }
+
+    #[test]
+    fn proxy_path_normalization_rejects_traversal_and_empty_segments() {
+        assert_eq!(
+            normalize_proxy_path("/API/v1/chat/completions").expect("path"),
+            "api/v1/chat/completions"
+        );
+        assert!(normalize_proxy_path("").is_err());
+        assert!(normalize_proxy_path("api//v1/chat/completions").is_err());
+        assert!(normalize_proxy_path("api/v1/../secrets").is_err());
+        assert!(ensure_proxy_policy("openrouter", Method::POST, "api/v1/credits").is_err());
     }
 }

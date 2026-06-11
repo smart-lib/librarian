@@ -954,6 +954,9 @@ Tasks:
   --run-agent` carry an existing grant into the same disposable project and
   preflight/run flow used by Codex and Claude.
 - Add provider-specific proxy policies for allowed paths and HTTP methods.
+  First broker pass allowlists OpenRouter `POST /api/v1/chat/completions`
+  and OpenAI `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
+  while rejecting empty/traversal paths before consuming a grant.
 - Keep Codex CLI as the primary chat and agent path until the basic flows work.
 - Add OpenRouter as the first API provider once chat/agent boundaries are
   stable.
