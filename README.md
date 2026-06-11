@@ -148,7 +148,15 @@ librarian --home "$HOME/Librarian" smoke tools
 This checks Library Markdown edits, Projects sandbox file operations, project
 context registration, durable memory retrieval, approval persistence, chat-card
 contracts, job cancel/retry lifecycle, launch-context hints, and `/project`
-create/attach/status/map workflow.
+create/attach/status/map workflow. It also verifies default prompt-builder
+presets.
+
+Seed starter prompt/instruction blocks for Librarian, generic agents, Claude,
+and AGENTS.md:
+
+```bash
+librarian --home "$HOME/Librarian" prompt seed-defaults --yes
+```
 
 Run provider health diagnostics without launching containers:
 

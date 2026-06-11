@@ -2596,6 +2596,10 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     admin::run_project_slash_smoke(config, &slug).await?;
     println!("   OK: /project create/status/map/attach paths are functional.");
 
+    println!("8. Exercising prompt default presets...");
+    admin::run_prompt_defaults_smoke(config).await?;
+    println!("   OK: prompt seed-defaults is confirmed, idempotent, and renderable.");
+
     println!("Tools smoke passed.");
     Ok(())
 }

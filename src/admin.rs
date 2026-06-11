@@ -5923,6 +5923,76 @@ pub async fn run_project_slash_smoke(config: &Config, name: &str) -> Result<()> 
     Ok(())
 }
 
+pub async fn run_prompt_defaults_smoke(config: &Config) -> Result<()> {
+    config.ensure_layout()?;
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+    let state = AppState {
+        db: db.clone(),
+        config: Arc::new(RwLock::new(config.clone())),
+    };
+    let needs_confirmation =
+        execute_prompt_slash_command(&state, config, &["seed-defaults".to_string()]).await?;
+    if needs_confirmation
+        .trace
+        .first()
+        .and_then(|trace| trace.get("status"))
+        .and_then(serde_json::Value::as_str)
+        != Some("needs_explicit_confirmation")
+    {
+        anyhow::bail!("Prompt defaults smoke expected explicit confirmation gate");
+    }
+
+    let seeded = execute_prompt_slash_command(
+        &state,
+        config,
+        &["seed-defaults".to_string(), "--yes".to_string()],
+    )
+    .await?;
+    let seeded_count = seeded
+        .trace
+        .first()
+        .and_then(|trace| trace.get("seeded"))
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if seeded_count < 6 {
+        anyhow::bail!("Prompt defaults smoke expected all default blocks to be reported");
+    }
+
+    let before_count = db.list_prompt_blocks(None).await?.len();
+    execute_prompt_slash_command(
+        &state,
+        config,
+        &["seed-defaults".to_string(), "--yes".to_string()],
+    )
+    .await?;
+    let after_count = db.list_prompt_blocks(None).await?.len();
+    if before_count != after_count {
+        anyhow::bail!("Prompt defaults smoke expected seeding to be idempotent");
+    }
+
+    let librarian = execute_prompt_slash_command(
+        &state,
+        config,
+        &["render".to_string(), "librarian".to_string()],
+    )
+    .await?;
+    if !librarian.reply.contains("You are Librarian") {
+        anyhow::bail!("Prompt defaults smoke expected Librarian identity in rendered prompt");
+    }
+    let claude = execute_prompt_slash_command(
+        &state,
+        config,
+        &["render".to_string(), "CLAUDE.md".to_string()],
+    )
+    .await?;
+    if !claude.reply.contains("project-local guidance") {
+        anyhow::bail!("Prompt defaults smoke expected Claude instruction preset");
+    }
+    Ok(())
+}
+
 fn parse_context_scope(value: &str) -> Result<ContextScope> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "node" | "current" => Ok(ContextScope::Node),
@@ -8586,6 +8656,34 @@ async fn execute_prompt_slash_command(
                 serde_json::json!({ "tool": "prompt", "command": command, "target": target, "version": version, "blocks": blocks }),
             )
         }
+        "seed-defaults" | "seed" => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "settings.change",
+                config.tool_permissions.settings_change,
+            )
+            .await?;
+            if !args.iter().any(|arg| arg == "--yes" || arg == "--approve") {
+                return Ok(slash_reply(
+                    "Seeding default prompt blocks changes Librarian instructions. Use: /prompt seed-defaults --yes",
+                    serde_json::json!({
+                        "tool": "prompt",
+                        "command": command,
+                        "status": "needs_explicit_confirmation",
+                    }),
+                ));
+            }
+            let seeded = seed_default_prompt_blocks(&state.db).await?;
+            slash_reply(
+                &format!("Seeded {} default prompt block(s).", seeded.len()),
+                serde_json::json!({
+                    "tool": "prompt",
+                    "command": command,
+                    "seeded": seeded,
+                }),
+            )
+        }
         "add-block" | "add" => {
             ensure_tool_permission(
                 &state.db,
@@ -8719,6 +8817,81 @@ fn parse_prompt_add_block_args(args: &[String]) -> Result<PromptAddBlockSlashReq
     })
 }
 
+async fn seed_default_prompt_blocks(db: &Database) -> Result<Vec<crate::domain::PromptBlock>> {
+    let defaults = default_prompt_block_presets();
+    let mut seeded = Vec::new();
+    for preset in defaults {
+        let existing = db
+            .list_prompt_blocks(Some(preset.target))
+            .await?
+            .into_iter()
+            .find(|block| block.name == preset.name);
+        if let Some(block) = existing {
+            seeded.push(block);
+        } else {
+            seeded.push(
+                db.create_prompt_block(preset.target, preset.name, preset.content, true)
+                    .await?,
+            );
+        }
+    }
+    db.add_system_event(
+        "prompt_tool",
+        serde_json::json!({
+            "action": "seed_defaults",
+            "source": "slash-command",
+            "blocks": seeded.iter().map(|block| serde_json::json!({
+                "id": block.id,
+                "target": block.target,
+                "name": block.name,
+            })).collect::<Vec<_>>(),
+        }),
+    )
+    .await?;
+    Ok(seeded)
+}
+
+struct PromptBlockPreset {
+    target: &'static str,
+    name: &'static str,
+    content: &'static str,
+}
+
+fn default_prompt_block_presets() -> Vec<PromptBlockPreset> {
+    vec![
+        PromptBlockPreset {
+            target: "librarian",
+            name: "Identity",
+            content: "You are Librarian: a calm, practical assistant for organizing ideas, project memory, time, tasks, and supervised agent work. Keep normal chat conversational; launch background agents only after an explicit user action.",
+        },
+        PromptBlockPreset {
+            target: "librarian",
+            name: "Memory policy",
+            content: "Use current chat context and durable memory carefully. Treat raw transcript memories as conversation history, and save durable facts, decisions, and instructions only when they are useful beyond the current turn.",
+        },
+        PromptBlockPreset {
+            target: "agents",
+            name: "Agent boundary",
+            content: "Work only inside the mounted project boundary. Preserve user work, explain risky operations before doing them, and report concise outcomes back to Librarian.",
+        },
+        PromptBlockPreset {
+            target: "agents",
+            name: "Git policy",
+            content: "Inspect repository state before editing. Do not revert unrelated user changes. Commit or push only when the task or project policy explicitly allows it.",
+        },
+        PromptBlockPreset {
+            target: "CLAUDE.md",
+            name: "Claude launch context",
+            content: "This project is being opened by Librarian for a focused background task. Read this file as project-local guidance, then complete the prompt from the current working directory.",
+        },
+        PromptBlockPreset {
+            target: "AGENTS.md",
+            name: "Generic agent launch context",
+            content: "You are running as a supervised project agent under Librarian. Use the mounted workspace as the project root and keep outputs suitable for a later Librarian summary.",
+        },
+    ]
+}
+
 fn slash_prompt_block_id_arg(args: &[String], usage: &str) -> Result<Uuid> {
     args.get(1)
         .ok_or_else(|| anyhow::anyhow!("Usage: {usage}"))?
@@ -8737,7 +8910,7 @@ fn render_prompt_blocks(blocks: &[crate::domain::PromptBlock]) -> String {
 }
 
 fn prompt_slash_help() -> &'static str {
-    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt add-block <target> <name> <content> [--plain]\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
+    "Prompt builder commands live under /prompt:\n/prompt blocks [target]\n/prompt seed-defaults --yes\n/prompt add-block <target> <name> <content> [--plain]\n/prompt enable <block-id>\n/prompt disable <block-id>\n/prompt render <target>\n\nTargets are flexible labels such as librarian, agents, codex, claude, or AGENTS.md. This is the data model for the future visual block editor."
 }
 
 async fn execute_memory_slash_command(

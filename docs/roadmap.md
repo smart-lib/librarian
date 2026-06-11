@@ -697,7 +697,11 @@ Tasks:
   browser prompt dialogs.
 - Support presets for Librarian identity, operating principles, memory policy,
   tool permissions, git policy, Obsidian/knowledge-base behavior, task planning style,
-  project goals, and provider caveats.
+  project goals, and provider caveats. First backend pass adds
+  `/prompt seed-defaults --yes`, which idempotently creates starter blocks for
+  Librarian identity, memory policy, generic agents, git policy, `CLAUDE.md`,
+  and `AGENTS.md`; `smoke tools` verifies confirmation, idempotency, and render
+  output.
 - Render Markdown preview per block plus compiled preview for each target:
   Librarian chat prompt, agent launch prompt, `AGENTS.md`, `CLAUDE.md`, and
   future provider/user identity files.
