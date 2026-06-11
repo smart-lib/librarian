@@ -2523,6 +2523,8 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
         anyhow::bail!("Tools smoke approval did not persist rejected status");
     }
     println!("   OK: approval={} rejected", rejected.id);
+    admin::run_approval_ui_smoke(config).await?;
+    println!("   OK: approval proposal returns chat UI card metadata");
 
     println!("Tools smoke passed.");
     Ok(())

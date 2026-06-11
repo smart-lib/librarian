@@ -1642,6 +1642,8 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const article = appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? assistantName() : '', contextLabel);
           if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'approval') {
             setApprovalCard(article, turn.metadata.ui.approval, turn.content, assistantName());
+          } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'context_switch') {
+            setContextSwitchCard(article, turn.metadata.ui, assistantName());
           }
         }
         if (!transcript.turns.length && announce) {
@@ -5627,6 +5629,40 @@ pub async fn run_dialogue_context_smoke(config: &Config, name: &str) -> Result<(
     Ok(())
 }
 
+pub async fn run_approval_ui_smoke(config: &Config) -> Result<()> {
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+    let state = AppState {
+        db,
+        config: Arc::new(RwLock::new(config.clone())),
+    };
+    let result = execute_approval_slash_command(
+        &state,
+        config,
+        &[
+            "propose".to_string(),
+            "library".to_string(),
+            "create_folder".to_string(),
+            serde_json::json!({
+                "summary": "Create smoke approval shelf.",
+                "library_path": "approval-smoke/shelf",
+            })
+            .to_string(),
+        ],
+    )
+    .await?;
+    if result
+        .ui
+        .as_ref()
+        .and_then(|ui| ui.get("type"))
+        .and_then(serde_json::Value::as_str)
+        != Some("approval")
+    {
+        anyhow::bail!("Approval UI smoke expected an approval card payload");
+    }
+    Ok(())
+}
+
 fn parse_context_scope(value: &str) -> Result<ContextScope> {
     match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
         "node" | "current" => Ok(ContextScope::Node),
@@ -6730,6 +6766,21 @@ fn slash_reply(reply: &str, trace: serde_json::Value) -> LibrarianChatResult {
     }
 }
 
+fn slash_reply_with_ui(
+    reply: &str,
+    trace: serde_json::Value,
+    ui: serde_json::Value,
+) -> LibrarianChatResult {
+    LibrarianChatResult {
+        reply: reply.to_string(),
+        iterations: 0,
+        memory_hits: Vec::new(),
+        trace: vec![trace],
+        mode: "slash-command",
+        ui: Some(ui),
+    }
+}
+
 fn slash_help() -> &'static str {
     "Available command groups:\n/context help - show or change the active chat context\n/lib help - Markdown library and library hierarchy tools\n/work help - default working-folder tools under Projects\n/project help - library project and workspace attachment tools\n/mem help - durable memory tools\n/approval help - pending tool approval proposals\n/prompt help - prompt builder block presets\n/settings help - inspect and change guarded settings\n/agent help - explicit background agent jobs\n\nLibrary projects live in /lib. Implementation/product working folders live in /work or attached external project records."
 }
@@ -7498,12 +7549,13 @@ async fn execute_approval_slash_command(
                     }),
                 )
                 .await?;
-            slash_reply(
-                &format!(
-                    "Created pending approval {} for {}.{}.",
-                    approval.id, approval.tool, approval.action
-                ),
+            slash_reply_with_ui(
+                "Review this proposed action.",
                 serde_json::json!({ "tool": "approval", "command": command, "approval": approval }),
+                serde_json::json!({
+                    "type": "approval",
+                    "approval": approval,
+                }),
             )
         }
         "approve" => {
@@ -11004,6 +11056,50 @@ mod tests {
             .await
             .expect("execute");
         assert_eq!(output["context"]["label"], "Games");
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn approval_propose_slash_returns_approval_ui_card() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-approval-ui-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let state = AppState {
+                db,
+                config: Arc::new(RwLock::new(config.clone())),
+            };
+            let result = execute_approval_slash_command(
+                &state,
+                &config,
+                &[
+                    "propose".to_string(),
+                    "library".to_string(),
+                    "create_folder".to_string(),
+                    serde_json::json!({
+                        "summary": "Create a project shelf.",
+                        "library_path": "Games/NewShelf",
+                    })
+                    .to_string(),
+                ],
+            )
+            .await
+            .expect("approval propose");
+
+            assert_eq!(result.mode, "slash-command");
+            assert_eq!(result.reply, "Review this proposed action.");
+            let ui = result.ui.expect("ui");
+            assert_eq!(ui["type"], "approval");
+            assert_eq!(ui["approval"]["tool"], "library");
+            assert_eq!(ui["approval"]["action"], "create_folder");
+            assert_eq!(ui["approval"]["payload"]["library_path"], "Games/NewShelf");
+        }
+
         std::fs::remove_dir_all(home).ok();
     }
 

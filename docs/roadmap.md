@@ -536,7 +536,9 @@ Tasks:
   high-confidence node.
 - Add approval UX for context switching when the policy is `ask`: proposed
   context changes should appear as normal chat cards with accept/reject buttons,
-  not as raw ids or hidden backend state.
+  not as raw ids or hidden backend state. Current pass restores context-switch
+  cards from chat history and makes `/approval propose` return approval-card UI
+  metadata instead of a raw id-first text reply.
 - Add project creation/linking from the admin UI: create the memory folder,
   optionally create the working directory under the default projects root, or
   attach an existing directory. First slash-command pass adds `/project list`,
@@ -1011,6 +1013,8 @@ readiness or a later planned milestone.
   risk level, and provide Approve/Reject buttons. Keep approval ids available
   only in technical details/tooltips. First card pass is active for chat-created
   approvals; slash list output now shows compact summaries instead of raw JSON.
+  Current pass makes `/approval propose` return the same approval-card metadata
+  and restores context-switch cards from chat history.
 - Keep chat latency visible: pending assistant messages should show an inline
   thinking/loading state, and completed turns should have backend timing events
   plus human-readable timing metadata in the UI. First UI pass now shows
