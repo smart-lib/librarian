@@ -1108,7 +1108,11 @@ readiness or a later planned milestone.
 - Add commit/push policy gates before any self-hosted commit automation. First
   CLI pass adds `jobs gate <job-id> --action commit|push`, checking project git
   policy, protected branches, optional branch pattern, dirty state, and upstream
-  availability, then recording a `policy_gate` job event.
+  availability, then recording a `policy_gate` job event. Second pass adds
+  `jobs propose-git <job-id> --action commit --message ...`, which requires a
+  passing gate before creating a git approval proposal; approved commit
+  execution rechecks policy immediately before running `git add -A` and
+  `git commit`.
 - Add estimated-cost reservation before dispatch once provider adapters can
   predict request cost, so budget checks can account for the pending run instead
   of only already-observed `cost_usd`.

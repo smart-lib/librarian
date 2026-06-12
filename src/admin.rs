@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::{Path as AxumPath, Query, State},
     response::{Html, IntoResponse},
@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::{process::Command as TokioCommand, sync::RwLock};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
@@ -8702,6 +8702,10 @@ async fn execute_approved_tool_approval(
                 .await?;
             Ok(serde_json::json!({ "block_id": block.id, "target": block.target }))
         }
+        ("git", "commit") => execute_git_commit_approval(state, approval).await,
+        ("git", "push") => {
+            anyhow::bail!("git.push approvals are not executable yet; run `jobs gate <job-id> --action push` and push manually after review")
+        }
         ("context", "switch") => {
             let label = approval_payload_string(&approval.payload, "label")?;
             state
@@ -8780,6 +8784,144 @@ fn approval_payload_usize(payload: &serde_json::Value, key: &str) -> Result<usiz
             .map_err(|error| anyhow::anyhow!("Invalid `{key}` value: {error}"));
     }
     anyhow::bail!("Approval payload `{key}` must be a positive integer")
+}
+
+async fn execute_git_commit_approval(
+    state: &AppState,
+    approval: &crate::domain::ToolApproval,
+) -> Result<serde_json::Value> {
+    let job_id = approval
+        .payload
+        .get("job_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Git approval payload must contain `job_id`"))?
+        .parse::<Uuid>()
+        .map_err(|error| anyhow::anyhow!("Invalid git approval job_id: {error}"))?;
+    let message = approval_payload_string(&approval.payload, "message")?;
+    let job = state.db.get_job(job_id).await?;
+    let project = state.db.get_project_by_id(job.project_id).await?;
+    let project_path = project
+        .path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project.path.display()))?;
+    let branch =
+        run_approval_project_command(&project_path, "git", &["branch", "--show-current"]).await?;
+    let status = run_approval_project_command(&project_path, "git", &["status", "--short"]).await?;
+    let branch_name = branch.stdout.trim().to_string();
+    let mut blockers = Vec::new();
+    if !project.git_policy.allow_commit {
+        blockers.push("project_policy_disallows_commit".to_string());
+    }
+    if branch_name.is_empty() {
+        blockers.push("detached_or_unknown_branch".to_string());
+    }
+    if project
+        .git_policy
+        .protected_branches
+        .iter()
+        .any(|protected| protected == &branch_name)
+    {
+        blockers.push(format!("protected_branch:{branch_name}"));
+    }
+    if let Some(pattern) = &project.git_policy.require_branch_pattern {
+        if !approval_branch_pattern_matches(pattern, &branch_name) {
+            blockers.push(format!("branch_does_not_match_required_pattern:{pattern}"));
+        }
+    }
+    if status.stdout.trim().is_empty() {
+        blockers.push("no_worktree_changes_to_commit".to_string());
+    }
+    if !blockers.is_empty() {
+        anyhow::bail!("Git commit approval blocked: {}", blockers.join(", "));
+    }
+
+    let add = run_approval_project_command(&project_path, "git", &["add", "-A"]).await?;
+    if !add.success {
+        anyhow::bail!("git add failed: {}", add.stderr);
+    }
+    let commit =
+        run_approval_project_command(&project_path, "git", &["commit", "-m", &message]).await?;
+    if !commit.success {
+        anyhow::bail!("git commit failed: {}", commit.stderr);
+    }
+    let after_status =
+        run_approval_project_command(&project_path, "git", &["status", "--short"]).await?;
+    state
+        .db
+        .add_job_event(
+            job.id,
+            "git_commit",
+            serde_json::json!({
+                "approval_id": approval.id,
+                "message": message,
+                "branch": branch_name,
+                "commit": commit,
+                "status_after": after_status,
+            }),
+        )
+        .await?;
+    Ok(serde_json::json!({
+        "job_id": job.id,
+        "project": project.name,
+        "branch": branch_name,
+        "commit": commit,
+        "status_after": after_status,
+    }))
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ApprovalProjectCommandOutput {
+    command: String,
+    status: Option<i32>,
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+async fn run_approval_project_command(
+    project_path: &Path,
+    command: &str,
+    args: &[&str],
+) -> Result<ApprovalProjectCommandOutput> {
+    let output = TokioCommand::new(command)
+        .args(args)
+        .current_dir(project_path)
+        .output()
+        .await
+        .with_context(|| format!("Failed to run `{command}` in {}", project_path.display()))?;
+    Ok(ApprovalProjectCommandOutput {
+        command: std::iter::once(command)
+            .chain(args.iter().copied())
+            .collect::<Vec<_>>()
+            .join(" "),
+        status: output.status.code(),
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    })
+}
+
+fn approval_branch_pattern_matches(pattern: &str, branch: &str) -> bool {
+    fn inner(pattern: &[u8], branch: &[u8]) -> bool {
+        match pattern.split_first() {
+            None => branch.is_empty(),
+            Some((&b'*', rest)) => {
+                inner(rest, branch)
+                    || branch
+                        .split_first()
+                        .is_some_and(|(_, branch_rest)| inner(pattern, branch_rest))
+            }
+            Some((&b'?', rest)) => branch
+                .split_first()
+                .is_some_and(|(_, branch_rest)| inner(rest, branch_rest)),
+            Some((&expected, rest)) => {
+                branch.split_first().is_some_and(|(&actual, branch_rest)| {
+                    expected == actual && inner(rest, branch_rest)
+                })
+            }
+        }
+    }
+    inner(pattern.as_bytes(), branch.as_bytes())
 }
 
 fn approval_project_library_path(payload: &serde_json::Value) -> Result<String> {

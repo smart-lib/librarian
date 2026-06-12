@@ -316,6 +316,13 @@ enum JobsCommand {
         #[arg(long, value_enum)]
         action: GitGateActionArg,
     },
+    ProposeGit {
+        job_id: uuid::Uuid,
+        #[arg(long, value_enum)]
+        action: GitGateActionArg,
+        #[arg(long)]
+        message: Option<String>,
+    },
     Cancel {
         job_id: uuid::Uuid,
     },
@@ -1226,6 +1233,15 @@ async fn main() -> Result<()> {
                 JobsCommand::Gate { job_id, action } => {
                     let report = gate_job_git_action(&db, job_id, action).await?;
                     println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                JobsCommand::ProposeGit {
+                    job_id,
+                    action,
+                    message,
+                } => {
+                    let approval =
+                        propose_job_git_action(&db, job_id, action, message.as_deref()).await?;
+                    println!("{}", serde_json::to_string_pretty(&approval)?);
                 }
                 JobsCommand::Cancel { job_id } => {
                     db.request_cancel_job(job_id).await?;
@@ -2667,6 +2683,67 @@ async fn gate_job_git_action(
     Ok(report)
 }
 
+async fn propose_job_git_action(
+    db: &Database,
+    job_id: uuid::Uuid,
+    action: GitGateActionArg,
+    message: Option<&str>,
+) -> Result<crate::domain::ToolApproval> {
+    let gate = gate_job_git_action(db, job_id, action).await?;
+    if !gate
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        anyhow::bail!(
+            "Git action is blocked by policy gate: {}",
+            serde_json::to_string(&gate.get("blockers").cloned().unwrap_or_else(|| json!([])))?
+        );
+    }
+    let job = db.get_job(job_id).await?;
+    let project = db.get_project_by_id(job.project_id).await?;
+    let action_label = match action {
+        GitGateActionArg::Commit => "commit",
+        GitGateActionArg::Push => "push",
+    };
+    let message = match action {
+        GitGateActionArg::Commit => Some(
+            message
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("--message is required for commit proposals"))?
+                .trim()
+                .to_string(),
+        ),
+        GitGateActionArg::Push => message.map(|value| value.trim().to_string()),
+    };
+    let approval = db
+        .create_tool_approval(
+            "git",
+            action_label,
+            json!({
+                "job_id": job.id,
+                "project_id": project.id,
+                "project": project.name,
+                "project_path": user_facing_path(&project.path),
+                "message": message,
+                "gate": gate,
+                "summary": format!("Approve git {action_label} for job {} in project `{}`.", job.id, project.name),
+            }),
+        )
+        .await?;
+    db.add_job_event(
+        job.id,
+        "approval_proposed",
+        json!({
+            "approval_id": approval.id,
+            "tool": approval.tool,
+            "action": approval.action,
+        }),
+    )
+    .await?;
+    Ok(approval)
+}
+
 fn branch_pattern_matches(pattern: &str, branch: &str) -> bool {
     fn inner(pattern: &[u8], branch: &[u8]) -> bool {
         match pattern.split_first() {
@@ -3010,11 +3087,55 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     }
     println!("   OK: project={} memory={}", project.id, memory_item.id);
 
-    println!("4. Exercising legacy memory cleanup...");
+    println!("4. Exercising git review and approval gates...");
+    run_project_command(&workspace_path, "git", &["init", "-b", "feature/smoke"]).await?;
+    fs::write(
+        workspace_path.join("git-review.md"),
+        "# Git Review Smoke\n\npending change\n",
+    )?;
+    let git_job = db
+        .create_job(
+            project.id,
+            ProviderKind::Codex,
+            "git review and policy gate smoke",
+            MountMode::ReadWrite,
+            crate::domain::NetworkMode::Provider,
+            None,
+        )
+        .await?;
+    let review = review_job_changes(&db, git_job.id, false).await?;
+    if !review
+        .get("has_worktree_changes")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        anyhow::bail!("Tools smoke expected git review to detect worktree changes");
+    }
+    let gate = gate_job_git_action(&db, git_job.id, GitGateActionArg::Commit).await?;
+    if !gate
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        anyhow::bail!("Tools smoke expected commit gate to allow feature branch changes");
+    }
+    let approval = propose_job_git_action(
+        &db,
+        git_job.id,
+        GitGateActionArg::Commit,
+        Some("Smoke git approval proposal"),
+    )
+    .await?;
+    println!(
+        "   OK: review event, policy gate, and approval={} are functional.",
+        approval.id
+    );
+
+    println!("5. Exercising legacy memory cleanup...");
     admin::run_memory_cleanup_smoke(config).await?;
     println!("   OK: legacy local responder cleanup is gated and executable.");
 
-    println!("5. Exercising approval persistence...");
+    println!("6. Exercising approval persistence...");
     let approval = db
         .create_tool_approval(
             "library",
@@ -3038,7 +3159,7 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     admin::run_agent_action_ui_smoke(config, &slug).await?;
     println!("   OK: agent launch returns chat action card metadata");
 
-    println!("6. Exercising job cancel/retry lifecycle...");
+    println!("7. Exercising job cancel/retry lifecycle...");
     let lifecycle_job = db
         .create_job(
             project.id,
@@ -3074,7 +3195,7 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
         lifecycle_job.id, retry.id
     );
 
-    println!("7. Exercising launch-context registration hints...");
+    println!("8. Exercising launch-context registration hints...");
     let projects = db.list_projects().await?;
     let known_context = launch_context_registration_check_for(config, &projects, &workspace_path);
     if known_context.severity != DoctorSeverity::Ok {
@@ -3101,11 +3222,11 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     }
     println!("   OK: known context is accepted; unknown context suggests registration.");
 
-    println!("8. Exercising project slash workflow...");
+    println!("9. Exercising project slash workflow...");
     admin::run_project_slash_smoke(config, &slug).await?;
     println!("   OK: /project create/status/map/attach paths are functional.");
 
-    println!("9. Exercising prompt default presets...");
+    println!("10. Exercising prompt default presets...");
     admin::run_prompt_defaults_smoke(config).await?;
     println!("   OK: prompt seed/update/delete/export flows are confirmed and renderable.");
 

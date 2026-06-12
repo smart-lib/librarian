@@ -226,6 +226,12 @@ librarian --home "$HOME/Librarian" jobs gate <job-id> --action commit
 librarian --home "$HOME/Librarian" jobs gate <job-id> --action push
 ```
 
+Create a gated approval proposal for a local commit:
+
+```bash
+librarian --home "$HOME/Librarian" jobs propose-git <job-id> --action commit --message "Describe the change"
+```
+
 API-proxy providers such as OpenRouter can use the same smoke runner after a
 secret grant exists:
 
