@@ -224,12 +224,20 @@ Check whether project git policy allows a future commit or push:
 ```bash
 librarian --home "$HOME/Librarian" jobs gate <job-id> --action commit
 librarian --home "$HOME/Librarian" jobs gate <job-id> --action push
+librarian --home "$HOME/Librarian" jobs gate <job-id> --action revert
 ```
 
 Create a gated approval proposal for a local commit:
 
 ```bash
 librarian --home "$HOME/Librarian" jobs propose-git <job-id> --action commit --message "Describe the change"
+```
+
+Plan and propose an explicit local revert after a bad approved commit:
+
+```bash
+librarian --home "$HOME/Librarian" jobs revert-plan <job-id> --commit <sha>
+librarian --home "$HOME/Librarian" jobs propose-git <job-id> --action revert --commit <sha>
 ```
 
 API-proxy providers such as OpenRouter can use the same smoke runner after a

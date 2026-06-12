@@ -322,6 +322,13 @@ enum JobsCommand {
         action: GitGateActionArg,
         #[arg(long)]
         message: Option<String>,
+        #[arg(long)]
+        commit: Option<String>,
+    },
+    RevertPlan {
+        job_id: uuid::Uuid,
+        #[arg(long)]
+        commit: Option<String>,
     },
     Cancel {
         job_id: uuid::Uuid,
@@ -540,6 +547,7 @@ enum ProviderArg {
 enum GitGateActionArg {
     Commit,
     Push,
+    Revert,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -1238,10 +1246,21 @@ async fn main() -> Result<()> {
                     job_id,
                     action,
                     message,
+                    commit,
                 } => {
-                    let approval =
-                        propose_job_git_action(&db, job_id, action, message.as_deref()).await?;
+                    let approval = propose_job_git_action(
+                        &db,
+                        job_id,
+                        action,
+                        message.as_deref(),
+                        commit.as_deref(),
+                    )
+                    .await?;
                     println!("{}", serde_json::to_string_pretty(&approval)?);
+                }
+                JobsCommand::RevertPlan { job_id, commit } => {
+                    let report = plan_job_git_revert(&db, job_id, commit.as_deref()).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
                 }
                 JobsCommand::Cancel { job_id } => {
                     db.request_cancel_job(job_id).await?;
@@ -2644,6 +2663,14 @@ async fn gate_job_git_action(
                 warnings.push("no_upstream_branch_detected".to_string());
             }
         }
+        GitGateActionArg::Revert => {
+            if !project.git_policy.allow_commit {
+                blockers.push("project_policy_disallows_commit".to_string());
+            }
+            if dirty {
+                blockers.push("worktree_has_uncommitted_changes".to_string());
+            }
+        }
     }
     if protected {
         blockers.push(format!("protected_branch:{branch_name}"));
@@ -2660,6 +2687,7 @@ async fn gate_job_git_action(
         "action": match action {
             GitGateActionArg::Commit => "commit",
             GitGateActionArg::Push => "push",
+            GitGateActionArg::Revert => "revert",
         },
         "allowed": allowed,
         "blockers": blockers,
@@ -2688,8 +2716,13 @@ async fn propose_job_git_action(
     job_id: uuid::Uuid,
     action: GitGateActionArg,
     message: Option<&str>,
+    commit: Option<&str>,
 ) -> Result<crate::domain::ToolApproval> {
-    let gate = gate_job_git_action(db, job_id, action).await?;
+    let gate = if matches!(action, GitGateActionArg::Revert) {
+        plan_job_git_revert(db, job_id, commit).await?
+    } else {
+        gate_job_git_action(db, job_id, action).await?
+    };
     if !gate
         .get("allowed")
         .and_then(serde_json::Value::as_bool)
@@ -2705,6 +2738,7 @@ async fn propose_job_git_action(
     let action_label = match action {
         GitGateActionArg::Commit => "commit",
         GitGateActionArg::Push => "push",
+        GitGateActionArg::Revert => "revert",
     };
     let message = match action {
         GitGateActionArg::Commit => Some(
@@ -2715,6 +2749,17 @@ async fn propose_job_git_action(
                 .to_string(),
         ),
         GitGateActionArg::Push => message.map(|value| value.trim().to_string()),
+        GitGateActionArg::Revert => message.map(|value| value.trim().to_string()),
+    };
+    let commit = if matches!(action, GitGateActionArg::Revert) {
+        Some(
+            gate.get("target_commit")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("Revert plan did not include a target commit"))?
+                .to_string(),
+        )
+    } else {
+        None
     };
     let approval = db
         .create_tool_approval(
@@ -2726,6 +2771,7 @@ async fn propose_job_git_action(
                 "project": project.name,
                 "project_path": user_facing_path(&project.path),
                 "message": message,
+                "commit": commit,
                 "gate": gate,
                 "summary": format!("Approve git {action_label} for job {} in project `{}`.", job.id, project.name),
             }),
@@ -2742,6 +2788,118 @@ async fn propose_job_git_action(
     )
     .await?;
     Ok(approval)
+}
+
+async fn plan_job_git_revert(
+    db: &Database,
+    job_id: uuid::Uuid,
+    commit: Option<&str>,
+) -> Result<serde_json::Value> {
+    let job = db.get_job(job_id).await?;
+    let project = db.get_project_by_id(job.project_id).await?;
+    let project_path = project
+        .path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project.path.display()))?;
+    let branch = run_project_command(&project_path, "git", &["branch", "--show-current"]).await?;
+    let status = run_project_command(&project_path, "git", &["status", "--short"]).await?;
+    let upstream = run_project_command(
+        &project_path,
+        "git",
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .await?;
+    let target = if let Some(commit) = commit.map(str::trim).filter(|value| !value.is_empty()) {
+        commit.to_string()
+    } else {
+        let latest =
+            run_project_command(&project_path, "git", &["log", "-1", "--format=%H"]).await?;
+        latest.stdout.trim().to_string()
+    };
+    let target_info = if target.is_empty() {
+        ProjectCommandOutput {
+            command: "git show --quiet --format=%H%n%s <missing>".to_string(),
+            status: Some(1),
+            success: false,
+            stdout: String::new(),
+            stderr: "No target commit supplied and no latest commit found".to_string(),
+        }
+    } else {
+        run_project_command(
+            &project_path,
+            "git",
+            &["show", "--quiet", "--format=%H%n%s", &target],
+        )
+        .await?
+    };
+    let branch_name = branch.stdout.trim().to_string();
+    let dirty = !status.stdout.trim().is_empty();
+    let protected = project
+        .git_policy
+        .protected_branches
+        .iter()
+        .any(|protected| protected == &branch_name);
+    let mut blockers = Vec::new();
+    let mut warnings = Vec::new();
+
+    if !project.git_policy.allow_commit {
+        blockers.push("project_policy_disallows_commit".to_string());
+    }
+    if branch_name.is_empty() {
+        blockers.push("detached_or_unknown_branch".to_string());
+    }
+    if dirty {
+        blockers.push("worktree_has_uncommitted_changes".to_string());
+    }
+    if protected {
+        blockers.push(format!("protected_branch:{branch_name}"));
+    }
+    if let Some(pattern) = &project.git_policy.require_branch_pattern {
+        if !branch_pattern_matches(pattern, &branch_name) {
+            blockers.push(format!("branch_does_not_match_required_pattern:{pattern}"));
+        }
+    }
+    if !target_info.success {
+        blockers.push("target_commit_not_found".to_string());
+    }
+    if !upstream.success {
+        warnings.push("no_upstream_branch_detected".to_string());
+    }
+
+    let allowed = blockers.is_empty();
+    let subject = target_info
+        .stdout
+        .lines()
+        .nth(1)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-");
+    let report = json!({
+        "job_id": job.id,
+        "action": "revert",
+        "allowed": allowed,
+        "blockers": blockers,
+        "warnings": warnings,
+        "target_commit": target,
+        "target_subject": subject,
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "path": user_facing_path(&project_path),
+            "git_policy": project.git_policy,
+        },
+        "git": {
+            "branch": branch,
+            "status": status,
+            "upstream": upstream,
+            "dirty": dirty,
+            "protected": protected,
+            "target": target_info,
+        },
+    });
+    db.add_job_event(job.id, "revert_plan", report.clone())
+        .await?;
+    Ok(report)
 }
 
 fn branch_pattern_matches(pattern: &str, branch: &str) -> bool {
@@ -3124,11 +3282,52 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
         git_job.id,
         GitGateActionArg::Commit,
         Some("Smoke git approval proposal"),
+        None,
+    )
+    .await?;
+    run_project_command(
+        &workspace_path,
+        "git",
+        &["config", "user.email", "smoke@example.invalid"],
+    )
+    .await?;
+    run_project_command(
+        &workspace_path,
+        "git",
+        &["config", "user.name", "Librarian Smoke"],
+    )
+    .await?;
+    run_project_command(&workspace_path, "git", &["add", "-A"]).await?;
+    let smoke_commit = run_project_command(
+        &workspace_path,
+        "git",
+        &["commit", "-m", "Smoke reversible change"],
+    )
+    .await?;
+    if !smoke_commit.success {
+        anyhow::bail!("Tools smoke git commit failed: {}", smoke_commit.stderr);
+    }
+    let smoke_sha =
+        run_project_command(&workspace_path, "git", &["log", "-1", "--format=%H"]).await?;
+    let revert_plan = plan_job_git_revert(&db, git_job.id, Some(&smoke_sha.stdout)).await?;
+    if !revert_plan
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        anyhow::bail!("Tools smoke expected revert plan to allow clean feature branch revert");
+    }
+    let revert_approval = propose_job_git_action(
+        &db,
+        git_job.id,
+        GitGateActionArg::Revert,
+        Some("Smoke git revert proposal"),
+        Some(&smoke_sha.stdout),
     )
     .await?;
     println!(
-        "   OK: review event, policy gate, and approval={} are functional.",
-        approval.id
+        "   OK: review event, policy gate, approval={}, and revert approval={} are functional.",
+        approval.id, revert_approval.id
     );
 
     println!("5. Exercising legacy memory cleanup...");

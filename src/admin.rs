@@ -8703,6 +8703,7 @@ async fn execute_approved_tool_approval(
             Ok(serde_json::json!({ "block_id": block.id, "target": block.target }))
         }
         ("git", "commit") => execute_git_commit_approval(state, approval).await,
+        ("git", "revert") => execute_git_revert_approval(state, approval).await,
         ("git", "push") => {
             anyhow::bail!("git.push approvals are not executable yet; run `jobs gate <job-id> --action push` and push manually after review")
         }
@@ -8865,6 +8866,96 @@ async fn execute_git_commit_approval(
         "project": project.name,
         "branch": branch_name,
         "commit": commit,
+        "status_after": after_status,
+    }))
+}
+
+async fn execute_git_revert_approval(
+    state: &AppState,
+    approval: &crate::domain::ToolApproval,
+) -> Result<serde_json::Value> {
+    let job_id = approval
+        .payload
+        .get("job_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("Git approval payload must contain `job_id`"))?
+        .parse::<Uuid>()
+        .map_err(|error| anyhow::anyhow!("Invalid git approval job_id: {error}"))?;
+    let commit = approval_payload_string(&approval.payload, "commit")?;
+    let job = state.db.get_job(job_id).await?;
+    let project = state.db.get_project_by_id(job.project_id).await?;
+    let project_path = project
+        .path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project.path.display()))?;
+    let branch =
+        run_approval_project_command(&project_path, "git", &["branch", "--show-current"]).await?;
+    let status = run_approval_project_command(&project_path, "git", &["status", "--short"]).await?;
+    let target = run_approval_project_command(
+        &project_path,
+        "git",
+        &["show", "--quiet", "--format=%H%n%s", &commit],
+    )
+    .await?;
+    let branch_name = branch.stdout.trim().to_string();
+    let mut blockers = Vec::new();
+    if !project.git_policy.allow_commit {
+        blockers.push("project_policy_disallows_commit".to_string());
+    }
+    if branch_name.is_empty() {
+        blockers.push("detached_or_unknown_branch".to_string());
+    }
+    if project
+        .git_policy
+        .protected_branches
+        .iter()
+        .any(|protected| protected == &branch_name)
+    {
+        blockers.push(format!("protected_branch:{branch_name}"));
+    }
+    if let Some(pattern) = &project.git_policy.require_branch_pattern {
+        if !approval_branch_pattern_matches(pattern, &branch_name) {
+            blockers.push(format!("branch_does_not_match_required_pattern:{pattern}"));
+        }
+    }
+    if !status.stdout.trim().is_empty() {
+        blockers.push("worktree_has_uncommitted_changes".to_string());
+    }
+    if !target.success {
+        blockers.push("target_commit_not_found".to_string());
+    }
+    if !blockers.is_empty() {
+        anyhow::bail!("Git revert approval blocked: {}", blockers.join(", "));
+    }
+
+    let revert =
+        run_approval_project_command(&project_path, "git", &["revert", "--no-edit", &commit])
+            .await?;
+    if !revert.success {
+        anyhow::bail!("git revert failed: {}", revert.stderr);
+    }
+    let after_status =
+        run_approval_project_command(&project_path, "git", &["status", "--short"]).await?;
+    state
+        .db
+        .add_job_event(
+            job.id,
+            "git_revert",
+            serde_json::json!({
+                "approval_id": approval.id,
+                "target_commit": commit,
+                "branch": branch_name,
+                "revert": revert,
+                "status_after": after_status,
+            }),
+        )
+        .await?;
+    Ok(serde_json::json!({
+        "job_id": job.id,
+        "project": project.name,
+        "branch": branch_name,
+        "target_commit": commit,
+        "revert": revert,
         "status_after": after_status,
     }))
 }

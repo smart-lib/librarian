@@ -1105,14 +1105,17 @@ readiness or a later planned milestone.
   cycles. First CLI pass adds `jobs review <job-id> [--run-tests]`, which
   records git status, diff summary, staged diff summary, optional Cargo test
   output, and a recommendation as a job event.
-- Add commit/push policy gates before any self-hosted commit automation. First
-  CLI pass adds `jobs gate <job-id> --action commit|push`, checking project git
-  policy, protected branches, optional branch pattern, dirty state, and upstream
-  availability, then recording a `policy_gate` job event. Second pass adds
-  `jobs propose-git <job-id> --action commit --message ...`, which requires a
-  passing gate before creating a git approval proposal; approved commit
-  execution rechecks policy immediately before running `git add -A` and
-  `git commit`.
+- Add commit/push/revert policy gates before any self-hosted commit
+  automation. First CLI pass adds `jobs gate <job-id> --action commit|push`,
+  checking project git policy, protected branches, optional branch pattern,
+  dirty state, and upstream availability, then recording a `policy_gate` job
+  event. Second pass adds `jobs propose-git <job-id> --action commit --message
+  ...`, which requires a passing gate before creating a git approval proposal;
+  approved commit execution rechecks policy immediately before running `git add
+  -A` and `git commit`. Third pass adds `jobs revert-plan <job-id> --commit
+  <sha>` and `jobs propose-git <job-id> --action revert --commit <sha>`, so bad
+  local commits have an explicit, policy-gated rollback path before push
+  automation is allowed.
 - Add estimated-cost reservation before dispatch once provider adapters can
   predict request cost, so budget checks can account for the pending run instead
   of only already-observed `cost_usd`.
