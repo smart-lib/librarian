@@ -227,6 +227,12 @@ librarian --home "$HOME/Librarian" jobs gate <job-id> --action push
 librarian --home "$HOME/Librarian" jobs gate <job-id> --action revert
 ```
 
+Preview exactly what a manual push would send:
+
+```bash
+librarian --home "$HOME/Librarian" jobs push-plan <job-id>
+```
+
 Create a gated approval proposal for a local commit:
 
 ```bash

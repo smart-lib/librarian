@@ -48,6 +48,12 @@ librarian --home "$HOME/Librarian" jobs gate <job-id> --action push
 librarian --home "$HOME/Librarian" jobs gate <job-id> --action revert
 ```
 
+Preview the outgoing commits and diff before a manual push:
+
+```bash
+librarian --home "$HOME/Librarian" jobs push-plan <job-id>
+```
+
 Create a gated local commit approval:
 
 ```bash
@@ -88,6 +94,8 @@ librarian --home "$HOME/Librarian" smoke providers
   and a machine-readable recommendation as a job event.
 - `jobs gate` records whether commit, push, or revert is allowed by project policy,
   branch protection, branch pattern, dirty state, and upstream state.
+- `jobs push-plan` records the upstream branch, outgoing commit list, ahead
+  count, remote list, and outgoing diff stat before a manual push.
 - `jobs propose-git` creates a git approval only after the gate passes. Commit
   and revert execution recheck policy before mutating the repository.
 - Context retrieval supports project-scoped memory and tree-aware context
@@ -105,9 +113,9 @@ librarian --home "$HOME/Librarian" smoke providers
 - A real containerized self-host Codex task still needs repeated validation on
   the user's target Ubuntu host.
 - Agent-written patches still need richer UI approval cards. CLI diff/test
-  review, commit/push/revert policy gates, gated commit approvals, and revert
-  proposals now exist as machine contracts. Push remains manual after policy
-  review.
+  review, commit/push/revert policy gates, push planning, gated commit
+  approvals, and revert proposals now exist as machine contracts. Push remains
+  manual after policy review.
 - Automatic write tasks should require project policy gates, not only prompt
   instructions.
 - Budget/cost control is observed-spend based; estimated reservations before
@@ -135,7 +143,7 @@ Use Librarian for supervised self-development in short loops:
    approve an explicit revert proposal.
 8. Only then launch a narrow write task or approve follow-up work.
 9. Run `cargo test` or `doctor --smoke`.
-10. Push manually only after a separate push gate/review.
+10. Push manually only after a separate push gate and `jobs push-plan` review.
 
 Avoid unattended multi-agent write loops until patch review, policy gates, and
 provider-specific smoke runs are stronger.

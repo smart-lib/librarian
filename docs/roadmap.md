@@ -1115,7 +1115,10 @@ readiness or a later planned milestone.
   -A` and `git commit`. Third pass adds `jobs revert-plan <job-id> --commit
   <sha>` and `jobs propose-git <job-id> --action revert --commit <sha>`, so bad
   local commits have an explicit, policy-gated rollback path before push
-  automation is allowed.
+  automation is allowed. Fourth pass adds `jobs push-plan <job-id>`, which
+  records upstream, outgoing commits, ahead count, remotes, and diff stat for
+  manual push review; actual push execution remains disabled until the UI and
+  approval story is stronger.
 - Add estimated-cost reservation before dispatch once provider adapters can
   predict request cost, so budget checks can account for the pending run instead
   of only already-observed `cost_usd`.

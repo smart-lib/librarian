@@ -330,6 +330,9 @@ enum JobsCommand {
         #[arg(long)]
         commit: Option<String>,
     },
+    PushPlan {
+        job_id: uuid::Uuid,
+    },
     Cancel {
         job_id: uuid::Uuid,
     },
@@ -1260,6 +1263,10 @@ async fn main() -> Result<()> {
                 }
                 JobsCommand::RevertPlan { job_id, commit } => {
                     let report = plan_job_git_revert(&db, job_id, commit.as_deref()).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                JobsCommand::PushPlan { job_id } => {
+                    let report = plan_job_git_push(&db, job_id).await?;
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 }
                 JobsCommand::Cancel { job_id } => {
@@ -2902,6 +2909,113 @@ async fn plan_job_git_revert(
     Ok(report)
 }
 
+async fn plan_job_git_push(db: &Database, job_id: uuid::Uuid) -> Result<serde_json::Value> {
+    let gate = gate_job_git_action(db, job_id, GitGateActionArg::Push).await?;
+    let job = db.get_job(job_id).await?;
+    let project = db.get_project_by_id(job.project_id).await?;
+    let project_path = project
+        .path
+        .canonicalize()
+        .with_context(|| format!("Failed to resolve {}", project.path.display()))?;
+    let branch = run_project_command(&project_path, "git", &["branch", "--show-current"]).await?;
+    let status = run_project_command(&project_path, "git", &["status", "--short"]).await?;
+    let upstream = run_project_command(
+        &project_path,
+        "git",
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .await?;
+    let remotes = run_project_command(&project_path, "git", &["remote", "-v"]).await?;
+    let mut blockers = Vec::new();
+    let mut warnings = gate
+        .get("warnings")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(values) = gate.get("blockers").and_then(serde_json::Value::as_array) {
+        blockers.extend(
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned),
+        );
+    }
+    let (ahead_count, outgoing_commits, diff_stat) = if upstream.success {
+        let range = format!("{}..HEAD", upstream.stdout.trim());
+        let ahead =
+            run_project_command(&project_path, "git", &["rev-list", "--count", &range]).await?;
+        let log = run_project_command(
+            &project_path,
+            "git",
+            &["log", "--oneline", "--decorate", "--max-count=20", &range],
+        )
+        .await?;
+        let diff = run_project_command(&project_path, "git", &["diff", "--stat", &range]).await?;
+        let count = ahead.stdout.trim().parse::<u64>().unwrap_or(0);
+        if count == 0 {
+            blockers.push("no_outgoing_commits_to_push".to_string());
+        }
+        (count, log, diff)
+    } else {
+        blockers.push("no_upstream_branch_detected".to_string());
+        warnings.push("set_upstream_or_push_manually_with_remote_branch".to_string());
+        (
+            0,
+            ProjectCommandOutput {
+                command: "git log --oneline --decorate --max-count=20 @{u}..HEAD".to_string(),
+                status: Some(1),
+                success: false,
+                stdout: String::new(),
+                stderr: "No upstream branch detected".to_string(),
+            },
+            ProjectCommandOutput {
+                command: "git diff --stat @{u}..HEAD".to_string(),
+                status: Some(1),
+                success: false,
+                stdout: String::new(),
+                stderr: "No upstream branch detected".to_string(),
+            },
+        )
+    };
+    blockers.sort();
+    blockers.dedup();
+    warnings.sort();
+    warnings.dedup();
+    let allowed = blockers.is_empty();
+    let report = json!({
+        "job_id": job.id,
+        "action": "push",
+        "allowed": allowed,
+        "blockers": blockers,
+        "warnings": warnings,
+        "ahead_count": ahead_count,
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "path": user_facing_path(&project_path),
+            "git_policy": project.git_policy,
+        },
+        "git": {
+            "branch": branch,
+            "status": status,
+            "upstream": upstream,
+            "remotes": remotes,
+            "outgoing_commits": outgoing_commits,
+            "diff_stat": diff_stat,
+            "policy_gate": gate,
+        },
+    });
+    db.add_job_event(job.id, "push_plan", report.clone())
+        .await?;
+    Ok(report)
+}
+
 fn branch_pattern_matches(pattern: &str, branch: &str) -> bool {
     fn inner(pattern: &[u8], branch: &[u8]) -> bool {
         match pattern.split_first() {
@@ -3247,6 +3361,62 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
 
     println!("4. Exercising git review and approval gates...");
     run_project_command(&workspace_path, "git", &["init", "-b", "feature/smoke"]).await?;
+    run_project_command(
+        &workspace_path,
+        "git",
+        &["config", "user.email", "smoke@example.invalid"],
+    )
+    .await?;
+    run_project_command(
+        &workspace_path,
+        "git",
+        &["config", "user.name", "Librarian Smoke"],
+    )
+    .await?;
+    fs::write(
+        workspace_path.join("baseline.md"),
+        "# Smoke Baseline\n\npushed baseline\n",
+    )?;
+    run_project_command(&workspace_path, "git", &["add", "-A"]).await?;
+    let baseline_commit =
+        run_project_command(&workspace_path, "git", &["commit", "-m", "Smoke baseline"]).await?;
+    if !baseline_commit.success {
+        anyhow::bail!(
+            "Tools smoke baseline git commit failed: {}",
+            baseline_commit.stderr
+        );
+    }
+    let remote_path = config
+        .home
+        .join("Projects")
+        .join("_smoke")
+        .join("remotes")
+        .join(format!("{slug}.git"));
+    let remote_path = if remote_path.is_absolute() {
+        remote_path
+    } else {
+        std::env::current_dir()?.join(remote_path)
+    };
+    if let Some(parent) = remote_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let remote_arg = remote_path.to_string_lossy().to_string();
+    run_project_command(&workspace_path, "git", &["init", "--bare", &remote_arg]).await?;
+    run_project_command(
+        &workspace_path,
+        "git",
+        &["remote", "add", "origin", &remote_arg],
+    )
+    .await?;
+    let baseline_push = run_project_command(
+        &workspace_path,
+        "git",
+        &["push", "-u", "origin", "feature/smoke"],
+    )
+    .await?;
+    if !baseline_push.success {
+        anyhow::bail!("Tools smoke baseline push failed: {}", baseline_push.stderr);
+    }
     fs::write(
         workspace_path.join("git-review.md"),
         "# Git Review Smoke\n\npending change\n",
@@ -3285,18 +3455,6 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
         None,
     )
     .await?;
-    run_project_command(
-        &workspace_path,
-        "git",
-        &["config", "user.email", "smoke@example.invalid"],
-    )
-    .await?;
-    run_project_command(
-        &workspace_path,
-        "git",
-        &["config", "user.name", "Librarian Smoke"],
-    )
-    .await?;
     run_project_command(&workspace_path, "git", &["add", "-A"]).await?;
     let smoke_commit = run_project_command(
         &workspace_path,
@@ -3306,6 +3464,19 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     .await?;
     if !smoke_commit.success {
         anyhow::bail!("Tools smoke git commit failed: {}", smoke_commit.stderr);
+    }
+    let push_plan = plan_job_git_push(&db, git_job.id).await?;
+    if !push_plan
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        || push_plan
+            .get("ahead_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            == 0
+    {
+        anyhow::bail!("Tools smoke expected push plan to allow one outgoing smoke commit");
     }
     let smoke_sha =
         run_project_command(&workspace_path, "git", &["log", "-1", "--format=%H"]).await?;
@@ -3326,7 +3497,7 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     )
     .await?;
     println!(
-        "   OK: review event, policy gate, approval={}, and revert approval={} are functional.",
+        "   OK: review event, policy gate, push plan, approval={}, and revert approval={} are functional.",
         approval.id, revert_approval.id
     );
 
