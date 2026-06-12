@@ -1104,7 +1104,11 @@ readiness or a later planned milestone.
 - Add a stronger agent patch review loop before self-hosted write/commit
   cycles. First CLI pass adds `jobs review <job-id> [--run-tests]`, which
   records git status, diff summary, staged diff summary, optional Cargo test
-  output, and a recommendation as a job event.
+  output, and a recommendation as a job event. Second pass adds `jobs
+  review-packet <job-id> [--run-tests] [--revert-commit <sha>]`, combining
+  review output, commit gate, revert plan, push plan, and a compact next-step
+  summary into one machine-readable artifact for the future chat/UI approval
+  card.
 - Add commit/push/revert policy gates before any self-hosted commit
   automation. First CLI pass adds `jobs gate <job-id> --action commit|push`,
   checking project git policy, protected branches, optional branch pattern,

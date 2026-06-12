@@ -38,6 +38,7 @@ Review a job's repository state before continuing:
 
 ```bash
 librarian --home "$HOME/Librarian" jobs review <job-id> --run-tests
+librarian --home "$HOME/Librarian" jobs review-packet <job-id> --run-tests --revert-commit <sha>
 ```
 
 Check commit/push policy gates:
@@ -92,6 +93,9 @@ librarian --home "$HOME/Librarian" smoke providers
   and Markdown run summaries.
 - `jobs review` records git status, diff summaries, optional Cargo test output,
   and a machine-readable recommendation as a job event.
+- `jobs review-packet` records one combined review artifact with review output,
+  commit gate, revert plan, push plan, and a compact next-step summary for the
+  future chat/UI approval card.
 - `jobs gate` records whether commit, push, or revert is allowed by project policy,
   branch protection, branch pattern, dirty state, and upstream state.
 - `jobs push-plan` records the upstream branch, outgoing commit list, ahead
@@ -113,9 +117,9 @@ librarian --home "$HOME/Librarian" smoke providers
 - A real containerized self-host Codex task still needs repeated validation on
   the user's target Ubuntu host.
 - Agent-written patches still need richer UI approval cards. CLI diff/test
-  review, commit/push/revert policy gates, push planning, gated commit
-  approvals, and revert proposals now exist as machine contracts. Push remains
-  manual after policy review.
+  review, review packets, commit/push/revert policy gates, push planning, gated
+  commit approvals, and revert proposals now exist as machine contracts. Push
+  remains manual after policy review.
 - Automatic write tasks should require project policy gates, not only prompt
   instructions.
 - Budget/cost control is observed-spend based; estimated reservations before
@@ -135,8 +139,9 @@ Use Librarian for supervised self-development in short loops:
 1. Discuss the task in chat and select the Librarian project context.
 2. Launch a read-only agent inspection or preflight first.
 3. Review job events and generated run summary.
-4. Run `jobs review <job-id> --run-tests`.
-5. Run `jobs gate <job-id> --action commit` before any commit.
+4. Run `jobs review-packet <job-id> --run-tests`.
+5. Run `jobs gate <job-id> --action commit` before any commit if the packet
+   shows worktree changes.
 6. Create `jobs propose-git <job-id> --action commit --message ...` when the
    review and gate are acceptable.
 7. If that commit is wrong, run `jobs revert-plan <job-id> --commit <sha>` and

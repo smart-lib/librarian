@@ -311,6 +311,13 @@ enum JobsCommand {
         #[arg(long)]
         run_tests: bool,
     },
+    ReviewPacket {
+        job_id: uuid::Uuid,
+        #[arg(long)]
+        run_tests: bool,
+        #[arg(long)]
+        revert_commit: Option<String>,
+    },
     Gate {
         job_id: uuid::Uuid,
         #[arg(long, value_enum)]
@@ -1239,6 +1246,16 @@ async fn main() -> Result<()> {
                 }
                 JobsCommand::Review { job_id, run_tests } => {
                     let report = review_job_changes(&db, job_id, run_tests).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                JobsCommand::ReviewPacket {
+                    job_id,
+                    run_tests,
+                    revert_commit,
+                } => {
+                    let report =
+                        build_job_review_packet(&db, job_id, run_tests, revert_commit.as_deref())
+                            .await?;
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 }
                 JobsCommand::Gate { job_id, action } => {
@@ -2618,6 +2635,77 @@ async fn review_job_changes(
     Ok(report)
 }
 
+async fn build_job_review_packet(
+    db: &Database,
+    job_id: uuid::Uuid,
+    run_tests: bool,
+    revert_commit: Option<&str>,
+) -> Result<serde_json::Value> {
+    let job = db.get_job(job_id).await?;
+    let project = db.get_project_by_id(job.project_id).await?;
+    let review = review_job_changes(db, job_id, run_tests).await?;
+    let commit_gate = gate_job_git_action(db, job_id, GitGateActionArg::Commit).await?;
+    let revert_plan = plan_job_git_revert(db, job_id, revert_commit).await?;
+    let push_plan = plan_job_git_push(db, job_id).await?;
+
+    let review_recommendation = review
+        .get("recommendation")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let commit_allowed = commit_gate
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let revert_allowed = revert_plan
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let push_allowed = push_plan
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let has_worktree_changes = review
+        .get("has_worktree_changes")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let next_step = if has_worktree_changes && commit_allowed {
+        "review_diff_then_propose_commit"
+    } else if has_worktree_changes {
+        "fix_commit_gate_blockers"
+    } else if push_allowed {
+        "review_push_plan_then_push_manually"
+    } else if revert_allowed {
+        "revert_available_if_needed"
+    } else {
+        "inspect_packet_blockers"
+    };
+
+    let packet = json!({
+        "job_id": job.id,
+        "project": {
+            "id": project.id,
+            "name": project.name,
+            "path": user_facing_path(&project.path),
+        },
+        "run_tests": run_tests,
+        "summary": {
+            "review_recommendation": review_recommendation,
+            "has_worktree_changes": has_worktree_changes,
+            "commit_allowed": commit_allowed,
+            "revert_allowed": revert_allowed,
+            "push_allowed": push_allowed,
+            "next_step": next_step,
+        },
+        "review": review,
+        "commit_gate": commit_gate,
+        "revert_plan": revert_plan,
+        "push_plan": push_plan,
+    });
+    db.add_job_event(job.id, "review_packet", packet.clone())
+        .await?;
+    Ok(packet)
+}
+
 async fn gate_job_git_action(
     db: &Database,
     job_id: uuid::Uuid,
@@ -3488,6 +3576,21 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     {
         anyhow::bail!("Tools smoke expected revert plan to allow clean feature branch revert");
     }
+    let review_packet =
+        build_job_review_packet(&db, git_job.id, false, Some(&smoke_sha.stdout)).await?;
+    if review_packet
+        .get("summary")
+        .and_then(|summary| summary.get("push_allowed"))
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+        || review_packet
+            .get("summary")
+            .and_then(|summary| summary.get("revert_allowed"))
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+    {
+        anyhow::bail!("Tools smoke expected review packet to allow push review and revert");
+    }
     let revert_approval = propose_job_git_action(
         &db,
         git_job.id,
@@ -3497,7 +3600,7 @@ async fn run_tools_smoke(config: &Config, name: &str) -> Result<()> {
     )
     .await?;
     println!(
-        "   OK: review event, policy gate, push plan, approval={}, and revert approval={} are functional.",
+        "   OK: review packet, policy gates, push plan, approval={}, and revert approval={} are functional.",
         approval.id, revert_approval.id
     );
 

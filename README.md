@@ -219,6 +219,12 @@ Review a job's project worktree before approving follow-up work or commits:
 librarian --home "$HOME/Librarian" jobs review <job-id> --run-tests
 ```
 
+Collect the full review packet for chat/UI approval decisions:
+
+```bash
+librarian --home "$HOME/Librarian" jobs review-packet <job-id> --run-tests --revert-commit <sha>
+```
+
 Check whether project git policy allows a future commit or push:
 
 ```bash
