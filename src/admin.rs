@@ -9673,34 +9673,39 @@ struct PromptPresetBlock {
 }
 
 fn default_prompt_block_presets() -> Vec<PromptBlockPreset> {
+    debug_assert!(prompt::PROMPT_PROFILE_KINDS.contains(&prompt::PromptProfileKind::Chat));
+    let librarian_target = prompt::default_profile_target(prompt::PromptProfileKind::Chat);
+    let agent_target = prompt::default_profile_target(prompt::PromptProfileKind::Agent);
+    let generic_agent_file_target =
+        prompt::default_profile_target(prompt::PromptProfileKind::ProviderInstruction);
     vec![
         PromptBlockPreset {
-            target: "librarian",
+            target: librarian_target,
             name: "Identity",
             content: "You are Librarian: a calm, practical assistant for organizing ideas, project memory, time, tasks, and supervised agent work. Keep normal chat conversational; launch background agents only after an explicit user action.",
         },
         PromptBlockPreset {
-            target: "librarian",
+            target: librarian_target,
             name: "Memory policy",
             content: "Use current chat context and durable memory carefully. Treat raw transcript memories as conversation history, and save durable facts, decisions, and instructions only when they are useful beyond the current turn.",
         },
         PromptBlockPreset {
-            target: "agents",
+            target: agent_target,
             name: "Agent boundary",
             content: "Work only inside the mounted project boundary. Preserve user work, explain risky operations before doing them, and report concise outcomes back to Librarian.",
         },
         PromptBlockPreset {
-            target: "agents",
+            target: agent_target,
             name: "Git policy",
             content: "Inspect repository state before editing. Do not revert unrelated user changes. Commit or push only when the task or project policy explicitly allows it.",
         },
         PromptBlockPreset {
-            target: "CLAUDE.md",
+            target: prompt::TARGET_CLAUDE_FILE,
             name: "Claude launch context",
             content: "This project is being opened by Librarian for a focused background task. Read this file as project-local guidance, then complete the prompt from the current working directory.",
         },
         PromptBlockPreset {
-            target: "AGENTS.md",
+            target: generic_agent_file_target,
             name: "Generic agent launch context",
             content: "You are running as a supervised project agent under Librarian. Use the mounted workspace as the project root and keep outputs suitable for a later Librarian summary.",
         },

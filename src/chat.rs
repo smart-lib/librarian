@@ -89,8 +89,11 @@ async fn run_librarian_chat_loop_with_runner(
 
     for iteration in 1..=max_iterations {
         let iteration_started_at = Instant::now();
-        let librarian_blocks = db.list_prompt_blocks(Some("librarian")).await?;
-        let prompt_version = prompt::prompt_block_version(Some("librarian"), &librarian_blocks);
+        let librarian_blocks = db
+            .list_prompt_blocks(Some(prompt::TARGET_LIBRARIAN))
+            .await?;
+        let prompt_version =
+            prompt::prompt_block_version(Some(prompt::TARGET_LIBRARIAN), &librarian_blocks);
         let librarian_instruction_blocks = prompt::render_prompt_blocks(&librarian_blocks);
         let prompt = build_librarian_chat_prompt(
             config,
