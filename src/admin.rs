@@ -8079,6 +8079,57 @@ mod tests {
         std::fs::remove_dir_all(home).ok();
     }
 
+    #[tokio::test]
+    async fn claude_runtime_settings_endpoint_persists_instruction_file() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-claude-settings-{}",
+            Uuid::new_v4()
+        ));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let state = AppState {
+                db: db.clone(),
+                config: Arc::new(RwLock::new(config.clone())),
+            };
+
+            let response = update_claude_runtime_settings(
+                State(state.clone()),
+                Json(UpdateClaudeRuntimeRequest {
+                    host_home: Some(home.join(".cfg").join("claude-home").display().to_string()),
+                    mount_host_home: Some(true),
+                    mount_read_only: Some(true),
+                    instruction_file: Some("PROJECT_CLAUDE.md".to_string()),
+                }),
+            )
+            .await
+            .expect("settings response")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let value: serde_json::Value = serde_json::from_slice(&body).expect("json");
+            assert_eq!(value["claude"]["instruction_file"], "PROJECT_CLAUDE.md");
+
+            let saved = state.config.read().await.clone();
+            assert!(saved.claude.mount_host_home);
+            assert!(saved.claude.mount_read_only);
+            assert_eq!(saved.claude.instruction_file, "PROJECT_CLAUDE.md");
+            assert!(db
+                .list_system_events(5)
+                .await
+                .expect("events")
+                .iter()
+                .any(|event| event.kind == "claude_runtime_updated"));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
     #[test]
     fn normalizes_approval_library_paths_from_user_text() {
         let payload = serde_json::json!({
