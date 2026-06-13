@@ -246,6 +246,7 @@ async fn slash_commands(State(state): State<AppState>) -> impl IntoResponse {
         serde_json::json!({"command": "/settings tool-permissions", "description": "Show tool permission policy", "group": "settings"}),
         serde_json::json!({"command": "/agent list", "description": "List background agent jobs", "group": "agent"}),
         serde_json::json!({"command": "/agent preflight ", "description": "Prepare a job command without running it", "group": "agent"}),
+        serde_json::json!({"command": "/agent review-packet ", "description": "Build a patch review packet for a job", "group": "agent"}),
         serde_json::json!({"command": "/agent launch ", "description": "Queue an explicit background agent job", "group": "agent"}),
     ];
     if let Ok(projects) = state.db.list_projects().await {
@@ -3546,6 +3547,16 @@ fn slash_reply_with_ui(
 }
 
 fn agent_action_ui(command: &str, trace: &serde_json::Value) -> serde_json::Value {
+    if trace
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind != "agent_action")
+    {
+        let mut ui = trace.clone();
+        ui["command"] = serde_json::Value::String(command.to_string());
+        return ui;
+    }
+
     let mut ui = serde_json::json!({
         "type": "agent_action",
         "command": command,
@@ -6640,6 +6651,37 @@ async fn execute_agent_slash_command(
                 }),
             )
         }
+        "review-packet" | "review" => {
+            let job_id = slash_job_id_arg(args, "/agent review-packet <job-id>")?;
+            let packet =
+                job_review::build_job_review_packet(&state.db, job_id, false, None).await?;
+            let summary = packet
+                .get("summary")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            let next_step = summary
+                .get("next_step")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("inspect_packet");
+            let project = packet
+                .get("project")
+                .and_then(|value| value.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("project");
+            agent_slash_reply(
+                &format!("Review packet for job {job_id} is ready. Next step: {next_step}."),
+                &command,
+                serde_json::json!({
+                    "type": "job_review",
+                    "tool": "agent",
+                    "command": command,
+                    "status": "ready",
+                    "job_id": job_id,
+                    "project": project,
+                    "packet": packet,
+                }),
+            )
+        }
         "launch" | "queue" => {
             ensure_tool_permission(
                 &state.db,
@@ -6894,7 +6936,7 @@ fn format_job_summary(job: &crate::domain::Job) -> String {
 }
 
 fn agent_slash_help() -> &'static str {
-    "Agent commands live under /agent and only run when called explicitly:\n/agent list [limit]\n/agent status <job-id>\n/agent events <job-id>\n/agent preflight <job-id>\n/agent launch <project> <goal> [--provider codex|openrouter|claude-code] [--read-only] [--allow-network] [--secret-grant-token token] --yes\n/agent cancel <job-id> --yes\n/agent retry <job-id> --yes\n\nUse /agent launch for background work. Normal chat never creates jobs."
+    "Agent commands live under /agent and only run when called explicitly:\n/agent list [limit]\n/agent status <job-id>\n/agent events <job-id>\n/agent preflight <job-id>\n/agent review-packet <job-id>\n/agent launch <project> <goal> [--provider codex|openrouter|claude-code] [--read-only] [--allow-network] [--secret-grant-token token] --yes\n/agent cancel <job-id> --yes\n/agent retry <job-id> --yes\n\nUse /agent launch for background work. Normal chat never creates jobs."
 }
 
 fn parse_memory_kind_token(value: &str) -> Result<MemoryKind> {
@@ -7981,6 +8023,57 @@ mod tests {
             assert_eq!(ui["approval"]["tool"], "library");
             assert_eq!(ui["approval"]["action"], "create_folder");
             assert_eq!(ui["approval"]["payload"]["library_path"], "Games/NewShelf");
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn agent_review_packet_slash_returns_chat_card() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-review-card-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let repo = std::env::current_dir().expect("repo");
+            let project = db
+                .add_project("LibrarianReviewCard", &repo)
+                .await
+                .expect("project");
+            let job = db
+                .create_job(
+                    project.id,
+                    crate::domain::ProviderKind::Codex,
+                    "inspect review card",
+                    MountMode::ReadOnly,
+                    crate::domain::NetworkMode::Provider,
+                    None,
+                )
+                .await
+                .expect("job");
+            let state = AppState {
+                db: db.clone(),
+                config: Arc::new(RwLock::new(config.clone())),
+            };
+
+            let result = execute_agent_slash_command(
+                &state,
+                &config,
+                &["review-packet".to_string(), job.id.to_string()],
+            )
+            .await
+            .expect("review packet");
+
+            assert!(result.reply.contains("Review packet"));
+            let ui = result.ui.expect("ui");
+            assert_eq!(ui["type"], "job_review");
+            assert_eq!(ui["job_id"], job.id.to_string());
+            assert_eq!(ui["packet"]["project"]["name"], "LibrarianReviewCard");
+            assert!(ui["packet"]["summary"]["next_step"].is_string());
         }
 
         std::fs::remove_dir_all(home).ok();

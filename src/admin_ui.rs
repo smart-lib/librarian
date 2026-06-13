@@ -1483,6 +1483,67 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         article.querySelector('[data-agent-preflight]')?.addEventListener('click', () => loadAgentEvents(true));
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
       }
+      function setJobReviewCard(article, ui, fallbackText, detail) {
+        const packet = ui?.packet || {};
+        const summary = packet.summary || {};
+        const project = packet.project || {};
+        const jobId = ui?.job_id || packet.job_id || '';
+        const review = packet.review || {};
+        const git = review.git || {};
+        const commitGate = packet.commit_gate || {};
+        const blockers = Array.isArray(commitGate.blockers) ? commitGate.blockers : [];
+        const nextStep = summary.next_step || 'inspect_packet';
+        const status = blockers.length ? 'blocked' : 'ready';
+        const rows = [
+          `Project: ${project.name || ui?.project || '-'}`,
+          `Job: ${jobId || '-'}`,
+          `Recommendation: ${summary.review_recommendation || review.recommendation || '-'}`,
+          `Worktree changes: ${summary.has_worktree_changes ? 'yes' : 'no'}`,
+          `Commit gate: ${summary.commit_allowed ? 'allowed' : 'blocked'}`,
+          `Push plan: ${summary.push_allowed ? 'available' : 'not ready'}`
+        ];
+        const statusText = git.status?.stdout || '';
+        const diffText = git.diff_stat?.stdout || '';
+        article.className = 'message assistant agent-card review-card';
+        article.innerHTML = `
+          <div class="approval-head"><span>Job review packet</span><span class="approval-risk">${htmlEscape(status)}</span></div>
+          <div class="approval-summary">${htmlEscape(fallbackText || `Next step: ${nextStep}`)}</div>
+          <div class="approval-paths">${rows.map(row => `<div>${htmlEscape(row)}</div>`).join('')}</div>
+          ${blockers.length ? `<div class="approval-paths">${blockers.map(row => `<div>${htmlEscape(row)}</div>`).join('')}</div>` : '<div class="muted tiny">No commit gate blockers.</div>'}
+          <div class="approval-actions">
+            ${jobId ? '<button type="button" data-agent-events>Refresh events</button>' : ''}
+            ${jobId ? '<button type="button" data-agent-preflight>Preflight</button>' : ''}
+          </div>
+          <details ${statusText ? 'open' : ''}><summary>Git status</summary><pre>${htmlEscape(statusText || 'clean')}</pre></details>
+          <details><summary>Diff summary</summary><pre>${htmlEscape(diffText || 'no diff')}</pre></details>
+          <details><summary>Technical details</summary><pre>${htmlEscape(JSON.stringify(packet, null, 2))}</pre></details>
+        `;
+        if (detail) {
+          const small = document.createElement('small');
+          small.textContent = detail;
+          article.appendChild(small);
+        }
+        const eventList = document.createElement('div');
+        eventList.className = 'agent-event-list';
+        eventList.hidden = true;
+        article.appendChild(eventList);
+        async function loadReviewEvents(runPreflight) {
+          if (!jobId) return;
+          if (runPreflight) {
+            await fetch(`/api/jobs/${encodeURIComponent(jobId)}/preflight`, { method: 'POST' }).catch(() => {});
+          }
+          const events = await loadJson(`/api/jobs/${encodeURIComponent(jobId)}/events`, []);
+          eventList.hidden = false;
+          const recent = Array.isArray(events) ? events.slice(-5).reverse() : [];
+          eventList.innerHTML = recent.length
+            ? recent.map(event => `<div>${htmlEscape(`${event.created_at || ''} ${event.kind || 'event'} ${JSON.stringify(event.payload || {})}`)}</div>`).join('')
+            : '<div>No events yet.</div>';
+          el('chat-log').scrollTop = el('chat-log').scrollHeight;
+        }
+        article.querySelector('[data-agent-events]')?.addEventListener('click', () => loadReviewEvents(false));
+        article.querySelector('[data-agent-preflight]')?.addEventListener('click', () => loadReviewEvents(true));
+        el('chat-log').scrollTop = el('chat-log').scrollHeight;
+      }
       async function decideApproval(article, approvalId, decision) {
         if (!approvalId) return;
         const buttons = Array.from(article.querySelectorAll('[data-approval-decision]'));
@@ -1618,6 +1679,8 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             setContextSwitchCard(article, turn.metadata.ui, assistantName());
           } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'agent_action') {
             setAgentActionCard(article, turn.metadata.ui, turn.content, assistantName());
+          } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'job_review') {
+            setJobReviewCard(article, turn.metadata.ui, turn.content, assistantName());
           }
         }
         if (!transcript.turns.length && announce) {
@@ -2908,6 +2971,8 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             setApprovalCard(pending, data.ui.approval, data.reply || 'Approval requested.', detail);
           } else if (data.ui?.type === 'agent_action') {
             setAgentActionCard(pending, data.ui, data.reply || 'Agent action completed.', detail);
+          } else if (data.ui?.type === 'job_review') {
+            setJobReviewCard(pending, data.ui, data.reply || 'Review packet ready.', detail);
           } else {
             if (data.mode === 'slash-command') pending.className = 'message system command';
             setMessage(pending, data.reply || 'I am here.', detail, data.context_label || contextLabel);
