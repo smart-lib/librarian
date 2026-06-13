@@ -2025,6 +2025,37 @@ pub async fn run_agent_action_ui_smoke(config: &Config, name: &str) -> Result<()
     Ok(())
 }
 
+pub async fn run_agent_review_packet_ui_smoke(config: &Config, job_id: Uuid) -> Result<()> {
+    let db = Database::connect(config).await?;
+    db.migrate().await?;
+    let state = AppState {
+        db,
+        config: Arc::new(RwLock::new(config.clone())),
+    };
+    let result = execute_agent_slash_command(
+        &state,
+        config,
+        &["review-packet".to_string(), job_id.to_string()],
+    )
+    .await?;
+    let Some(ui) = result.ui else {
+        anyhow::bail!("Agent review packet smoke expected chat UI metadata");
+    };
+    if ui.get("type").and_then(serde_json::Value::as_str) != Some("job_review") {
+        anyhow::bail!("Agent review packet smoke expected `job_review` UI type");
+    }
+    if ui
+        .get("packet")
+        .and_then(|packet| packet.get("summary"))
+        .and_then(|summary| summary.get("next_step"))
+        .and_then(serde_json::Value::as_str)
+        .is_none()
+    {
+        anyhow::bail!("Agent review packet smoke expected packet.summary.next_step");
+    }
+    Ok(())
+}
+
 pub async fn run_project_slash_smoke(config: &Config, name: &str) -> Result<()> {
     config.ensure_layout()?;
     let db = Database::connect(config).await?;

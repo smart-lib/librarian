@@ -2558,6 +2558,10 @@ async fn run_self_host_smoke(
             .unwrap_or("unknown")
     );
 
+    println!("6. Checking chat review-card contract...");
+    admin::run_agent_review_packet_ui_smoke(config, job.id).await?;
+    println!("   OK: /agent review-packet returns chat UI metadata.");
+
     if !run_agent {
         println!();
         println!("Self-host preflight passed.");
@@ -2570,7 +2574,7 @@ async fn run_self_host_smoke(
         return Ok(());
     }
 
-    println!("6. Running the selected provider in the agent container...");
+    println!("7. Running the selected provider in the agent container...");
     worker::run_job_by_id(config.clone(), db.clone(), job.id).await?;
     let job = db.get_job(job.id).await?;
     println!("   status: {:?}", job.status);
