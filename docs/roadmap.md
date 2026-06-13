@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.14`; bump at least the minor version when a visible
+- Current crate version: `0.2.15`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -1101,6 +1101,8 @@ readiness or a later planned milestone.
   managed project, verifies context memory retrieval, and prepares a read-only
   self-host agent job; `--run-agent` performs the real provider call.
 - Add richer structured parsing for provider responses and CLI error formats.
+  First expansion covers common Codex, Claude Code, and OpenRouter auth, quota,
+  model, timeout, and network failures with provider-specific diagnostic codes.
 - Add a stronger agent patch review loop before self-hosted write/commit
   cycles. First CLI pass adds `jobs review <job-id> [--run-tests]`, which
   records git status, diff summary, staged diff summary, optional Cargo test
@@ -1122,10 +1124,18 @@ readiness or a later planned milestone.
   automation is allowed. Fourth pass adds `jobs push-plan <job-id>`, which
   records upstream, outgoing commits, ahead count, remotes, and diff stat for
   manual push review; actual push execution remains disabled until the UI and
-  approval story is stronger.
+  approval story is stronger. The shared implementation now lives in
+  `src/job_review.rs`, and the admin Jobs panel can request the same review
+  packet through `/api/jobs/:id/review-packet` instead of duplicating CLI logic.
+- Add policy gates before automatic background write jobs. First pass adds
+  `src/agent_policy.rs`: explicit user actions may request write mounts when
+  the project policy allows it, while scheduled/automatic write jobs are blocked
+  unless the project is explicitly configured for full agent access.
 - Add estimated-cost reservation before dispatch once provider adapters can
   predict request cost, so budget checks can account for the pending run instead
-  of only already-observed `cost_usd`.
+  of only already-observed `cost_usd`. First scaffold records estimated input
+  tokens and a non-reserving `budget_reservation` event/report field when model
+  pricing is unknown, so the worker contract is ready for real reservations.
 - Add per-project Third Eye mapping/export policy: host-visible provider logs,
   mounted container `CODEX_HOME`/Claude dirs, or Librarian-generated export
   from `usage_observations`.
@@ -1142,6 +1152,10 @@ Tasks:
 
 - Support channel/profile variants later, so host-level, project-level, and
   agent-launch instructions can differ without duplicating every block.
+- Keep prompt/profile targets canonical in code. First module pass adds shared
+  prompt target constants for Librarian chat, generic agents, `AGENTS.md`, and
+  provider instruction files such as `CLAUDE.md`; worker launch and CLI prompt
+  commands now use those constants instead of scattered string literals.
 - Decide whether launch-time instruction bundles are injected only into prompts,
   mounted into the container as additional read-only files, or both, so agents
   can reread their operating instructions during a run.

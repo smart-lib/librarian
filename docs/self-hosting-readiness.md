@@ -10,10 +10,12 @@ Status: partially ready for supervised self-hosting.
 Librarian can already register its own repository as a project, retrieve
 project-scoped context, prepare containerized agent jobs, mount provider
 profiles, pass prompt-builder instruction files, record job events, collect a
-worktree review snapshot, and keep run summaries in the knowledge base. That is
-enough for cautious read-only inspection tasks and small manually reviewed
-implementation tasks. Commit/push policy can now be checked explicitly before
-any human or future automated approval step.
+worktree review snapshot, and keep run summaries in the knowledge base. It can
+also produce a combined review packet, expose that packet to the admin Jobs
+panel, and block scheduled write jobs unless project policy explicitly allows
+them. That is enough for cautious read-only inspection tasks and small manually
+reviewed implementation tasks. Commit/push policy can now be checked explicitly
+before any human or future automated approval step.
 
 It is not yet ready for unattended autonomous development loops. The missing
 pieces are stronger self-host smoke coverage with real provider runs, richer
@@ -109,8 +111,14 @@ librarian --home "$HOME/Librarian" smoke providers
 - Prompt builder blocks can generate provider instruction files such as
   `CLAUDE.md` and generic agent guidance.
 - Provider diagnostics are shared by doctor, admin API, and provider smoke.
+  Current parsing covers common Codex, Claude Code, and OpenRouter auth, quota,
+  model, timeout, and network failures.
 - `smoke self-host` now checks that the Librarian repository can be registered
   and prepared for a supervised read-only agent job.
+- Worker preflight now reports a budget reservation estimate. It records
+  estimated input tokens even when provider/model pricing is not available yet.
+- Prompt profile targets are centralized in code, so chat, generic agent, and
+  provider instruction-file targets can grow without string literal drift.
 
 ## Main Gaps Before Continuous Self-Development
 
@@ -120,13 +128,16 @@ librarian --home "$HOME/Librarian" smoke providers
   review, review packets, commit/push/revert policy gates, push planning, gated
   commit approvals, and revert proposals now exist as machine contracts. Push
   remains manual after policy review.
-- Automatic write tasks should require project policy gates, not only prompt
-  instructions.
-- Budget/cost control is observed-spend based; estimated reservations before
-  dispatch are still missing.
+- Automatic write tasks now pass through a first project policy gate; richer UI
+  policy editing and audit explanations are still needed.
+- Budget/cost control still does not reserve money before dispatch. The worker
+  now emits reservation estimates, but real provider/model pricing and pending
+  spend accounting remain.
 - Admin auth is missing, so remote admin/channel exposure is not ready.
 - `src/admin.rs` remains too large and still contains mixed UI/API/helper
-  responsibilities.
+  responsibilities. Job review logic has been extracted to `src/job_review.rs`;
+  the next modularity pass should split admin UI rendering, admin API handlers,
+  chat orchestration, and atlas/project-library code.
 - OpenRouter and Claude Code paths exist but are not yet proven as production
   self-hosting providers.
 - Prompt/profile variants are still first-pass; host, channel, and provider
