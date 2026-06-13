@@ -2547,6 +2547,15 @@ async fn run_self_host_smoke(
             .map(Vec::len)
             .unwrap_or(0)
     );
+    let packet = job_review::build_job_review_packet(&db, job.id, false, None).await?;
+    println!(
+        "   OK: review packet next_step={}",
+        packet
+            .get("summary")
+            .and_then(|summary| summary.get("next_step"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+    );
 
     if !run_agent {
         println!();
