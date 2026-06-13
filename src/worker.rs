@@ -263,10 +263,16 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         secret_grant_token: job.secret_grant_token.clone(),
     };
     let prompt_len = spec.prompt.chars().count();
-    let budget_reservation = router::estimate_budget_reservation(&job, prompt_len);
 
     let runner = DockerRunner::new(config.clone());
     let command_parts = runner.docker_command_parts(&spec).await?;
+    let budget_reservation = router::reserve_budget_if_possible(
+        &config,
+        &db,
+        &job,
+        router::estimate_budget_reservation(&job, prompt_len),
+    )
+    .await?;
     db.add_job_event(
         job.id,
         "prepared",
@@ -316,6 +322,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
     let output = execute(command_parts, &db, &config, &job).await;
     match output {
         Ok(code) if code == 0 => {
+            db.release_budget_reservation(job.id, "Completed").await?;
             db.mark_job_finished(job.id, JobStatus::Completed).await?;
             db.add_job_event(
                 job.id,
@@ -347,6 +354,8 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
             } else {
                 JobStatus::Failed
             };
+            db.release_budget_reservation(job.id, &format!("{:?}", final_status))
+                .await?;
             db.mark_job_finished(job.id, final_status.clone()).await?;
             db.add_job_event(
                 job.id,
@@ -391,6 +400,8 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
             } else {
                 JobStatus::Failed
             };
+            db.release_budget_reservation(job.id, &format!("{:?}", final_status))
+                .await?;
             db.mark_job_finished(job.id, final_status.clone()).await?;
             let error_text = error.to_string();
             db.add_job_event(job.id, "error", json!({ "error": error_text }))
@@ -496,7 +507,7 @@ async fn prepare_job(
         &agent_instruction_blocks,
     );
     let prompt_len = enriched_prompt.chars().count();
-    let budget_reservation = router::estimate_budget_reservation(&job, prompt_len);
+    let budget_estimate = router::estimate_budget_reservation(&job, prompt_len);
     let spec = AgentRunSpec {
         job_id: job.id,
         project_path: project.path.clone(),
@@ -511,6 +522,11 @@ async fn prepare_job(
     let command = DockerRunner::new(config.clone())
         .docker_command_parts(&spec)
         .await?;
+    let budget_reservation = if dry_run {
+        budget_estimate
+    } else {
+        router::reserve_budget_if_possible(config, db, &job, budget_estimate).await?
+    };
 
     if !dry_run {
         db.add_job_event(

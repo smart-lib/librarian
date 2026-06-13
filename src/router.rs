@@ -167,6 +167,8 @@ pub struct BudgetCheck {
     pub scope: &'static str,
     pub limit_usd: f64,
     pub spent_usd: f64,
+    pub pending_usd: f64,
+    pub projected_usd: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -196,13 +198,34 @@ pub fn estimate_budget_reservation(job: &Job, prompt_chars: usize) -> BudgetRese
         prompt_chars,
         estimated_input_tokens,
         estimated_cost_usd,
-        reserved: estimated_cost_usd.is_some(),
+        reserved: false,
         reason: if estimated_cost_usd.is_some() {
-            "estimated_from_prompt_input_tokens"
+            "reservation_not_created"
         } else {
             "model_pricing_unknown"
         },
     }
+}
+
+pub async fn reserve_budget_if_possible(
+    config: &Config,
+    db: &Database,
+    job: &Job,
+    mut estimate: BudgetReservationEstimate,
+) -> Result<BudgetReservationEstimate> {
+    if !config.budget.enabled {
+        estimate.reason = "budget_disabled";
+        return Ok(estimate);
+    }
+    let Some(cost) = estimate.estimated_cost_usd else {
+        estimate.reason = "model_pricing_unknown";
+        return Ok(estimate);
+    };
+    db.create_budget_reservation(job, &estimate.provider, estimate.model.as_deref(), cost)
+        .await?;
+    estimate.reserved = true;
+    estimate.reason = "reserved_estimated_cost";
+    Ok(estimate)
 }
 
 pub async fn ensure_budget_available(
@@ -220,37 +243,51 @@ pub async fn ensure_budget_available(
 
     if let Some(limit) = config.budget.daily_total_usd {
         let spent = db.usage_cost_since(since, None, None).await?;
+        let pending = db.budget_reserved_cost_since(since, None, None).await?;
         checks.push(BudgetCheck {
             scope: "daily_total",
             limit_usd: limit,
             spent_usd: spent,
+            pending_usd: pending,
+            projected_usd: spent + pending,
         });
     }
     if let Some(limit) = config.budget.daily_provider_usd {
         let spent = db.usage_cost_since(since, Some(provider), None).await?;
+        let pending = db
+            .budget_reserved_cost_since(since, Some(provider), None)
+            .await?;
         checks.push(BudgetCheck {
             scope: "daily_provider",
             limit_usd: limit,
             spent_usd: spent,
+            pending_usd: pending,
+            projected_usd: spent + pending,
         });
     }
     if let Some(limit) = config.budget.daily_project_usd {
         let spent = db
             .usage_cost_since(since, None, Some(job.project_id))
             .await?;
+        let pending = db
+            .budget_reserved_cost_since(since, None, Some(job.project_id))
+            .await?;
         checks.push(BudgetCheck {
             scope: "daily_project",
             limit_usd: limit,
             spent_usd: spent,
+            pending_usd: pending,
+            projected_usd: spent + pending,
         });
     }
 
     for check in &checks {
-        if check.spent_usd >= check.limit_usd {
+        if check.projected_usd >= check.limit_usd {
             bail!(
-                "Budget `{}` is exhausted: spent ${:.4} of ${:.4}",
+                "Budget `{}` is exhausted: spent ${:.4} + pending ${:.4} of ${:.4}",
                 check.scope,
                 check.spent_usd,
+                check.pending_usd,
                 check.limit_usd
             );
         }
@@ -877,6 +914,47 @@ mod tests {
             .await
             .expect_err("budget should block");
         assert!(error.to_string().contains("daily_provider"));
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn blocks_dispatch_when_provider_budget_is_reserved() {
+        let (mut config, db, home) = test_config_and_db("budget-reserved").await;
+        config.budget.enabled = true;
+        config.budget.daily_provider_usd = Some(1.0);
+        let project_dir = home.join("project");
+        std::fs::create_dir_all(&project_dir).expect("project dir");
+        let project = db
+            .add_project("budget-reserved-project", &project_dir)
+            .await
+            .expect("project");
+        let job = db
+            .create_job(
+                project.id,
+                ProviderKind::Codex,
+                "test",
+                MountMode::ReadWrite,
+                NetworkMode::None,
+                None,
+            )
+            .await
+            .expect("job");
+        db.create_budget_reservation(&job, "codex", Some("codex-cli-default"), 1.0)
+            .await
+            .expect("reservation");
+
+        let error = ensure_budget_available(&config, &db, &job)
+            .await
+            .expect_err("pending budget should block");
+        assert!(error.to_string().contains("pending"));
+
+        db.release_budget_reservation(job.id, "Released")
+            .await
+            .expect("release reservation");
+        let checks = ensure_budget_available(&config, &db, &job)
+            .await
+            .expect("released reservation should not block");
+        assert_eq!(checks[0].pending_usd, 0.0);
         std::fs::remove_dir_all(home).ok();
     }
 

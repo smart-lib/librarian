@@ -268,6 +268,26 @@ impl Database {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS budget_reservations (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL UNIQUE,
+                project_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT,
+                estimated_cost_usd REAL NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(job_id) REFERENCES jobs(id),
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS schedules (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
@@ -381,6 +401,11 @@ impl Database {
         .await?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_usage_provider_observed ON usage_observations(provider, observed_at DESC)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_budget_reservations_active ON budget_reservations(status, provider, project_id, created_at)",
         )
         .execute(&self.pool)
         .await?;
@@ -1749,6 +1774,129 @@ impl Database {
                     SELECT COALESCE(SUM(cost_usd), 0.0) AS total
                     FROM usage_observations
                     WHERE observed_at >= ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .fetch_one(&self.pool)
+                .await?
+            }
+        };
+        Ok(row.get::<f64, _>("total"))
+    }
+
+    pub async fn create_budget_reservation(
+        &self,
+        job: &Job,
+        provider: &str,
+        model: Option<&str>,
+        estimated_cost_usd: f64,
+    ) -> Result<Uuid> {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            r#"
+            INSERT INTO budget_reservations
+                (id, job_id, project_id, provider, model, estimated_cost_usd, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'Active', ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                project_id = excluded.project_id,
+                provider = excluded.provider,
+                model = excluded.model,
+                estimated_cost_usd = excluded.estimated_cost_usd,
+                status = 'Active',
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(job.id.to_string())
+        .bind(job.project_id.to_string())
+        .bind(provider)
+        .bind(model)
+        .bind(estimated_cost_usd)
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn release_budget_reservation(&self, job_id: Uuid, status: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE budget_reservations
+            SET status = ?, updated_at = ?
+            WHERE job_id = ? AND status = 'Active'
+            "#,
+        )
+        .bind(status)
+        .bind(Utc::now().to_rfc3339())
+        .bind(job_id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn budget_reserved_cost_since(
+        &self,
+        since: DateTime<Utc>,
+        provider: Option<&str>,
+        project_id: Option<Uuid>,
+    ) -> Result<f64> {
+        let row = match (provider, project_id) {
+            (Some(provider), Some(project_id)) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(estimated_cost_usd), 0.0) AS total
+                    FROM budget_reservations
+                    WHERE created_at >= ?
+                      AND status = 'Active'
+                      AND provider = ?
+                      AND project_id = ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .bind(provider)
+                .bind(project_id.to_string())
+                .fetch_one(&self.pool)
+                .await?
+            }
+            (Some(provider), None) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(estimated_cost_usd), 0.0) AS total
+                    FROM budget_reservations
+                    WHERE created_at >= ?
+                      AND status = 'Active'
+                      AND provider = ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .bind(provider)
+                .fetch_one(&self.pool)
+                .await?
+            }
+            (None, Some(project_id)) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(estimated_cost_usd), 0.0) AS total
+                    FROM budget_reservations
+                    WHERE created_at >= ?
+                      AND status = 'Active'
+                      AND project_id = ?
+                    "#,
+                )
+                .bind(since.to_rfc3339())
+                .bind(project_id.to_string())
+                .fetch_one(&self.pool)
+                .await?
+            }
+            (None, None) => {
+                sqlx::query(
+                    r#"
+                    SELECT COALESCE(SUM(estimated_cost_usd), 0.0) AS total
+                    FROM budget_reservations
+                    WHERE created_at >= ?
+                      AND status = 'Active'
                     "#,
                 )
                 .bind(since.to_rfc3339())
