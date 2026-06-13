@@ -1,5 +1,6 @@
 mod admin;
 mod admin_models;
+mod agent_policy;
 mod broker;
 mod chat;
 mod config;
@@ -1126,6 +1127,11 @@ async fn main() -> Result<()> {
             } else {
                 MountMode::ReadWrite
             };
+            agent_policy::ensure_agent_job_allowed(
+                &project,
+                mount_mode,
+                agent_policy::JobCreationSource::ExplicitUserAction,
+            )?;
             let provider_kind: ProviderKind = provider.into();
             let network_mode = router::default_network_mode_for_provider(
                 &provider_kind,

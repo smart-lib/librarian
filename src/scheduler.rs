@@ -3,6 +3,7 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 
 use crate::{
+    agent_policy::{self, JobCreationSource},
     config::Config,
     db::Database,
     docker_runner::DockerRunner,
@@ -179,6 +180,11 @@ async fn run_agent_task_schedule(db: &Database, schedule: &Schedule) -> Result<(
             .unwrap_or(false),
         secret_grant_token.is_some(),
     );
+    agent_policy::ensure_agent_job_allowed(
+        &project,
+        mount_mode,
+        JobCreationSource::AutomaticSchedule,
+    )?;
 
     let job = db
         .create_job(

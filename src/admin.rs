@@ -19,6 +19,7 @@ use uuid::Uuid;
 
 use crate::{
     admin_models::*,
+    agent_policy::{self, JobCreationSource},
     chat::{self, LibrarianChatResult},
     config::{Config, ToolPermissionPolicy, ToolPermissionPreset, ToolPermissionsConfig},
     db::Database,
@@ -6774,6 +6775,11 @@ async fn create_job(
         MountMode::ReadWrite
     };
     let provider = router::parse_provider_kind(input.provider.as_deref().unwrap_or("codex"))?;
+    agent_policy::ensure_agent_job_allowed(
+        &project,
+        mount_mode,
+        JobCreationSource::ExplicitUserAction,
+    )?;
     let network_mode = router::default_network_mode_for_provider(
         &provider,
         input.allow_network.unwrap_or(false),
@@ -10491,6 +10497,11 @@ async fn execute_agent_slash_command(
             } else {
                 MountMode::ReadWrite
             };
+            agent_policy::ensure_agent_job_allowed(
+                &project,
+                mount_mode,
+                JobCreationSource::ExplicitUserAction,
+            )?;
             let job = state
                 .db
                 .create_job(
