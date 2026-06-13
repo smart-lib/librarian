@@ -322,6 +322,33 @@ pub fn detect_provider_diagnostic(job: &Job, text: &str) -> Option<serde_json::V
                 "next_step": "Run `codex` on the host and complete sign-in, then retry the Librarian job.",
             }));
         }
+        if lower.contains("model_not_found")
+            || lower.contains("model not found")
+            || lower.contains("unknown model")
+            || lower.contains("model is not available")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "codex_model_unavailable",
+                "severity": "error",
+                "message": "Codex reported that the selected model is not available.",
+                "next_step": "Check the host Codex model setting, update Codex if needed, or select a supported model.",
+            }));
+        }
+        if lower.contains("timed out")
+            || lower.contains("timeout waiting")
+            || lower.contains("deadline has elapsed")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "codex_provider_timeout",
+                "severity": "warn",
+                "message": "Codex provider communication timed out.",
+                "next_step": "Retry the job. If this repeats, check provider status and container network mode.",
+            }));
+        }
     }
     if matches!(job.provider, ProviderKind::ClaudeCode) {
         if lower.contains("librarian_diagnostic claude_cli_missing") {
@@ -394,6 +421,88 @@ pub fn detect_provider_diagnostic(job: &Job, text: &str) -> Option<serde_json::V
                 "severity": "error",
                 "message": "Claude Code started, but the agent container could not reach Claude/Anthropic endpoints.",
                 "next_step": "Confirm the job uses provider network mode and retry. Use open network only when the task itself needs broader network access.",
+            }));
+        }
+        if lower.contains("model not found")
+            || lower.contains("unknown model")
+            || lower.contains("model is not available")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_model_unavailable",
+                "severity": "error",
+                "message": "Claude Code reported that the selected model is not available.",
+                "next_step": "Check Claude Code configuration and selected model, then retry.",
+            }));
+        }
+        if lower.contains("timed out")
+            || lower.contains("timeout waiting")
+            || lower.contains("deadline has elapsed")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "claude_provider_timeout",
+                "severity": "warn",
+                "message": "Claude provider communication timed out.",
+                "next_step": "Retry the job. If this repeats, check provider status and container network mode.",
+            }));
+        }
+    }
+    if matches!(job.provider, ProviderKind::OpenRouter) {
+        if lower.contains("401")
+            || lower.contains("403")
+            || lower.contains("unauthorized")
+            || lower.contains("invalid api key")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "openrouter_auth_failed",
+                "severity": "error",
+                "message": "OpenRouter rejected the brokered request credentials.",
+                "next_step": "Create or refresh the OpenRouter secret grant, then retry the job.",
+            }));
+        }
+        if lower.contains("429")
+            || lower.contains("rate limit")
+            || lower.contains("quota")
+            || lower.contains("credit balance")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "openrouter_limit_or_quota",
+                "severity": "warn",
+                "message": "OpenRouter reported a rate, quota, or credit limit.",
+                "next_step": "Check OpenRouter limits/credits or wait before retrying.",
+            }));
+        }
+        if lower.contains("model not found")
+            || lower.contains("no endpoints found")
+            || lower.contains("model is not available")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "openrouter_model_unavailable",
+                "severity": "error",
+                "message": "OpenRouter could not route the selected model.",
+                "next_step": "Select a valid OpenRouter model and retry.",
+            }));
+        }
+        if lower.contains("failed to lookup address information")
+            || lower.contains("error sending request")
+            || lower.contains("timed out")
+        {
+            return Some(serde_json::json!({
+                "provider": provider,
+                "model": model,
+                "code": "openrouter_network_unavailable",
+                "severity": "error",
+                "message": "The agent or broker could not reach OpenRouter.",
+                "next_step": "Check broker/admin reachability, provider network mode, and host network access.",
             }));
         }
     }
@@ -488,6 +597,10 @@ mod tests {
         provider_job(ProviderKind::ClaudeCode)
     }
 
+    fn openrouter_job() -> Job {
+        provider_job(ProviderKind::OpenRouter)
+    }
+
     fn provider_job(provider: ProviderKind) -> Job {
         Job {
             id: Uuid::new_v4(),
@@ -548,6 +661,24 @@ mod tests {
     }
 
     #[test]
+    fn detects_codex_model_unavailable() {
+        let diagnostic = detect_provider_diagnostic(
+            &codex_job(),
+            "provider error: model_not_found: selected model is not available",
+        )
+        .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "codex_model_unavailable");
+    }
+
+    #[test]
+    fn detects_codex_timeout() {
+        let diagnostic =
+            detect_provider_diagnostic(&codex_job(), "timeout waiting for child process to exit")
+                .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "codex_provider_timeout");
+    }
+
+    #[test]
     fn detects_codex_cli_missing_preflight() {
         let diagnostic = detect_provider_diagnostic(
             &codex_job(),
@@ -585,6 +716,40 @@ mod tests {
         )
         .expect("diagnostic");
         assert_eq!(diagnostic["code"], "claude_login_required");
+    }
+
+    #[test]
+    fn detects_openrouter_auth_failure() {
+        let diagnostic =
+            detect_provider_diagnostic(&openrouter_job(), "OpenRouter returned 401 unauthorized")
+                .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "openrouter_auth_failed");
+    }
+
+    #[test]
+    fn detects_openrouter_quota_limit() {
+        let diagnostic =
+            detect_provider_diagnostic(&openrouter_job(), "429 rate limit: credit balance too low")
+                .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "openrouter_limit_or_quota");
+    }
+
+    #[test]
+    fn detects_openrouter_model_unavailable() {
+        let diagnostic =
+            detect_provider_diagnostic(&openrouter_job(), "No endpoints found for model")
+                .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "openrouter_model_unavailable");
+    }
+
+    #[test]
+    fn detects_openrouter_network_unavailable() {
+        let diagnostic = detect_provider_diagnostic(
+            &openrouter_job(),
+            "error sending request for url https://openrouter.ai/api/v1/chat/completions",
+        )
+        .expect("diagnostic");
+        assert_eq!(diagnostic["code"], "openrouter_network_unavailable");
     }
 
     async fn test_config_and_db(name: &str) -> (Config, Database, PathBuf) {
