@@ -1842,28 +1842,110 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const models = state.providers.catalog || [];
         const runtime = state.providers.runtime || {};
         const diagnostics = new Map((state.providers.diagnostics || []).map(item => [item.provider, item]));
-        const cards = models.length ? models.map(model => {
-          const current = states.get(`${model.provider}:${model.model}`) || states.get(`${model.provider}:`) || {};
-          const providerRuntime = runtime[model.provider] || {};
-          const diagnostic = diagnostics.get(model.provider) || {};
-          const runtimeLines = Object.keys(providerRuntime).length
-            ? `<br><span class="muted tiny">host profile: ${htmlEscape(providerRuntime.host_home || '-')}</span><br><span class="muted tiny">mount: ${providerRuntime.mount_host_home ? 'enabled' : 'disabled'}${providerRuntime.host_home_exists === false ? ' · missing profile' : ''}</span>`
-            : '';
+        const commands = state.providers.commands || {};
+        const providerOrder = ['codex', 'claude-code', 'openrouter'];
+        const modelsByProvider = new Map();
+        for (const model of models) {
+          const list = modelsByProvider.get(model.provider) || [];
+          list.push(model);
+          modelsByProvider.set(model.provider, list);
+          if (!providerOrder.includes(model.provider)) providerOrder.push(model.provider);
+        }
+        function providerLabel(provider) {
+          if (provider === 'codex') return 'Codex';
+          if (provider === 'claude-code') return 'Claude Code';
+          if (provider === 'openrouter') return 'OpenRouter';
+          return provider;
+        }
+        function providerAuthKey(provider) {
+          if (provider === 'codex') return 'codex';
+          if (provider === 'claude-code') return 'claude';
+          return '';
+        }
+        function providerSmokeKey(provider) {
+          if (provider === 'claude-code') return 'smoke-claude';
+          if (provider === 'openrouter') return 'smoke-openrouter';
+          return 'smoke-codex';
+        }
+        function runtimeSummary(providerRuntime) {
+          if (!providerRuntime || !Object.keys(providerRuntime).length) {
+            return '<div class="muted tiny">No local runtime profile required.</div>';
+          }
+          return `
+            <div class="muted tiny">Host profile: ${htmlEscape(providerRuntime.host_home || '-')}</div>
+            <div class="muted tiny">Mount: ${providerRuntime.mount_host_home ? 'enabled' : 'disabled'}${providerRuntime.mount_read_only ? ' - read-only' : ''}${providerRuntime.host_home_exists === false ? ' - missing profile' : ''}</div>
+            ${providerRuntime.instruction_file ? `<div class="muted tiny">Instruction file: ${htmlEscape(providerRuntime.instruction_file)}</div>` : ''}
+          `;
+        }
+        function diagnosticSummary(diagnostic, current) {
           const level = diagnostic.level || 'muted';
           const status = diagnostic.status || current.status || 'Unknown';
           const detail = diagnostic.detail ? `<div class="muted tiny">${htmlEscape(diagnostic.detail)}</div>` : '';
           const next = diagnostic.next_step ? `<details><summary>Next step</summary><pre>${htmlEscape(diagnostic.next_step)}</pre></details>` : '';
-          const authKey = model.provider === 'claude-code' ? 'claude' : (model.provider === 'codex' ? 'codex' : '');
-          const smokeKey = model.provider === 'claude-code' ? 'smoke-claude' : (model.provider === 'codex' ? 'smoke-codex' : 'smoke-openrouter');
-          const actions = `<div class="row">${authKey ? `<button type="button" class="secondary" data-provider-command="${authKey}">Auth</button>` : ''}<button type="button" class="secondary" data-provider-command="${smokeKey}">Smoke</button></div>`;
-          return card(htmlEscape(model.provider), `${htmlEscape(model.model || 'default')}<br><span class="pill ${htmlEscape(level)}">${htmlEscape(status)}</span>${runtimeLines}${detail}${next}${actions}`);
-        }).join('') : '<div class="card muted">No providers reported.</div>';
-        const commands = state.providers.commands || {};
-        const codex = runtime['codex'] || {};
-        const claude = runtime['claude-code'] || {};
+          return `<span class="pill ${htmlEscape(level)}">${htmlEscape(status)}</span>${detail}${next}`;
+        }
+        function renderRuntimeForm(provider) {
+          if (provider === 'codex') {
+            const codex = runtime.codex || {};
+            return `<form id="codex-runtime-form" class="card stack provider-runtime">
+              <h3>Codex Runtime</h3>
+              <div class="form-grid">
+                <div class="wide"><label for="codex-host-home">Host profile path</label><input id="codex-host-home" value="${htmlEscape(codex.host_home || '')}" placeholder="/home/user/Librarian/.cfg/codex-home"></div>
+                <button type="submit">Save</button>
+              </div>
+              <div class="row">
+                <label><input id="codex-mount-home" type="checkbox" ${codex.mount_host_home ? 'checked' : ''}> mount profile</label>
+                <label><input id="codex-mount-readonly" type="checkbox" ${codex.mount_read_only ? 'checked' : ''}> read-only</label>
+              </div>
+            </form>`;
+          }
+          if (provider === 'claude-code') {
+            const claude = runtime['claude-code'] || {};
+            return `<form id="claude-runtime-form" class="card stack provider-runtime">
+              <h3>Claude Runtime</h3>
+              <div class="form-grid">
+                <div class="wide"><label for="claude-host-home">Host profile path</label><input id="claude-host-home" value="${htmlEscape(claude.host_home || '')}" placeholder="/home/user/.claude"></div>
+                <div><label for="claude-instruction-file">Instruction file</label><input id="claude-instruction-file" value="${htmlEscape(claude.instruction_file || 'CLAUDE.md')}"></div>
+                <button type="submit">Save</button>
+              </div>
+              <div class="row">
+                <label><input id="claude-mount-home" type="checkbox" ${claude.mount_host_home ? 'checked' : ''}> mount profile</label>
+                <label><input id="claude-mount-readonly" type="checkbox" ${claude.mount_read_only ? 'checked' : ''}> read-only</label>
+              </div>
+            </form>`;
+          }
+          return '';
+        }
+        function renderProviderGroup(provider) {
+          const providerModels = modelsByProvider.get(provider) || [];
+          const providerRuntime = runtime[provider] || {};
+          const diagnostic = diagnostics.get(provider) || {};
+          const authKey = providerAuthKey(provider);
+          const smokeKey = providerSmokeKey(provider);
+          const providerStates = providerModels.map(model => {
+            const current = states.get(`${provider}:${model.model}`) || states.get(`${provider}:`) || {};
+            return `<div class="compact-project">
+              <strong>${htmlEscape(model.model || 'default')}</strong>
+              <div class="muted tiny">${(model.task_hints || []).map(hint => htmlEscape(hint)).join(' - ') || 'general'}</div>
+              ${diagnosticSummary(diagnostic, current)}
+            </div>`;
+          }).join('') || '<div class="muted tiny">No model catalog entry yet.</div>';
+          return `<section class="card stack provider-group">
+            <div class="row">
+              <h3>${htmlEscape(providerLabel(provider))}</h3>
+              <div class="row">
+                ${authKey ? `<button type="button" class="secondary" data-provider-command="${authKey}">Auth</button>` : ''}
+                <button type="button" class="secondary" data-provider-command="${smokeKey}">Smoke</button>
+              </div>
+            </div>
+            ${runtimeSummary(providerRuntime)}
+            <div class="compact-project-list">${providerStates}</div>
+            ${renderRuntimeForm(provider)}
+          </section>`;
+        }
         const providerTools = `<div class="card">
           <h3>Provider Setup</h3>
-          <div class="muted tiny">Auth still opens in the host shell, but these commands match the current Librarian root.</div>
+          <div class="muted tiny">Auth still opens in the host shell. These commands match the current Librarian root and are copied into chat.</div>
           <div class="provider-actions">
             <button type="button" class="secondary" data-provider-command="codex">Codex auth command</button>
             <button type="button" class="secondary" data-provider-command="claude">Claude auth command</button>
@@ -1872,32 +1954,9 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             <button type="button" class="secondary" data-provider-command="smoke-claude">Claude smoke</button>
             <button type="button" class="secondary" data-provider-command="smoke-openrouter">OpenRouter smoke</button>
           </div>
-          <div class="muted tiny">Claude instruction file: ${htmlEscape(claude.instruction_file || 'CLAUDE.md')}</div>
         </div>`;
-        const codexForm = `<form id="codex-runtime-form" class="card stack provider-runtime">
-          <h3>Codex Runtime</h3>
-          <div class="form-grid">
-            <div class="wide"><label for="codex-host-home">Host profile path</label><input id="codex-host-home" value="${htmlEscape(codex.host_home || '')}" placeholder="/home/user/Librarian/.cfg/codex-home"></div>
-            <button type="submit">Save</button>
-          </div>
-          <div class="row">
-            <label><input id="codex-mount-home" type="checkbox" ${codex.mount_host_home ? 'checked' : ''}> mount profile</label>
-            <label><input id="codex-mount-readonly" type="checkbox" ${codex.mount_read_only ? 'checked' : ''}> read-only</label>
-          </div>
-        </form>`;
-        const claudeForm = `<form id="claude-runtime-form" class="card stack provider-runtime">
-          <h3>Claude Runtime</h3>
-          <div class="form-grid">
-            <div class="wide"><label for="claude-host-home">Host profile path</label><input id="claude-host-home" value="${htmlEscape(claude.host_home || '')}" placeholder="/home/user/.claude"></div>
-            <div><label for="claude-instruction-file">Instruction file</label><input id="claude-instruction-file" value="${htmlEscape(claude.instruction_file || 'CLAUDE.md')}"></div>
-            <button type="submit">Save</button>
-          </div>
-          <div class="row">
-            <label><input id="claude-mount-home" type="checkbox" ${claude.mount_host_home ? 'checked' : ''}> mount profile</label>
-            <label><input id="claude-mount-readonly" type="checkbox" ${claude.mount_read_only ? 'checked' : ''}> read-only</label>
-          </div>
-        </form>`;
-        el('providers').innerHTML = providerTools + codexForm + claudeForm + cards;
+        const groups = providerOrder.map(renderProviderGroup).join('');
+        el('providers').innerHTML = providerTools + (groups || '<div class="card muted">No providers reported.</div>');
         const codexRuntimeForm = el('codex-runtime-form');
         if (codexRuntimeForm) codexRuntimeForm.addEventListener('submit', saveCodexRuntime);
         const form = el('claude-runtime-form');
