@@ -1,6 +1,39 @@
 use serde::Serialize;
 
-use crate::domain::{ContextPack, Project, PromptBlock};
+use crate::domain::{ContextPack, Project, PromptBlock, ProviderKind};
+
+pub const TARGET_LIBRARIAN: &str = "librarian";
+pub const TARGET_AGENTS: &str = "agents";
+pub const TARGET_AGENTS_FILE: &str = "AGENTS.md";
+pub const TARGET_CLAUDE_FILE: &str = "CLAUDE.md";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptProfileKind {
+    Chat,
+    Agent,
+    ProviderInstruction,
+}
+
+pub const PROMPT_PROFILE_KINDS: &[PromptProfileKind] = &[
+    PromptProfileKind::Chat,
+    PromptProfileKind::Agent,
+    PromptProfileKind::ProviderInstruction,
+];
+
+pub fn provider_instruction_target(provider: &ProviderKind) -> Option<&'static str> {
+    match provider {
+        ProviderKind::ClaudeCode => Some(TARGET_CLAUDE_FILE),
+        ProviderKind::Codex | ProviderKind::OpenRouter => None,
+    }
+}
+
+pub fn default_profile_target(kind: PromptProfileKind) -> &'static str {
+    match kind {
+        PromptProfileKind::Chat => TARGET_LIBRARIAN,
+        PromptProfileKind::Agent => TARGET_AGENTS,
+        PromptProfileKind::ProviderInstruction => TARGET_AGENTS_FILE,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PromptBlockVersion {
@@ -167,5 +200,23 @@ mod tests {
         assert_eq!(version.version, other.version);
         assert_eq!(version.enabled_blocks, 1);
         assert_eq!(version.rendered_chars, "Be useful.".chars().count());
+    }
+
+    #[test]
+    fn prompt_profile_targets_are_canonical() {
+        assert_eq!(PROMPT_PROFILE_KINDS.len(), 3);
+        assert_eq!(
+            default_profile_target(PromptProfileKind::Chat),
+            TARGET_LIBRARIAN
+        );
+        assert_eq!(
+            default_profile_target(PromptProfileKind::Agent),
+            TARGET_AGENTS
+        );
+        assert_eq!(
+            provider_instruction_target(&ProviderKind::ClaudeCode),
+            Some(TARGET_CLAUDE_FILE)
+        );
+        assert_eq!(provider_instruction_target(&ProviderKind::Codex), None);
     }
 }

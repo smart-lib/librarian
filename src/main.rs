@@ -1188,7 +1188,7 @@ async fn main() -> Result<()> {
             }
             println!("Created job {}", job.id);
             println!("Context hits: {}", context_pack.hits.len());
-            let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+            let agent_blocks = db.list_prompt_blocks(Some(prompt::TARGET_AGENTS)).await?;
             let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
             let instruction_files =
                 worker::provider_instruction_files(&db, &config, &job.provider).await?;
@@ -1331,7 +1331,7 @@ async fn main() -> Result<()> {
             .await?;
             if show_prompt {
                 if let Some(project) = project {
-                    let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+                    let agent_blocks = db.list_prompt_blocks(Some(prompt::TARGET_AGENTS)).await?;
                     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
                     println!(
                         "{}",

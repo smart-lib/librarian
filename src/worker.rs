@@ -135,11 +135,11 @@ pub async fn provider_instruction_files(
     provider: &ProviderKind,
 ) -> Result<Vec<AgentInstructionFile>> {
     let mut files = Vec::new();
-    if matches!(provider, ProviderKind::ClaudeCode) {
-        let blocks = db.list_prompt_blocks(Some("CLAUDE.md")).await?;
+    if let Some(target) = prompt::provider_instruction_target(provider) {
+        let blocks = db.list_prompt_blocks(Some(target)).await?;
         let mut content = prompt::render_prompt_blocks(&blocks);
         if content.trim().is_empty() {
-            let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
+            let agent_blocks = db.list_prompt_blocks(Some(prompt::TARGET_AGENTS)).await?;
             content = prompt::render_prompt_blocks(&agent_blocks);
         }
         if content.trim().is_empty() {
@@ -239,8 +239,9 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         },
     )
     .await?;
-    let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
-    let agent_prompt_version = prompt::prompt_block_version(Some("agents"), &agent_blocks);
+    let agent_blocks = db.list_prompt_blocks(Some(prompt::TARGET_AGENTS)).await?;
+    let agent_prompt_version =
+        prompt::prompt_block_version(Some(prompt::TARGET_AGENTS), &agent_blocks);
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
     let instruction_files = provider_instruction_files(&db, &config, &job.provider).await?;
     let enriched_prompt = prompt::build_agent_prompt(
@@ -483,8 +484,9 @@ async fn prepare_job(
         },
     )
     .await?;
-    let agent_blocks = db.list_prompt_blocks(Some("agents")).await?;
-    let agent_prompt_version = prompt::prompt_block_version(Some("agents"), &agent_blocks);
+    let agent_blocks = db.list_prompt_blocks(Some(prompt::TARGET_AGENTS)).await?;
+    let agent_prompt_version =
+        prompt::prompt_block_version(Some(prompt::TARGET_AGENTS), &agent_blocks);
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
     let instruction_files = provider_instruction_files(db, config, &job.provider).await?;
     let enriched_prompt = prompt::build_agent_prompt(
