@@ -1,5 +1,6 @@
 mod admin;
 mod admin_models;
+mod admin_ui;
 mod agent_policy;
 mod broker;
 mod chat;
