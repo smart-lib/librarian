@@ -3193,6 +3193,11 @@ async fn run_provider_smoke(config: &Config, require_ready: bool) -> Result<()> 
     }
     println!("[OK] denied unsafe OpenRouter probe paths before grant use");
 
+    println!();
+    println!("Claude launch contract:");
+    run_claude_launch_contract_smoke(config).await?;
+    println!("[OK] Claude command uses project-root instruction file and prompt mode");
+
     if require_ready && !not_ready.is_empty() {
         anyhow::bail!(
             "Provider smoke requires ready providers; not ready: {}",
@@ -3201,6 +3206,53 @@ async fn run_provider_smoke(config: &Config, require_ready: bool) -> Result<()> 
     }
     println!();
     println!("Provider smoke passed.");
+    Ok(())
+}
+
+async fn run_claude_launch_contract_smoke(config: &Config) -> Result<()> {
+    let mut smoke_config = config.clone();
+    smoke_config.claude.mount_host_home = false;
+    smoke_config.claude.host_home = None;
+    smoke_config.ensure_layout()?;
+    let project_path = smoke_config
+        .home
+        .join(".app")
+        .join("provider-smoke")
+        .join("claude-project");
+    fs::create_dir_all(&project_path)?;
+    let spec = domain::AgentRunSpec {
+        job_id: uuid::Uuid::new_v4(),
+        project_path,
+        provider: ProviderKind::ClaudeCode,
+        goal: "Claude provider launch contract smoke.".to_string(),
+        prompt: "Reply with a short provider launch contract acknowledgement.".to_string(),
+        instruction_files: vec![domain::AgentInstructionFile {
+            filename: smoke_config.claude.instruction_file.clone(),
+            content: "Claude Code provider smoke instruction.".to_string(),
+        }],
+        mount_mode: MountMode::ReadOnly,
+        network_mode: domain::NetworkMode::Provider,
+        secret_grant_token: None,
+    };
+    let command = DockerRunner::new(smoke_config)
+        .docker_command_parts(&spec)
+        .await?;
+    let joined = command.join(" ");
+    if !joined.contains("/workspace/project") {
+        anyhow::bail!("Claude launch contract did not use /workspace/project");
+    }
+    if !joined.contains(&format!(
+        "/workspace/project/{}",
+        config.claude.instruction_file
+    )) {
+        anyhow::bail!(
+            "Claude launch contract did not mount {} into the project root",
+            config.claude.instruction_file
+        );
+    }
+    if !joined.contains("claude -p") {
+        anyhow::bail!("Claude launch contract did not use `claude -p` prompt mode");
+    }
     Ok(())
 }
 
