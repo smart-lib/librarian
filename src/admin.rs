@@ -25,7 +25,7 @@ use crate::{
     domain::{
         JobStatus, MemoryKind, MountMode, Project, ScheduleKind, ScheduleStatus, ToolApprovalStatus,
     },
-    gates, library_tools,
+    gates, job_review, library_tools,
     library_tools::LibraryRoot,
     memory,
     memory_policy::{durable_memory_priority, durable_memory_type, is_visible_durable_memory_item},
@@ -1993,6 +1993,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             <div class="row">
               <button type="button" class="secondary" data-job-events="${htmlEscape(job.id)}">Events</button>
               <button type="button" data-job-preflight="${htmlEscape(job.id)}">Preflight</button>
+              <button type="button" class="secondary" data-job-review-packet="${htmlEscape(job.id)}">Review packet</button>
               <button type="button" class="secondary" data-job-retry="${htmlEscape(job.id)}">Retry</button>
               <button type="button" class="danger" data-job-cancel="${htmlEscape(job.id)}">Cancel</button>
             </div>
@@ -2001,6 +2002,7 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }).join('') : '<div class="card muted">No jobs yet.</div>';
         qsa('[data-job-events]').forEach(button => button.addEventListener('click', () => showJobEvents(button.dataset.jobEvents)));
         qsa('[data-job-preflight]').forEach(button => button.addEventListener('click', () => runJobAction(button.dataset.jobPreflight, 'preflight')));
+        qsa('[data-job-review-packet]').forEach(button => button.addEventListener('click', () => showJobReviewPacket(button.dataset.jobReviewPacket)));
         qsa('[data-job-retry]').forEach(button => button.addEventListener('click', () => runJobAction(button.dataset.jobRetry, 'retry')));
         qsa('[data-job-cancel]').forEach(button => button.addEventListener('click', () => runJobAction(button.dataset.jobCancel, 'cancel')));
       }
@@ -2018,6 +2020,36 @@ fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
               : JSON.stringify(payload);
           return `<div class="card action"><b>${htmlEscape(event.kind)}</b> <span class="muted tiny">${htmlEscape(event.created_at || '')}</span><br>${htmlEscape(summary)}</div>`;
         }).join('') : '<div class="muted tiny">No events for this job.</div>';
+      }
+      async function showJobReviewPacket(id) {
+        const target = el(`job-events-${id}`);
+        if (!target) return;
+        target.innerHTML = '<div class="muted tiny">Building review packet...</div>';
+        const response = await fetch(`/api/jobs/${encodeURIComponent(id)}/review-packet`, { method: 'POST' });
+        const packet = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          target.innerHTML = `<div class="card action"><b>Review packet failed</b><br>${htmlEscape(packet.error || `HTTP ${response.status}`)}</div>`;
+          return;
+        }
+        const summary = packet.summary || {};
+        const rows = [
+          `Next: ${summary.next_step || 'inspect_packet'}`,
+          `Changes: ${summary.has_worktree_changes ? 'yes' : 'no'}`,
+          `Commit: ${summary.commit_allowed ? 'allowed' : 'blocked'}`,
+          `Revert: ${summary.revert_allowed ? 'available' : 'blocked'}`,
+          `Push: ${summary.push_allowed ? 'ready for manual review' : 'blocked'}`
+        ];
+        const blockers = [
+          ...(packet.commit_gate?.blockers || []).map(value => `commit: ${value}`),
+          ...(packet.revert_plan?.blockers || []).map(value => `revert: ${value}`),
+          ...(packet.push_plan?.blockers || []).map(value => `push: ${value}`)
+        ];
+        target.innerHTML = `<div class="card action">
+          <b>Review packet</b> <span class="muted tiny">${htmlEscape(packet.project?.name || '')}</span>
+          <div class="approval-paths">${rows.map(row => `<div>${htmlEscape(row)}</div>`).join('')}</div>
+          ${blockers.length ? `<div class="approval-paths">${blockers.map(row => `<div>${htmlEscape(row)}</div>`).join('')}</div>` : '<div class="muted tiny">No gate blockers.</div>'}
+          <details><summary>Technical details</summary><pre>${htmlEscape(JSON.stringify(packet, null, 2))}</pre></details>
+        </div>`;
       }
       async function runJobAction(id, action) {
         const response = await fetch(`/api/jobs/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
@@ -3982,6 +4014,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/jobs/:id", get(job))
         .route("/api/jobs/:id/events", get(job_events))
         .route("/api/jobs/:id/preflight", post(preflight_job))
+        .route("/api/jobs/:id/review-packet", post(review_packet_job))
         .route("/api/jobs/:id/cancel", post(cancel_job))
         .route("/api/jobs/:id/retry", post(retry_job))
         .route("/api/schedules/:id/enable", post(enable_schedule))
@@ -4949,6 +4982,15 @@ async fn preflight_job(
     let config = state.config.read().await.clone();
     Ok(Json(
         worker::preflight_job(config, state.db.clone(), id).await?,
+    ))
+}
+
+async fn review_packet_job(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        job_review::build_job_review_packet(&state.db, id, false, None).await?,
     ))
 }
 
