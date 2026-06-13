@@ -12,10 +12,10 @@ project-scoped context, prepare containerized agent jobs, mount provider
 profiles, pass prompt-builder instruction files, record job events, collect a
 worktree review snapshot, and keep run summaries in the knowledge base. It can
 also produce a combined review packet, expose that packet to the admin Jobs
-panel, and block scheduled write jobs unless project policy explicitly allows
-them. That is enough for cautious read-only inspection tasks and small manually
-reviewed implementation tasks. Commit/push policy can now be checked explicitly
-before any human or future automated approval step.
+panel and chat review cards, and block scheduled write jobs unless project
+policy explicitly allows them. That is enough for cautious read-only inspection
+tasks and small manually reviewed implementation tasks. Commit/push policy can
+now be checked explicitly before any human or future automated approval step.
 
 It is not yet ready for unattended autonomous development loops. The missing
 pieces are stronger self-host smoke coverage with real provider runs, richer
@@ -114,9 +114,15 @@ librarian --home "$HOME/Librarian" smoke providers
   Current parsing covers common Codex, Claude Code, and OpenRouter auth, quota,
   model, timeout, and network failures.
 - `smoke self-host` now checks that the Librarian repository can be registered
-  and prepared for a supervised read-only agent job.
-- Worker preflight now reports a budget reservation estimate. It records
-  estimated input tokens even when provider/model pricing is not available yet.
+  and prepared for a supervised read-only agent job, and that `/agent
+  review-packet` returns chat UI metadata for the same job.
+- Worker preflight now reports a budget reservation estimate. Known-price
+  estimates create active SQLite budget reservations before dispatch; those
+  reservations are released on job finish and counted as pending spend in budget
+  guardrails.
+- Provider smoke now includes a Claude Code launch-contract check: the generated
+  container command mounts the configured instruction file into the project root
+  and uses `claude -p` from the project directory.
 - Prompt profile targets are centralized in code, so chat, generic agent, and
   provider instruction-file targets can grow without string literal drift.
 
@@ -130,14 +136,15 @@ librarian --home "$HOME/Librarian" smoke providers
   remains manual after policy review.
 - Automatic write tasks now pass through a first project policy gate; richer UI
   policy editing and audit explanations are still needed.
-- Budget/cost control still does not reserve money before dispatch. The worker
-  now emits reservation estimates, but real provider/model pricing and pending
-  spend accounting remain.
+- Budget/cost control now has pending reservation accounting when model pricing
+  is known. The remaining gap is real provider/model pricing metadata and
+  reconciliation with observed provider usage.
 - Admin auth is missing, so remote admin/channel exposure is not ready.
-- `src/admin.rs` remains too large and still contains mixed UI/API/helper
-  responsibilities. Job review logic has been extracted to `src/job_review.rs`;
-  the next modularity pass should split admin UI rendering, admin API handlers,
-  chat orchestration, and atlas/project-library code.
+- `src/admin.rs` remains too large and still contains mixed API/helper
+  responsibilities. Job review logic has been extracted to `src/job_review.rs`,
+  and the chat shell HTML moved to `src/admin_ui.rs`; the next modularity pass
+  should split admin API handlers, chat orchestration, and atlas/project-library
+  code.
 - OpenRouter and Claude Code paths exist but are not yet proven as production
   self-hosting providers.
 - Prompt/profile variants are still first-pass; host, channel, and provider

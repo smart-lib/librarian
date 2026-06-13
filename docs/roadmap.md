@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.15`; bump at least the minor version when a visible
+- Current crate version: `0.2.16`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -1110,7 +1110,8 @@ readiness or a later planned milestone.
   review-packet <job-id> [--run-tests] [--revert-commit <sha>]`, combining
   review output, commit gate, revert plan, push plan, and a compact next-step
   summary into one machine-readable artifact for the future chat/UI approval
-  card.
+  card. Chat-first UI can now render `/agent review-packet <job-id>` as a
+  review card, and self-host smoke verifies that contract.
 - Add commit/push/revert policy gates before any self-hosted commit
   automation. First CLI pass adds `jobs gate <job-id> --action commit|push`,
   checking project git policy, protected branches, optional branch pattern,
@@ -1136,6 +1137,9 @@ readiness or a later planned milestone.
   of only already-observed `cost_usd`. First scaffold records estimated input
   tokens and a non-reserving `budget_reservation` event/report field when model
   pricing is unknown, so the worker contract is ready for real reservations.
+  Second pass adds SQLite `budget_reservations`; known-price estimates are
+  reserved before dispatch, released on job finish, and counted as pending spend
+  in daily total/provider/project guardrails.
 - Add per-project Third Eye mapping/export policy: host-visible provider logs,
   mounted container `CODEX_HOME`/Claude dirs, or Librarian-generated export
   from `usage_observations`.
