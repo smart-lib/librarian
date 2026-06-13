@@ -81,6 +81,7 @@ pub struct JobPreflightReport {
     pub instruction_files: Vec<InstructionFileReport>,
     pub command: Vec<String>,
     pub budget_checks: Vec<router::BudgetCheck>,
+    pub budget_reservation: router::BudgetReservationEstimate,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -120,6 +121,7 @@ pub async fn preflight_job(
             "instruction_files": &report.instruction_files,
             "command": &report.command,
             "budget_checks": &report.budget_checks,
+            "budget_reservation": &report.budget_reservation,
             "launched": false,
         }),
     )
@@ -260,6 +262,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         secret_grant_token: job.secret_grant_token.clone(),
     };
     let prompt_len = spec.prompt.chars().count();
+    let budget_reservation = router::estimate_budget_reservation(&job, prompt_len);
 
     let runner = DockerRunner::new(config.clone());
     let command_parts = runner.docker_command_parts(&spec).await?;
@@ -272,6 +275,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
             "project_note": project_note,
             "context_hits": context_pack.hits.len(),
             "prompt_chars": prompt_len,
+            "budget_reservation": &budget_reservation,
             "prompt_version": agent_prompt_version,
             "prompt_blocks": agent_blocks.iter().filter(|block| block.enabled).map(|block| serde_json::json!({
                 "id": block.id,
@@ -284,6 +288,12 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 "chars": file.content.chars().count(),
             })).collect::<Vec<_>>(),
         }),
+    )
+    .await?;
+    db.add_job_event(
+        job.id,
+        "budget_reservation",
+        json!({ "reservation": &budget_reservation }),
     )
     .await?;
     db.add_job_event(
@@ -484,6 +494,7 @@ async fn prepare_job(
         &agent_instruction_blocks,
     );
     let prompt_len = enriched_prompt.chars().count();
+    let budget_reservation = router::estimate_budget_reservation(&job, prompt_len);
     let spec = AgentRunSpec {
         job_id: job.id,
         project_path: project.path.clone(),
@@ -500,6 +511,12 @@ async fn prepare_job(
         .await?;
 
     if !dry_run {
+        db.add_job_event(
+            job.id,
+            "budget_reservation",
+            json!({ "reservation": &budget_reservation }),
+        )
+        .await?;
         db.add_job_event(
             job.id,
             "context_pack",
@@ -533,6 +550,7 @@ async fn prepare_job(
             .collect(),
         command,
         budget_checks,
+        budget_reservation,
     })
 }
 

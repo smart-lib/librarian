@@ -169,6 +169,42 @@ pub struct BudgetCheck {
     pub spent_usd: f64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct BudgetReservationEstimate {
+    pub provider: String,
+    pub model: Option<String>,
+    pub prompt_chars: usize,
+    pub estimated_input_tokens: i64,
+    pub estimated_cost_usd: Option<f64>,
+    pub reserved: bool,
+    pub reason: &'static str,
+}
+
+pub fn estimate_budget_reservation(job: &Job, prompt_chars: usize) -> BudgetReservationEstimate {
+    let provider = provider_name(&job.provider);
+    let model = default_model(&job.provider);
+    let estimated_input_tokens = estimate_input_tokens(prompt_chars);
+    let metadata = model_catalog()
+        .into_iter()
+        .find(|item| item.provider == provider && Some(item.model.as_str()) == model);
+    let estimated_cost_usd = metadata
+        .and_then(|item| item.input_cost_per_million)
+        .map(|cost_per_million| (estimated_input_tokens as f64 / 1_000_000.0) * cost_per_million);
+    BudgetReservationEstimate {
+        provider: provider.to_string(),
+        model: model.map(ToOwned::to_owned),
+        prompt_chars,
+        estimated_input_tokens,
+        estimated_cost_usd,
+        reserved: estimated_cost_usd.is_some(),
+        reason: if estimated_cost_usd.is_some() {
+            "estimated_from_prompt_input_tokens"
+        } else {
+            "model_pricing_unknown"
+        },
+    }
+}
+
 pub async fn ensure_budget_available(
     config: &Config,
     db: &Database,
@@ -553,7 +589,7 @@ pub async fn record_job_usage_estimate(
 ) -> Result<()> {
     let provider = provider_name(&job.provider);
     let model = default_model(&job.provider);
-    let input_tokens = (prompt_chars as f64 / 4.0).ceil() as i64;
+    let input_tokens = estimate_input_tokens(prompt_chars);
     db.add_usage_observation(
         provider,
         model,
@@ -570,6 +606,10 @@ pub async fn record_job_usage_estimate(
     )
     .await?;
     Ok(())
+}
+
+fn estimate_input_tokens(prompt_chars: usize) -> i64 {
+    (prompt_chars as f64 / 4.0).ceil() as i64
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {
@@ -750,6 +790,15 @@ mod tests {
         )
         .expect("diagnostic");
         assert_eq!(diagnostic["code"], "openrouter_network_unavailable");
+    }
+
+    #[test]
+    fn budget_reservation_estimates_tokens_even_without_pricing() {
+        let estimate = estimate_budget_reservation(&codex_job(), 17);
+        assert_eq!(estimate.estimated_input_tokens, 5);
+        assert_eq!(estimate.estimated_cost_usd, None);
+        assert!(!estimate.reserved);
+        assert_eq!(estimate.reason, "model_pricing_unknown");
     }
 
     async fn test_config_and_db(name: &str) -> (Config, Database, PathBuf) {
