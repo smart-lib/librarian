@@ -1,6 +1,6 @@
 [package]
 name = "librarian"
-version = "0.2.19"
+version = "0.2.20"
 edition = "2021"
 license = "MIT"
 description = "A local-first agent harness for project work, memory, scheduling, and containerized coding agents."

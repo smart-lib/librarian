@@ -2382,15 +2382,16 @@ async fn resolve_self_host_project_path(
             .with_context(|| format!("Failed to resolve {}", installed_source.display()));
     }
 
-    let workspace = config.home.join("Projects").join("Librarian");
-    if is_librarian_source_dir(&workspace) {
-        return workspace
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve {}", workspace.display()));
+    for workspace in self_host_workspace_candidates(config) {
+        if is_librarian_source_dir(&workspace) {
+            return workspace
+                .canonicalize()
+                .with_context(|| format!("Failed to resolve {}", workspace.display()));
+        }
     }
 
     if should_prepare_self_host_workspace(config, &requested) {
-        prepare_self_host_workspace(&workspace).await?;
+        let workspace = prepare_self_host_workspace(config).await?;
         return workspace
             .canonicalize()
             .with_context(|| format!("Failed to resolve {}", workspace.display()));
@@ -2426,21 +2427,53 @@ fn should_prepare_self_host_workspace(config: &Config, requested: &Path) -> bool
     requested.starts_with(&config.home)
 }
 
-async fn prepare_self_host_workspace(workspace: &Path) -> Result<()> {
-    if workspace.exists() {
-        if !workspace.join(".git").exists() {
-            anyhow::bail!(
-                "Self-host workspace `{}` exists but is not a Git checkout. Move it aside or pass an explicit Librarian source checkout with --project-path.",
-                workspace.display()
-            );
+fn self_host_workspace_candidates(config: &Config) -> Vec<PathBuf> {
+    vec![
+        config.home.join("Projects").join("Librarian"),
+        config.home.join("Projects").join("LibrarianSource"),
+        config
+            .home
+            .join("Projects")
+            .join("_self-host")
+            .join("Librarian"),
+    ]
+}
+
+fn choose_self_host_workspace_candidate(config: &Config) -> Result<PathBuf> {
+    let candidates = self_host_workspace_candidates(config);
+    for workspace in &candidates {
+        if is_librarian_source_dir(workspace) {
+            return Ok(workspace.clone());
         }
+    }
+    for workspace in &candidates {
+        if !workspace.exists() {
+            return Ok(workspace.clone());
+        }
+        eprintln!(
+            "Skipping occupied self-host source candidate: {}",
+            workspace.display()
+        );
+    }
+    let candidates = candidates
+        .iter()
+        .map(|path| format!("  {}", path.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    anyhow::bail!(
+        "No safe self-host source workspace is available. Existing candidate folders are occupied and will not be overwritten:\n{candidates}\nPass an explicit Librarian source checkout with --project-path."
+    );
+}
+
+async fn prepare_self_host_workspace(config: &Config) -> Result<PathBuf> {
+    let workspace = choose_self_host_workspace_candidate(config)?;
+    if is_librarian_source_dir(&workspace) {
         println!(
             "Self-host source workspace already exists: {}",
             workspace.display()
         );
-        return Ok(());
+        return Ok(workspace);
     }
-
     if let Some(parent) = workspace.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
@@ -2453,14 +2486,14 @@ async fn prepare_self_host_workspace(workspace: &Path) -> Result<()> {
     let status = TokioCommand::new("git")
         .arg("clone")
         .arg(DEFAULT_REPO_URL)
-        .arg(workspace)
+        .arg(&workspace)
         .status()
         .await
         .with_context(|| "Failed to start git clone for the self-host workspace")?;
     if !status.success() {
         anyhow::bail!("Failed to clone Librarian source workspace with status {status}");
     }
-    Ok(())
+    Ok(workspace)
 }
 
 async fn run_self_host_smoke(
@@ -4235,6 +4268,26 @@ mod tests {
             &config,
             &root.join(".app").join("source")
         ));
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn self_host_workspace_candidate_skips_occupied_non_source_folder() {
+        let root = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-workspace-collision-{}",
+            Uuid::new_v4()
+        ));
+        let occupied = root.join("Projects").join("Librarian");
+        std::fs::create_dir_all(&occupied).expect("occupied dir");
+        std::fs::write(occupied.join("README.md"), "user project\n").expect("marker");
+        let mut config = Config::load_or_default(Some(root.clone())).expect("config");
+        config.home = root.clone();
+
+        let candidate = choose_self_host_workspace_candidate(&config).expect("candidate");
+
+        assert_eq!(candidate, root.join("Projects").join("LibrarianSource"));
+        assert!(occupied.join("README.md").exists());
 
         std::fs::remove_dir_all(root).ok();
     }

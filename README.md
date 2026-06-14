@@ -223,8 +223,11 @@ librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD"
 
 If you run this from the installed `~/Librarian` root instead of a source
 checkout, Librarian prepares or reuses `~/Librarian/Projects/Librarian` as the
-self-host source workspace. Add `--run-agent --review --run-tests` to run the
-real read-only provider call and require a test-backed review packet.
+self-host source workspace. If that path is already occupied by a normal
+non-source project folder, it uses the next safe fallback such as
+`~/Librarian/Projects/LibrarianSource` without overwriting user files. Add
+`--run-agent --review --run-tests` to run the real read-only provider call and
+require a test-backed review packet.
 
 Review a job's project worktree before approving follow-up work or commits:
 
@@ -302,8 +305,10 @@ The one-line installer uses a temporary source checkout under
 `~/Librarian/.app/source`, builds the binary, installs it into
 `~/Librarian/.app/bin`, then removes the checkout. Normal use does not require a
 Git working tree. Self-hosted development uses the separate
-`~/Librarian/Projects/Librarian` workspace when needed. The installer also
-writes install metadata to `~/Librarian/.app/version.json`.
+`~/Librarian/Projects/Librarian` workspace when available, or a safe fallback
+such as `~/Librarian/Projects/LibrarianSource` when that path is already
+occupied. The installer also writes install metadata to
+`~/Librarian/.app/version.json`.
 
 Upgrade an installed Ubuntu/WSL Librarian with:
 
