@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.17`; bump at least the minor version when a visible
+- Current crate version: `0.2.18`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -1099,10 +1099,12 @@ readiness or a later planned milestone.
 
 - Run a real containerized Codex self-hosting task after Podman/Docker is
   connected, the agent image is built, and host Codex auth is present. Covered
-  by MVP Priority 3 and user environment setup. First preflight pass adds
-  `librarian smoke self-host`, which registers the Librarian repository as a
-  managed project, verifies context memory retrieval, and prepares a read-only
-  self-host agent job; `--run-agent` performs the real provider call.
+  by MVP Priority 3 and user environment setup. `librarian smoke self-host`
+  registers the Librarian repository as a managed project, verifies context
+  memory retrieval, prepares a read-only self-host agent job, checks the
+  review/gate/UI review-card contract, and supports `--review` for explicit
+  review assertions; `--run-agent --review` performs the real provider call and
+  verifies the worker-created post-run review packet.
 - Add richer structured parsing for provider responses and CLI error formats.
   First expansion covers common Codex, Claude Code, and OpenRouter auth, quota,
   model, timeout, and network failures with provider-specific diagnostic codes.
@@ -1112,11 +1114,15 @@ readiness or a later planned milestone.
   output, and a recommendation as a job event. Second pass adds `jobs
   review-packet <job-id> [--run-tests] [--revert-commit <sha>]`, combining
   review output, commit gate, revert plan, push plan, and a compact next-step
-  summary into one machine-readable artifact for the chat/UI approval card.
-  Chat-first UI can render `/agent review-packet <job-id>` as a review card,
-  and that card can create commit/revert approval proposals through
+  summary into one machine-readable artifact for the chat/UI approval card. The
+  worker now attempts this packet automatically after completed, failed, or
+  cancelled agent execution when the project is a Git worktree, and records a
+  structured skip diagnostic for non-Git projects or review failures. Chat-first
+  UI can render `/agent review-packet <job-id>` as a review card, and that card
+  can create commit/revert approval proposals through
   `/api/jobs/:id/git-action-proposal`; self-host smoke verifies the review-card
-  contract and unit coverage verifies the proposal endpoint.
+  contract, `--run-agent --review` verifies the post-run packet, and unit
+  coverage verifies the proposal endpoint.
 - Add commit/push/revert policy gates before any self-hosted commit
   automation. First CLI pass adds `jobs gate <job-id> --action commit|push`,
   checking project git policy, protected branches, optional branch pattern,

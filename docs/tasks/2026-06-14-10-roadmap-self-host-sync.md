@@ -23,6 +23,17 @@ from the real current state.
 ## Progress
 
 - [x] Scope captured.
-- [ ] Roadmap updated.
-- [ ] Tests run.
-- [ ] Committed separately.
+- [x] Roadmap updated.
+- [x] Tests run.
+- [x] Committed separately.
+
+## Result
+
+- Roadmap now describes the current self-host smoke contract:
+  `smoke self-host --review` checks review/gate/UI card behavior without a
+  provider call, while `--run-agent --review` validates the worker-created
+  post-run review packet after a real provider run.
+- Provider/gates backlog now treats post-run review packets as implemented
+  worker behavior for Git worktrees, with structured skip diagnostics for
+  non-Git projects.
+- Crate version bumped to `0.2.18` for the self-host review capability group.
