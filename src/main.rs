@@ -274,6 +274,8 @@ enum SmokeCommand {
         #[arg(long)]
         run_agent: bool,
         #[arg(long)]
+        review: bool,
+        #[arg(long)]
         allow_network: bool,
         #[arg(long)]
         secret_grant_token: Option<String>,
@@ -967,6 +969,7 @@ async fn main() -> Result<()> {
                 provider,
                 project_path,
                 run_agent,
+                review,
                 allow_network,
                 secret_grant_token,
             } => {
@@ -975,6 +978,7 @@ async fn main() -> Result<()> {
                     provider.into(),
                     project_path.as_deref(),
                     run_agent,
+                    review,
                     allow_network,
                     secret_grant_token.as_deref(),
                 )
@@ -2355,6 +2359,7 @@ async fn run_self_host_smoke(
     provider: ProviderKind,
     project_path: Option<&Path>,
     run_agent: bool,
+    review: bool,
     allow_network: bool,
     secret_grant_token: Option<&str>,
 ) -> Result<()> {
@@ -2390,8 +2395,12 @@ async fn run_self_host_smoke(
     println!("  provider: {}", provider_arg_name(&provider));
     println!(
         "  mode: {}",
-        if run_agent {
+        if run_agent && review {
+            "preflight + real read-only agent run + post-run review assertion"
+        } else if run_agent {
             "preflight + real read-only agent run"
+        } else if review {
+            "preflight + review contract"
         } else {
             "preflight only"
         }
@@ -2523,14 +2532,14 @@ async fn run_self_host_smoke(
     );
 
     println!("4. Recording self-host review snapshot...");
-    let review = job_review::review_job_changes(&db, job.id, false).await?;
+    let review_snapshot = job_review::review_job_changes(&db, job.id, false).await?;
     println!(
         "   OK: has_changes={} recommendation={}",
-        review
+        review_snapshot
             .get("has_worktree_changes")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
-        review
+        review_snapshot
             .get("recommendation")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown")
@@ -2566,7 +2575,7 @@ async fn run_self_host_smoke(
         println!();
         println!("Self-host preflight passed.");
         println!(
-            "To run the real read-only provider call: {} smoke self-host --provider {} --run-agent --project-path \"{}\"",
+            "To run the real read-only provider call: {} smoke self-host --provider {} --run-agent --review --project-path \"{}\"",
             doctor_command_prefix(config),
             provider_arg_name(&provider),
             display_project_path.display()
@@ -2581,8 +2590,41 @@ async fn run_self_host_smoke(
     if !matches!(job.status, JobStatus::Completed) {
         anyhow::bail!("Self-host agent run did not complete successfully");
     }
+    if review {
+        println!("8. Checking automatic post-run review packet...");
+        let events = db.list_job_events(job.id).await?;
+        let next_step = post_run_review_next_step(&events)?;
+        println!("   OK: post-run review packet next_step={next_step}");
+    }
     println!("Self-host smoke passed.");
     Ok(())
+}
+
+fn post_run_review_next_step(events: &[crate::domain::JobEvent]) -> Result<&str> {
+    let Some(event) = events
+        .iter()
+        .rev()
+        .find(|event| event.kind == "post_run_review_packet")
+    else {
+        let skip_reason = events
+            .iter()
+            .rev()
+            .find(|event| event.kind == "post_run_review_skipped")
+            .and_then(|event| event.payload.get("reason"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("missing post-run review event");
+        anyhow::bail!("Self-host smoke expected a post-run review packet, got: {skip_reason}");
+    };
+    let next_step = event
+        .payload
+        .get("summary")
+        .and_then(|summary| summary.get("next_step"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if next_step.trim().is_empty() {
+        anyhow::bail!("Self-host post-run review packet did not include summary.next_step");
+    }
+    Ok(next_step)
 }
 
 async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
@@ -3952,5 +3994,46 @@ fn command_next_step(label: &str, detail: &str) -> &'static str {
         "host codex" => "Install Codex CLI on the host; use Librarian's local CODEX_HOME when signing in for portability.",
         "host claude" => "Install Claude Code on the host and sign in before enabling containerized Claude jobs.",
         _ => "Check that the command is installed and available in PATH.",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::JobEvent;
+    use uuid::Uuid;
+
+    #[test]
+    fn post_run_review_next_step_reads_packet_summary() {
+        let events = vec![JobEvent {
+            id: Uuid::new_v4(),
+            job_id: Uuid::new_v4(),
+            kind: "post_run_review_packet".to_string(),
+            payload: json!({
+                "summary": {
+                    "next_step": "review_diff_then_propose_commit"
+                }
+            }),
+            created_at: Utc::now(),
+        }];
+
+        let next_step = post_run_review_next_step(&events).expect("next step");
+
+        assert_eq!(next_step, "review_diff_then_propose_commit");
+    }
+
+    #[test]
+    fn post_run_review_next_step_reports_skip_reason() {
+        let events = vec![JobEvent {
+            id: Uuid::new_v4(),
+            job_id: Uuid::new_v4(),
+            kind: "post_run_review_skipped".to_string(),
+            payload: json!({ "reason": "project_is_not_git_worktree" }),
+            created_at: Utc::now(),
+        }];
+
+        let error = post_run_review_next_step(&events).expect_err("missing packet");
+
+        assert!(error.to_string().contains("project_is_not_git_worktree"));
     }
 }

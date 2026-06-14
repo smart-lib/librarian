@@ -24,6 +24,16 @@ also the review packet/gate contract after a real Codex run.
 ## Progress
 
 - [x] Scope captured.
-- [ ] Implementation completed.
-- [ ] Tests run.
-- [ ] Committed separately.
+- [x] Implementation completed.
+- [x] Tests run.
+- [x] Committed separately.
+
+## Result
+
+- Added `--review` to `librarian smoke self-host`.
+- Preflight-only mode still validates the review/gate/UI review-card contracts
+  without making a provider call.
+- `--run-agent --review` now asserts that the worker emitted an automatic
+  `post_run_review_packet` event and that it contains `summary.next_step`.
+- Added unit coverage for post-run packet detection and skipped review
+  diagnostics.
