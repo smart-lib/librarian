@@ -30,6 +30,11 @@ Preflight only:
 librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD"
 ```
 
+When `$PWD` is the installed `~/Librarian` root instead of a source checkout,
+Librarian prepares or reuses `~/Librarian/Projects/Librarian` as the self-host
+source workspace. The installer normally removes `.app/source`; do not depend on
+that temporary checkout for self-development.
+
 Real read-only provider call after preflight:
 
 ```bash
@@ -97,6 +102,8 @@ librarian --home "$HOME/Librarian" smoke providers
 ## Ready Capabilities
 
 - Stable portable root layout: `.app`, `.cfg`, `.mdb`, `Library`, `Projects`.
+- Self-host source code lives in a normal workspace,
+  `Projects/Librarian`, when the installed root has no source checkout.
 - Codex-backed chat and containerized Codex agent path are working on the
   Ubuntu/WSL golden path.
 - Project registry supports attaching a knowledge-base path to a working

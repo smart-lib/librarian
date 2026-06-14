@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.18`; bump at least the minor version when a visible
+- Current crate version: `0.2.19`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -191,6 +191,9 @@ next.
   builds in `Librarian/.app/source`, installs the binary to
   `Librarian/.app/bin/librarian`, and removes the checkout unless explicitly
   preserved.
+- Self-host smoke now treats removed installer source as normal: when launched
+  from the installed root without `Cargo.toml`, it prepares or reuses
+  `Librarian/Projects/Librarian` as the source workspace.
 - Ubuntu installs now record `.app/version.json`, and `doctor` reports the
   running version plus install metadata and prints the `upgrade` command.
 - Doctor output now highlights the overall status, distinguishes state root

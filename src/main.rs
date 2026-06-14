@@ -46,6 +46,8 @@ use serde_json::json;
 use tokio::process::Command as TokioCommand;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+const DEFAULT_REPO_URL: &str = "https://github.com/smart-lib/librarian.git";
+
 #[derive(Debug, Parser)]
 #[command(name = "librarian")]
 #[command(version)]
@@ -2358,6 +2360,109 @@ async fn run_mvp_smoke(
     Ok(())
 }
 
+async fn resolve_self_host_project_path(
+    config: &Config,
+    requested: Option<&Path>,
+) -> Result<PathBuf> {
+    let requested = match requested {
+        Some(path) => path.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+
+    if is_librarian_source_dir(&requested) {
+        return requested
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {}", requested.display()));
+    }
+
+    let installed_source = config.home.join(".app").join("source");
+    if is_librarian_source_dir(&installed_source) {
+        return installed_source
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {}", installed_source.display()));
+    }
+
+    let workspace = config.home.join("Projects").join("Librarian");
+    if is_librarian_source_dir(&workspace) {
+        return workspace
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {}", workspace.display()));
+    }
+
+    if should_prepare_self_host_workspace(config, &requested) {
+        prepare_self_host_workspace(&workspace).await?;
+        return workspace
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {}", workspace.display()));
+    }
+
+    anyhow::bail!(
+        "Self-host smoke expects the Librarian source repository. `{}` does not contain a Librarian Cargo.toml.\n\
+         Run it from a checkout, or let Librarian prepare the default workspace with:\n  \
+         librarian --home {} smoke self-host --project-path {}",
+        requested.display(),
+        shell_word(&config.home.display().to_string()),
+        shell_word(&config.home.display().to_string())
+    );
+}
+
+fn is_librarian_source_dir(path: &Path) -> bool {
+    let cargo_toml = path.join("Cargo.toml");
+    fs::read_to_string(cargo_toml)
+        .map(|manifest| manifest.contains("name = \"librarian\""))
+        .unwrap_or(false)
+}
+
+fn should_prepare_self_host_workspace(config: &Config, requested: &Path) -> bool {
+    let requested_canonical = requested.canonicalize().ok();
+    let home_canonical = config.home.canonicalize().ok();
+    if requested_canonical
+        .as_ref()
+        .zip(home_canonical.as_ref())
+        .is_some_and(|(requested, home)| requested == home || requested.starts_with(home))
+    {
+        return true;
+    }
+    requested.starts_with(&config.home)
+}
+
+async fn prepare_self_host_workspace(workspace: &Path) -> Result<()> {
+    if workspace.exists() {
+        if !workspace.join(".git").exists() {
+            anyhow::bail!(
+                "Self-host workspace `{}` exists but is not a Git checkout. Move it aside or pass an explicit Librarian source checkout with --project-path.",
+                workspace.display()
+            );
+        }
+        println!(
+            "Self-host source workspace already exists: {}",
+            workspace.display()
+        );
+        return Ok(());
+    }
+
+    if let Some(parent) = workspace.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    println!(
+        "Preparing self-host source workspace: git clone {} {}",
+        DEFAULT_REPO_URL,
+        workspace.display()
+    );
+    let status = TokioCommand::new("git")
+        .arg("clone")
+        .arg(DEFAULT_REPO_URL)
+        .arg(workspace)
+        .status()
+        .await
+        .with_context(|| "Failed to start git clone for the self-host workspace")?;
+    if !status.success() {
+        anyhow::bail!("Failed to clone Librarian source workspace with status {status}");
+    }
+    Ok(())
+}
+
 async fn run_self_host_smoke(
     config: &Config,
     provider: ProviderKind,
@@ -2372,13 +2477,7 @@ async fn run_self_host_smoke(
     let db = Database::connect(config).await?;
     db.migrate().await?;
 
-    let project_path = match project_path {
-        Some(path) => path.to_path_buf(),
-        None => std::env::current_dir()?,
-    };
-    let project_path = project_path
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve {}", project_path.display()))?;
+    let project_path = resolve_self_host_project_path(config, project_path).await?;
     let cargo_toml = project_path.join("Cargo.toml");
     let cargo_manifest = fs::read_to_string(&cargo_toml).with_context(|| {
         format!(
@@ -4103,5 +4202,40 @@ mod tests {
 
         assert!(error.to_string().contains("cargo test --quiet"));
         assert!(error.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn detects_librarian_source_directory_by_manifest() {
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-source-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("test dir");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"librarian\"\nversion = \"0.0.0\"\n",
+        )
+        .expect("manifest");
+
+        assert!(is_librarian_source_dir(&root));
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn installed_root_is_allowed_to_prepare_self_host_workspace() {
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-installed-root-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("test dir");
+        let mut config = Config::load_or_default(Some(root.clone())).expect("config");
+        config.home = root.clone();
+
+        assert!(should_prepare_self_host_workspace(&config, &root));
+        assert!(should_prepare_self_host_workspace(
+            &config,
+            &root.join(".app").join("source")
+        ));
+
+        std::fs::remove_dir_all(root).ok();
     }
 }
