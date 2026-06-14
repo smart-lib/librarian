@@ -13,8 +13,10 @@ use crate::{
     config::Config,
     db::Database,
     docker_runner::DockerRunner,
-    domain::{AgentInstructionFile, AgentRunSpec, Job, JobStatus, MemoryKind, ProviderKind},
-    gates,
+    domain::{
+        AgentInstructionFile, AgentRunSpec, Job, JobStatus, MemoryKind, Project, ProviderKind,
+    },
+    gates, job_review,
     memory::{self, RetrievalRequest},
     prompt,
     providers::runtime,
@@ -347,6 +349,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 )
                 .await?;
             memory::embed_item(&db, &config, &memory_item).await?;
+            record_post_run_review_packet(&db, &project, job.id).await?;
         }
         Ok(code) => {
             let final_status = if db.get_job(job.id).await?.cancel_requested_at.is_some() {
@@ -393,6 +396,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 )
                 .await?;
             memory::embed_item(&db, &config, &memory_item).await?;
+            record_post_run_review_packet(&db, &project, job.id).await?;
         }
         Err(error) => {
             let final_status = if db.get_job(job.id).await?.cancel_requested_at.is_some() {
@@ -434,10 +438,57 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 )
                 .await?;
             memory::embed_item(&db, &config, &memory_item).await?;
+            record_post_run_review_packet(&db, &project, job.id).await?;
             return Err(error);
         }
     }
 
+    Ok(())
+}
+
+async fn record_post_run_review_packet(
+    db: &Database,
+    project: &Project,
+    job_id: uuid::Uuid,
+) -> Result<()> {
+    let git_marker = project.path.join(".git");
+    if !git_marker.exists() {
+        db.add_job_event(
+            job_id,
+            "post_run_review_skipped",
+            json!({
+                "reason": "project_is_not_git_worktree",
+                "project_path": project.path,
+            }),
+        )
+        .await?;
+        return Ok(());
+    }
+    match job_review::build_job_review_packet(db, job_id, false, None).await {
+        Ok(packet) => {
+            db.add_job_event(
+                job_id,
+                "post_run_review_packet",
+                json!({
+                    "summary": packet.get("summary").cloned().unwrap_or_else(|| json!({})),
+                    "project": packet.get("project").cloned().unwrap_or_else(|| json!({})),
+                }),
+            )
+            .await?;
+        }
+        Err(error) => {
+            db.add_job_event(
+                job_id,
+                "post_run_review_skipped",
+                json!({
+                    "reason": "review_packet_failed",
+                    "error": error.to_string(),
+                    "project_path": project.path,
+                }),
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -884,5 +935,123 @@ mod tests {
         assert!(events.iter().any(|event| event.kind == "preflight"));
 
         std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn post_run_review_packet_records_summary_for_git_project() {
+        let (_config, db, home) = test_config_and_db("post-run-review").await;
+        let project_path = home.join("Projects").join("Reviewable");
+        std::fs::create_dir_all(&project_path).expect("project dir");
+
+        run_git(&project_path, &["init"]);
+        run_git(
+            &project_path,
+            &["config", "user.email", "smoke@example.invalid"],
+        );
+        run_git(&project_path, &["config", "user.name", "Librarian Smoke"]);
+        std::fs::write(project_path.join("README.md"), "# Reviewable\n").expect("seed file");
+        run_git(&project_path, &["add", "-A"]);
+        run_git(&project_path, &["commit", "-m", "seed"]);
+        run_git(
+            &project_path,
+            &["checkout", "-b", "feature/post-run-review"],
+        );
+        std::fs::write(project_path.join("agent-output.md"), "post run change\n")
+            .expect("agent output");
+
+        let project = db
+            .add_project("Reviewable", &project_path)
+            .await
+            .expect("project");
+        let job = db
+            .create_job(
+                project.id,
+                ProviderKind::Codex,
+                "Summarize post-run review behavior",
+                MountMode::ReadOnly,
+                NetworkMode::None,
+                None,
+            )
+            .await
+            .expect("job");
+
+        record_post_run_review_packet(&db, &project, job.id)
+            .await
+            .expect("review packet");
+
+        let events = db.list_job_events(job.id).await.expect("events");
+        let packet_event = events
+            .iter()
+            .find(|event| event.kind == "post_run_review_packet")
+            .expect("post-run packet event");
+        assert_eq!(
+            packet_event.payload["summary"]["has_worktree_changes"],
+            true
+        );
+        assert!(
+            packet_event.payload["summary"]["next_step"]
+                .as_str()
+                .expect("next step")
+                .len()
+                > 0
+        );
+        assert!(events.iter().any(|event| event.kind == "review_packet"));
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
+    async fn post_run_review_packet_skips_non_git_project() {
+        let (_config, db, home) = test_config_and_db("post-run-review-skip").await;
+        let project_path = home.join("Projects").join("PlainFolder");
+        std::fs::create_dir_all(&project_path).expect("project dir");
+        let project = db
+            .add_project("PlainFolder", &project_path)
+            .await
+            .expect("project");
+        let job = db
+            .create_job(
+                project.id,
+                ProviderKind::Codex,
+                "Plain folder review should skip",
+                MountMode::ReadOnly,
+                NetworkMode::None,
+                None,
+            )
+            .await
+            .expect("job");
+
+        record_post_run_review_packet(&db, &project, job.id)
+            .await
+            .expect("review skip");
+
+        let events = db.list_job_events(job.id).await.expect("events");
+        let skip = events
+            .iter()
+            .find(|event| event.kind == "post_run_review_skipped")
+            .expect("skip event");
+        assert_eq!(
+            skip.payload["reason"].as_str(),
+            Some("project_is_not_git_worktree")
+        );
+        assert!(!events
+            .iter()
+            .any(|event| event.kind == "post_run_review_packet"));
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    fn run_git(project_path: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(project_path)
+            .output()
+            .expect("git command");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

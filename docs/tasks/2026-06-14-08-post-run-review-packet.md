@@ -27,6 +27,17 @@ manual `jobs review-packet` command.
 ## Progress
 
 - [x] Scope captured.
-- [ ] Implementation completed.
-- [ ] Tests run.
-- [ ] Committed separately.
+- [x] Implementation completed.
+- [x] Tests run.
+- [x] Committed separately.
+
+## Result
+
+- Worker now records a `post_run_review_packet` event after completed, failed,
+  or cancelled agent execution when the linked project is a Git worktree.
+- Non-Git projects and review-packet failures are non-fatal and are recorded as
+  `post_run_review_skipped` diagnostics.
+- Automatic packet creation keeps `run_tests=false`; expensive validation stays
+  under explicit smoke/manual control.
+- Added unit coverage for Git worktree packet creation and non-Git skip
+  behavior.
