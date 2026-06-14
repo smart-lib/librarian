@@ -979,6 +979,92 @@ async fn agent_review_packet_slash_returns_chat_card() {
 }
 
 #[tokio::test]
+async fn job_git_action_proposal_api_returns_approval_card_payload() {
+    let home = std::env::current_dir().expect("current dir").join(format!(
+        ".librarian-test-review-proposal-{}",
+        Uuid::new_v4()
+    ));
+
+    {
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let repo = home.join("repo");
+        std::fs::create_dir_all(&repo).expect("repo dir");
+        let run_git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .expect("git command");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run_git(&["init"]);
+        run_git(&["config", "user.email", "smoke@example.invalid"]);
+        run_git(&["config", "user.name", "Librarian Smoke"]);
+        std::fs::write(repo.join("README.md"), "# Smoke\n").expect("seed file");
+        run_git(&["add", "README.md"]);
+        run_git(&["commit", "-m", "seed"]);
+        run_git(&["checkout", "-b", "feature/review-proposal"]);
+        std::fs::write(repo.join("README.md"), "# Smoke\n\nChanged.\n").expect("dirty file");
+
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        let project = db
+            .add_project("ReviewProposalApi", &repo)
+            .await
+            .expect("project");
+        let job = db
+            .create_job(
+                project.id,
+                crate::domain::ProviderKind::Codex,
+                "inspect review proposal",
+                MountMode::ReadWrite,
+                crate::domain::NetworkMode::Provider,
+                None,
+            )
+            .await
+            .expect("job");
+        let state = AppState {
+            db: db.clone(),
+            config: Arc::new(RwLock::new(config.clone())),
+        };
+
+        let response = propose_job_git_action_api(
+            State(state),
+            AxumPath(job.id),
+            Json(JobGitActionProposalRequest {
+                action: "commit".to_string(),
+                message: Some("Review proposal smoke".to_string()),
+                commit: None,
+            }),
+        )
+        .await
+        .expect("proposal response")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(payload["approval"]["tool"], "git");
+        assert_eq!(payload["approval"]["action"], "commit");
+        assert_eq!(payload["approval"]["payload"]["job_id"], job.id.to_string());
+        assert_eq!(
+            payload["approval"]["payload"]["message"],
+            "Review proposal smoke"
+        );
+    }
+
+    std::fs::remove_dir_all(home).ok();
+}
+
+#[tokio::test]
 async fn claude_runtime_settings_endpoint_persists_instruction_file() {
     let home = std::env::current_dir().expect("current dir").join(format!(
         ".librarian-test-claude-settings-{}",

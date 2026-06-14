@@ -1491,6 +1491,7 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const review = packet.review || {};
         const git = review.git || {};
         const commitGate = packet.commit_gate || {};
+        const revertPlan = packet.revert_plan || {};
         const blockers = Array.isArray(commitGate.blockers) ? commitGate.blockers : [];
         const nextStep = summary.next_step || 'inspect_packet';
         const status = blockers.length ? 'blocked' : 'ready';
@@ -1511,9 +1512,12 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           <div class="approval-paths">${rows.map(row => `<div>${htmlEscape(row)}</div>`).join('')}</div>
           ${blockers.length ? `<div class="approval-paths">${blockers.map(row => `<div>${htmlEscape(row)}</div>`).join('')}</div>` : '<div class="muted tiny">No commit gate blockers.</div>'}
           <div class="approval-actions">
+            ${jobId ? `<button type="button" data-review-propose="commit" ${summary.commit_allowed ? '' : 'disabled'}>Propose commit</button>` : ''}
+            ${jobId ? `<button type="button" class="reject" data-review-propose="revert" ${revertPlan.allowed ? '' : 'disabled'}>Propose revert</button>` : ''}
             ${jobId ? '<button type="button" data-agent-events>Refresh events</button>' : ''}
             ${jobId ? '<button type="button" data-agent-preflight>Preflight</button>' : ''}
           </div>
+          <div class="approval-status" hidden></div>
           <details ${statusText ? 'open' : ''}><summary>Git status</summary><pre>${htmlEscape(statusText || 'clean')}</pre></details>
           <details><summary>Diff summary</summary><pre>${htmlEscape(diffText || 'no diff')}</pre></details>
           <details><summary>Technical details</summary><pre>${htmlEscape(JSON.stringify(packet, null, 2))}</pre></details>
@@ -1540,6 +1544,51 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             : '<div>No events yet.</div>';
           el('chat-log').scrollTop = el('chat-log').scrollHeight;
         }
+        async function proposeReviewAction(action) {
+          if (!jobId) return;
+          const buttons = Array.from(article.querySelectorAll('[data-review-propose]'));
+          const statusLine = article.querySelector('.approval-status');
+          buttons.forEach(button => button.disabled = true);
+          statusLine.hidden = false;
+          statusLine.textContent = action === 'commit' ? 'Preparing commit proposal...' : 'Preparing revert proposal...';
+          try {
+            const body = { action };
+            if (action === 'commit') {
+              const defaultMessage = `Librarian job ${shortId(jobId)} changes`;
+              const message = prompt('Commit message', defaultMessage);
+              if (!message) {
+                statusLine.textContent = 'Commit proposal cancelled.';
+                buttons.forEach(button => button.disabled = false);
+                return;
+              }
+              body.message = message;
+            }
+            if (action === 'revert') {
+              const defaultCommit = revertPlan.target_commit || '';
+              const commit = prompt('Commit to revert', defaultCommit);
+              if (!commit) {
+                statusLine.textContent = 'Revert proposal cancelled.';
+                buttons.forEach(button => button.disabled = false);
+                return;
+              }
+              body.commit = commit;
+            }
+            const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/git-action-proposal`, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body)
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+            setApprovalCard(article, data.approval, data.approval?.payload?.summary || `${action} proposal ready.`, detail);
+          } catch (error) {
+            statusLine.textContent = `Could not create ${action} proposal: ${error.message || error}`;
+            buttons.forEach(button => button.disabled = false);
+          }
+        }
+        article.querySelectorAll('[data-review-propose]').forEach(button => {
+          button.addEventListener('click', () => proposeReviewAction(button.dataset.reviewPropose));
+        });
         article.querySelector('[data-agent-events]')?.addEventListener('click', () => loadReviewEvents(false));
         article.querySelector('[data-agent-preflight]')?.addEventListener('click', () => loadReviewEvents(true));
         el('chat-log').scrollTop = el('chat-log').scrollHeight;

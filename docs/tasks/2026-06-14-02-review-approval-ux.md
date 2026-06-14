@@ -21,8 +21,16 @@ approval ids as the primary user workflow.
 
 ## Progress
 
-- [ ] Scope captured.
-- [ ] Implementation completed.
-- [ ] Tests/smokes run.
-- [ ] Roadmap updated.
-- [ ] Committed separately.
+- [x] Scope captured.
+- [x] Implementation completed.
+- [x] Tests run: `cargo test --quiet`.
+- [x] Roadmap updated.
+- [x] Committed separately: `8d5e561 Add chat review approval actions`.
+
+## Result
+
+Review cards can now create git commit/revert approval proposals from the chat UI
+without requiring the user to copy approval ids. The new
+`POST /api/jobs/{id}/git-action-proposal` endpoint returns an approval payload
+that is rendered immediately as the existing chat-native approval card with
+Approve/Reject buttons. Slash commands remain available for power users.

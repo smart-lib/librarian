@@ -91,6 +91,13 @@ pub struct ExportPromptRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct JobGitActionProposalRequest {
+    pub action: String,
+    pub message: Option<String>,
+    pub commit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LibraryTreeQuery {
     pub root: Option<LibraryRoot>,
     pub max_depth: Option<usize>,

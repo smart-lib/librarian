@@ -185,6 +185,10 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/jobs/:id/events", get(job_events))
         .route("/api/jobs/:id/preflight", post(preflight_job))
         .route("/api/jobs/:id/review-packet", post(review_packet_job))
+        .route(
+            "/api/jobs/:id/git-action-proposal",
+            post(propose_job_git_action_api),
+        )
         .route("/api/jobs/:id/cancel", post(cancel_job))
         .route("/api/jobs/:id/retry", post(retry_job))
         .route("/api/schedules/:id/enable", post(enable_schedule))
@@ -1163,6 +1167,28 @@ async fn review_packet_job(
     Ok(Json(
         job_review::build_job_review_packet(&state.db, id, false, None).await?,
     ))
+}
+
+async fn propose_job_git_action_api(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    Json(input): Json<JobGitActionProposalRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let action = match input.action.trim().to_ascii_lowercase().as_str() {
+        "commit" => job_review::GitGateActionArg::Commit,
+        "push" => job_review::GitGateActionArg::Push,
+        "revert" => job_review::GitGateActionArg::Revert,
+        other => return Err(anyhow::anyhow!("Unknown git action proposal `{other}`").into()),
+    };
+    let approval = job_review::propose_job_git_action(
+        &state.db,
+        id,
+        action,
+        input.message.as_deref(),
+        input.commit.as_deref(),
+    )
+    .await?;
+    Ok(Json(serde_json::json!({ "approval": approval })))
 }
 
 async fn cancel_job(

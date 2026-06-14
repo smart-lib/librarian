@@ -1042,7 +1042,10 @@ readiness or a later planned milestone.
   only in technical details/tooltips. First card pass is active for chat-created
   approvals; slash list output now shows compact summaries instead of raw JSON.
   Current pass makes `/approval propose` return the same approval-card metadata
-  and restores context-switch cards from chat history.
+  and restores context-switch cards from chat history. Job review cards can now
+  create commit/revert approval proposals from the UI and immediately swap into
+  the same Approve/Reject card flow, so normal review does not require copying
+  approval ids.
 - Keep chat latency visible: pending assistant messages should show an inline
   thinking/loading state, and completed turns should have backend timing events
   plus human-readable timing metadata in the UI. First UI pass now shows
@@ -1109,9 +1112,11 @@ readiness or a later planned milestone.
   output, and a recommendation as a job event. Second pass adds `jobs
   review-packet <job-id> [--run-tests] [--revert-commit <sha>]`, combining
   review output, commit gate, revert plan, push plan, and a compact next-step
-  summary into one machine-readable artifact for the future chat/UI approval
-  card. Chat-first UI can now render `/agent review-packet <job-id>` as a
-  review card, and self-host smoke verifies that contract.
+  summary into one machine-readable artifact for the chat/UI approval card.
+  Chat-first UI can render `/agent review-packet <job-id>` as a review card,
+  and that card can create commit/revert approval proposals through
+  `/api/jobs/:id/git-action-proposal`; self-host smoke verifies the review-card
+  contract and unit coverage verifies the proposal endpoint.
 - Add commit/push/revert policy gates before any self-hosted commit
   automation. First CLI pass adds `jobs gate <job-id> --action commit|push`,
   checking project git policy, protected branches, optional branch pattern,
