@@ -276,6 +276,8 @@ enum SmokeCommand {
         #[arg(long)]
         review: bool,
         #[arg(long)]
+        run_tests: bool,
+        #[arg(long)]
         allow_network: bool,
         #[arg(long)]
         secret_grant_token: Option<String>,
@@ -970,6 +972,7 @@ async fn main() -> Result<()> {
                 project_path,
                 run_agent,
                 review,
+                run_tests,
                 allow_network,
                 secret_grant_token,
             } => {
@@ -979,6 +982,7 @@ async fn main() -> Result<()> {
                     project_path.as_deref(),
                     run_agent,
                     review,
+                    run_tests,
                     allow_network,
                     secret_grant_token.as_deref(),
                 )
@@ -2360,6 +2364,7 @@ async fn run_self_host_smoke(
     project_path: Option<&Path>,
     run_agent: bool,
     review: bool,
+    run_tests: bool,
     allow_network: bool,
     secret_grant_token: Option<&str>,
 ) -> Result<()> {
@@ -2393,6 +2398,7 @@ async fn run_self_host_smoke(
     println!("  root: {}", config.home.display());
     println!("  project path: {}", display_project_path.display());
     println!("  provider: {}", provider_arg_name(&provider));
+    println!("  review tests: {}", if run_tests { "on" } else { "off" });
     println!(
         "  mode: {}",
         if run_agent && review {
@@ -2532,7 +2538,7 @@ async fn run_self_host_smoke(
     );
 
     println!("4. Recording self-host review snapshot...");
-    let review_snapshot = job_review::review_job_changes(&db, job.id, false).await?;
+    let review_snapshot = job_review::review_job_changes(&db, job.id, run_tests).await?;
     println!(
         "   OK: has_changes={} recommendation={}",
         review_snapshot
@@ -2557,7 +2563,7 @@ async fn run_self_host_smoke(
             .map(Vec::len)
             .unwrap_or(0)
     );
-    let packet = job_review::build_job_review_packet(&db, job.id, false, None).await?;
+    let packet = job_review::build_job_review_packet(&db, job.id, run_tests, None).await?;
     println!(
         "   OK: review packet next_step={}",
         packet
@@ -2566,6 +2572,9 @@ async fn run_self_host_smoke(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown")
     );
+    if run_tests {
+        assert_review_packet_tests_ok(&packet, "self-host preflight review packet")?;
+    }
 
     println!("6. Checking chat review-card contract...");
     admin::run_agent_review_packet_ui_smoke(config, job.id).await?;
@@ -2580,6 +2589,9 @@ async fn run_self_host_smoke(
             provider_arg_name(&provider),
             display_project_path.display()
         );
+        if run_tests {
+            println!("Test-backed review passed in preflight mode.");
+        }
         return Ok(());
     }
 
@@ -2595,6 +2607,22 @@ async fn run_self_host_smoke(
         let events = db.list_job_events(job.id).await?;
         let next_step = post_run_review_next_step(&events)?;
         println!("   OK: post-run review packet next_step={next_step}");
+        if run_tests {
+            println!("9. Building test-backed post-run review packet...");
+            let packet = job_review::build_job_review_packet(&db, job.id, true, None).await?;
+            let next_step = packet
+                .get("summary")
+                .and_then(|summary| summary.get("next_step"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if next_step.trim().is_empty() {
+                anyhow::bail!(
+                    "Self-host test-backed review packet did not include summary.next_step"
+                );
+            }
+            assert_review_packet_tests_ok(&packet, "self-host post-run review packet")?;
+            println!("   OK: tests passed; next_step={next_step}");
+        }
     }
     println!("Self-host smoke passed.");
     Ok(())
@@ -2625,6 +2653,28 @@ fn post_run_review_next_step(events: &[crate::domain::JobEvent]) -> Result<&str>
         anyhow::bail!("Self-host post-run review packet did not include summary.next_step");
     }
     Ok(next_step)
+}
+
+fn assert_review_packet_tests_ok(packet: &serde_json::Value, label: &str) -> Result<()> {
+    let Some(tests) = packet.get("review").and_then(|review| review.get("tests")) else {
+        anyhow::bail!("{label} did not include test output");
+    };
+    if !tests
+        .get("success")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        let command = tests
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("test command");
+        let stderr = tests
+            .get("stderr")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        anyhow::bail!("{label} reported failing tests from `{command}`: {stderr}");
+    }
+    Ok(())
 }
 
 async fn run_context_smoke(config: &Config, name: &str) -> Result<()> {
@@ -4035,5 +4085,23 @@ mod tests {
         let error = post_run_review_next_step(&events).expect_err("missing packet");
 
         assert!(error.to_string().contains("project_is_not_git_worktree"));
+    }
+
+    #[test]
+    fn review_packet_test_gate_requires_successful_tests() {
+        let packet = json!({
+            "review": {
+                "tests": {
+                    "command": "cargo test --quiet",
+                    "success": false,
+                    "stderr": "boom"
+                }
+            }
+        });
+
+        let error = assert_review_packet_tests_ok(&packet, "packet").expect_err("failing tests");
+
+        assert!(error.to_string().contains("cargo test --quiet"));
+        assert!(error.to_string().contains("boom"));
     }
 }

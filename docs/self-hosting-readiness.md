@@ -18,7 +18,7 @@ write tasks where a human approves review, commit, revert, and push decisions.
 
 It is still not ready for unattended autonomous development loops. The remaining
 barrier is operational confidence: repeated real Codex self-host runs on the
-target Ubuntu host, automatic post-run review wiring, stricter test gates before
+target Ubuntu host, routine use of the opt-in test-backed review gate before
 approval, and a final policy decision for when Librarian may ask agents to write
 without first asking the user.
 
@@ -40,6 +40,12 @@ Full supervised self-host check after the current batch:
 
 ```bash
 librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD" --run-agent --review
+```
+
+Full supervised self-host check with a test-backed review packet:
+
+```bash
+librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD" --run-agent --review --run-tests
 ```
 
 Review a job's repository state before continuing:
@@ -104,6 +110,9 @@ librarian --home "$HOME/Librarian" smoke providers
 - `jobs review-packet` records one combined review artifact with review output,
   commit gate, revert plan, push plan, and a compact next-step summary for the
   chat/UI approval card.
+- Worker completion now automatically records a post-run review packet for Git
+  worktrees, or a structured skip diagnostic for non-Git projects/review
+  failures.
 - `jobs gate` records whether commit, push, or revert is allowed by project policy,
   branch protection, branch pattern, dirty state, and upstream state.
 - `jobs push-plan` records the upstream branch, outgoing commit list, ahead
@@ -125,7 +134,10 @@ librarian --home "$HOME/Librarian" smoke providers
   model, timeout, and network failures.
 - `smoke self-host` now checks that the Librarian repository can be registered
   and prepared for a supervised read-only agent job, and that `/agent
-  review-packet` returns chat UI metadata for the same job.
+  review-packet` returns chat UI metadata for the same job. `--review` verifies
+  the worker-created post-run review packet after a real agent run, and
+  `--run-tests` makes the review packet execute and require `cargo test --quiet`
+  success.
 - Worker preflight now reports a budget reservation estimate. Known-price
   estimates create active SQLite budget reservations before dispatch; those
   reservations are released on job finish and counted as pending spend in budget
@@ -144,11 +156,11 @@ librarian --home "$HOME/Librarian" smoke providers
 
 - A real containerized self-host Codex task still needs repeated validation on
   the user's target Ubuntu host.
-- Post-run review should be automatic: after a job finishes, Librarian should
-  create or refresh the review packet without waiting for a manual command.
-- Test gates before approval should become one normal workflow: review packet,
+- Test gates before approval should become a routine workflow: review packet,
   `cargo fmt`, `cargo test`, focused smoke where appropriate, then commit
-  proposal. Push remains manual after policy review.
+  proposal. Push remains manual after policy review. `smoke self-host
+  --review --run-tests` covers the Cargo-test part; formatting/focused smoke
+  still need an explicit gate story.
 - Automatic write tasks now pass through a first project policy gate; richer UI
   policy editing and audit explanations are still needed.
 - Budget/cost control has pending reservation accounting when model pricing is
@@ -183,4 +195,4 @@ Use Librarian for supervised self-development in short loops:
 10. Push manually only after a separate push gate and `jobs push-plan` review.
 
 Avoid unattended multi-agent write loops until repeated real Codex self-host
-runs are boringly reliable and the post-run review/test gate is automatic.
+runs are boringly reliable and the full review/test/format gate is automatic.

@@ -1104,7 +1104,9 @@ readiness or a later planned milestone.
   memory retrieval, prepares a read-only self-host agent job, checks the
   review/gate/UI review-card contract, and supports `--review` for explicit
   review assertions; `--run-agent --review` performs the real provider call and
-  verifies the worker-created post-run review packet.
+  verifies the worker-created post-run review packet. Add `--run-tests` to make
+  the self-host review packet execute and require a passing `cargo test --quiet`
+  gate.
 - Add richer structured parsing for provider responses and CLI error formats.
   First expansion covers common Codex, Claude Code, and OpenRouter auth, quota,
   model, timeout, and network failures with provider-specific diagnostic codes.
