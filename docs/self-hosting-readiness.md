@@ -5,22 +5,22 @@ launching supervised background agents against the Librarian repository.
 
 ## Current Verdict
 
-Status: partially ready for supervised self-hosting.
+Status: ready for cautious supervised Codex self-hosting; not ready for
+unattended autonomous development loops.
 
-Librarian can already register its own repository as a project, retrieve
-project-scoped context, prepare containerized agent jobs, mount provider
-profiles, pass prompt-builder instruction files, record job events, collect a
-worktree review snapshot, and keep run summaries in the knowledge base. It can
-also produce a combined review packet, expose that packet to the admin Jobs
-panel and chat review cards, and block scheduled write jobs unless project
-policy explicitly allows them. That is enough for cautious read-only inspection
-tasks and small manually reviewed implementation tasks. Commit/push policy can
-now be checked explicitly before any human or future automated approval step.
+Librarian can register its own repository as a project, retrieve project-scoped
+context, prepare and run containerized Codex jobs, mount provider profiles, pass
+prompt-builder instruction files, record job events, write run summaries, build
+review packets, expose those packets in chat/UI, and create commit/revert
+approval proposals from the review card. External admin binds are protected by
+token auth. That is enough for cautious read-only inspection tasks and narrow
+write tasks where a human approves review, commit, revert, and push decisions.
 
-It is not yet ready for unattended autonomous development loops. The missing
-pieces are stronger self-host smoke coverage with real provider runs, richer
-agent result review, automated patch/test policy gates, and safer UI flows for
-approving write/commit/push operations.
+It is still not ready for unattended autonomous development loops. The remaining
+barrier is operational confidence: repeated real Codex self-host runs on the
+target Ubuntu host, automatic post-run review wiring, stricter test gates before
+approval, and a final policy decision for when Librarian may ask agents to write
+without first asking the user.
 
 ## One-Line Checks
 
@@ -34,6 +34,12 @@ Real read-only provider call after preflight:
 
 ```bash
 librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD" --run-agent
+```
+
+Full supervised self-host check after the current batch:
+
+```bash
+librarian --home "$HOME/Librarian" smoke self-host --project-path "$PWD" --run-agent --review
 ```
 
 Review a job's repository state before continuing:
@@ -97,19 +103,23 @@ librarian --home "$HOME/Librarian" smoke providers
   and a machine-readable recommendation as a job event.
 - `jobs review-packet` records one combined review artifact with review output,
   commit gate, revert plan, push plan, and a compact next-step summary for the
-  future chat/UI approval card.
+  chat/UI approval card.
 - `jobs gate` records whether commit, push, or revert is allowed by project policy,
   branch protection, branch pattern, dirty state, and upstream state.
 - `jobs push-plan` records the upstream branch, outgoing commit list, ahead
   count, remote list, and outgoing diff stat before a manual push.
 - `jobs propose-git` creates a git approval only after the gate passes. Commit
   and revert execution recheck policy before mutating the repository.
+- Chat review cards can create commit/revert approval proposals without copying
+  approval ids; approve/reject remains explicit.
 - Context retrieval supports project-scoped memory and tree-aware context
   primitives.
 - Tool permissions and approvals exist for file/project/memory/settings
   operations.
 - Prompt builder blocks can generate provider instruction files such as
   `CLAUDE.md` and generic agent guidance.
+- Prompt Builder UI can preview profile output, import/export portable preset
+  JSON, and create approval-gated Markdown exports into the Library.
 - Provider diagnostics are shared by doctor, admin API, and provider smoke.
   Current parsing covers common Codex, Claude Code, and OpenRouter auth, quota,
   model, timeout, and network failures.
@@ -125,30 +135,33 @@ librarian --home "$HOME/Librarian" smoke providers
   and uses `claude -p` from the project directory.
 - Prompt profile targets are centralized in code, so chat, generic agent, and
   provider instruction-file targets can grow without string literal drift.
+- Provider settings show grouped provider status and can run local MVP smoke
+  preflight from the UI.
+- Admin auth blocks externally reachable binds unless an admin token is
+  configured.
 
 ## Main Gaps Before Continuous Self-Development
 
 - A real containerized self-host Codex task still needs repeated validation on
   the user's target Ubuntu host.
-- Agent-written patches still need richer UI approval cards. CLI diff/test
-  review, review packets, commit/push/revert policy gates, push planning, gated
-  commit approvals, and revert proposals now exist as machine contracts. Push
-  remains manual after policy review.
+- Post-run review should be automatic: after a job finishes, Librarian should
+  create or refresh the review packet without waiting for a manual command.
+- Test gates before approval should become one normal workflow: review packet,
+  `cargo fmt`, `cargo test`, focused smoke where appropriate, then commit
+  proposal. Push remains manual after policy review.
 - Automatic write tasks now pass through a first project policy gate; richer UI
   policy editing and audit explanations are still needed.
-- Budget/cost control now has pending reservation accounting when model pricing
-  is known. The remaining gap is real provider/model pricing metadata and
-  reconciliation with observed provider usage.
-- Admin auth is missing, so remote admin/channel exposure is not ready.
-- `src/admin.rs` remains too large and still contains mixed API/helper
-  responsibilities. Job review logic has been extracted to `src/job_review.rs`,
-  and the chat shell HTML moved to `src/admin_ui.rs`; the next modularity pass
-  should split admin API handlers, chat orchestration, and atlas/project-library
-  code.
+- Budget/cost control has pending reservation accounting when model pricing is
+  known. The remaining gap is provider/model-specific price reconciliation with
+  observed provider usage.
+- Browser login/session UX and CSRF are still polish before broad internet
+  exposure, even though token auth now protects external binds.
+- `src/admin.rs` is smaller and has explicit child modules, but future
+  extraction should happen only at concrete feature boundaries.
 - OpenRouter and Claude Code paths exist but are not yet proven as production
   self-hosting providers.
-- Prompt/profile variants are still first-pass; host, channel, and provider
-  profiles need cleaner separation.
+- Prompt/profile variants are usable for MVP; host, channel, and provider
+  overrides need cleaner separation before many channels/providers are active.
 
 ## Practical Operating Mode Now
 
@@ -156,17 +169,18 @@ Use Librarian for supervised self-development in short loops:
 
 1. Discuss the task in chat and select the Librarian project context.
 2. Launch a read-only agent inspection or preflight first.
-3. Review job events and generated run summary.
-4. Run `jobs review-packet <job-id> --run-tests`.
-5. Run `jobs gate <job-id> --action commit` before any commit if the packet
+3. Review job events, generated run summary, and the review card.
+4. Run or inspect `jobs review-packet <job-id> --run-tests`.
+5. Run or inspect `jobs gate <job-id> --action commit` before any commit if the packet
    shows worktree changes.
-6. Create `jobs propose-git <job-id> --action commit --message ...` when the
-   review and gate are acceptable.
+6. Create a commit proposal from the review card or with
+   `jobs propose-git <job-id> --action commit --message ...` when the review and
+   gate are acceptable.
 7. If that commit is wrong, run `jobs revert-plan <job-id> --commit <sha>` and
    approve an explicit revert proposal.
 8. Only then launch a narrow write task or approve follow-up work.
 9. Run `cargo test` or `doctor --smoke`.
 10. Push manually only after a separate push gate and `jobs push-plan` review.
 
-Avoid unattended multi-agent write loops until patch review, policy gates, and
-provider-specific smoke runs are stronger.
+Avoid unattended multi-agent write loops until repeated real Codex self-host
+runs are boringly reliable and the post-run review/test gate is automatic.
