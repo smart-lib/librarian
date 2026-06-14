@@ -2316,8 +2316,8 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         el('project-stage').innerHTML = `<div class="project-layout">
           <section class="atlas-panel">
             <canvas id="neural-atlas" class="atlas-canvas" aria-label="Knowledge atlas"></canvas>
-            <div class="atlas-stamp">Neural Atlas В· v1</div>
-            <div class="atlas-help">Neuron - zoom В· core - back В· prima - root В· synapse - select</div>
+            <div class="atlas-stamp">Neural Atlas · v1</div>
+            <div class="atlas-help">Neuron · zoom — core · back — prima · root — synapse · select</div>
           </section>
         </div>`;
         renderNeuralAtlas();
