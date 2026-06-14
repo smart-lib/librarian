@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.21`; bump at least the minor version when a visible
+- Current crate version: `0.2.22`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -559,6 +559,10 @@ Tasks:
   low-level management out of the atlas canvas. Current smoke pass verifies
   `/project create`, `status`, `map`, `attach-library`, and `attach-workspace`
   through `smoke tools`.
+- Chat tool proposals for project creation now accept common model-generated
+  aliases such as `project.create_site_library_and_project_folder` and route
+  them through the same approval/executor path as the canonical
+  `create_starting_docs_and_project_folder` action.
 - When Librarian is launched from a directory that is not already known as a
   root or project, ask whether to register that directory as a working project
   and create/link the corresponding library folder. First diagnostic pass adds

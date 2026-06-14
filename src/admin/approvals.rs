@@ -496,7 +496,7 @@ pub(super) async fn execute_approved_tool_approval(
             .await?;
             Ok(serde_json::json!({ "path": tool_path, "recursive": recursive }))
         }
-        ("project", "create_starting_docs_and_project_folder" | "create_starting_docs") => {
+        ("project", action) if is_project_creation_action(action) => {
             ensure_tool_permission(
                 &state.db,
                 config,
@@ -660,6 +660,18 @@ pub(super) async fn execute_approved_tool_approval(
             approval.action
         ),
     }
+}
+
+fn is_project_creation_action(action: &str) -> bool {
+    matches!(
+        action,
+        "create_starting_docs_and_project_folder"
+            | "create_starting_docs"
+            | "create_library_and_project_folder"
+            | "create_site_library_and_project_folder"
+            | "create_project_library_and_workspace"
+            | "create_library_and_workspace"
+    )
 }
 
 pub(super) fn approval_payload_string(payload: &serde_json::Value, key: &str) -> Result<String> {

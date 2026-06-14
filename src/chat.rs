@@ -341,9 +341,7 @@ fn validate_tool_proposal(
         ("library", "replace_section" | "cut_section") => &["path", "heading"],
         ("workspace", "create_folder" | "create_file" | "delete") => &["path"][..],
         ("workspace", "move") => &["from", "to"],
-        ("project", "create_starting_docs_and_project_folder" | "create_starting_docs") => {
-            &["library_path"][..]
-        }
+        ("project", action) if is_project_creation_tool_action(action) => &["library_path"][..],
         ("memory", "remember" | "add") => &["content"][..],
         ("prompt", "add_block" | "add-block") => &["target", "name", "content"],
         _ => anyhow::bail!("Unsupported tool proposal `{tool}.{action}`"),
@@ -358,6 +356,18 @@ fn validate_tool_proposal(
 
 fn normalize_tool_token(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace('-', "_")
+}
+
+fn is_project_creation_tool_action(action: &str) -> bool {
+    matches!(
+        action,
+        "create_starting_docs_and_project_folder"
+            | "create_starting_docs"
+            | "create_library_and_project_folder"
+            | "create_site_library_and_project_folder"
+            | "create_project_library_and_workspace"
+            | "create_library_and_workspace"
+    )
 }
 
 fn chat_provider_unavailable_result(
@@ -425,7 +435,7 @@ fn build_librarian_chat_prompt(
         prompt.push_str(instruction_blocks.trim());
         prompt.push_str("\n\n");
     }
-    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If the user asks you to perform a concrete tool action that should require approval, do not claim it is done; reply with {\"action\":\"propose_tool\",\"tool\":\"library|workspace|project|agent|prompt|settings\",\"tool_action\":\"specific action\",\"payload\":{\"summary\":\"what would be done\",\"name\":\"human name when relevant\",\"path\":\"relative path when relevant\",\"from\":\"relative source path for moves\",\"to\":\"relative destination path for moves\",\"library_path\":\"relative Library path when relevant\",\"workspace_path\":\"relative Projects path or existing absolute path when relevant\",\"content\":\"markdown content when relevant\",\"start_line\":1,\"end_line\":1,\"query\":\"search text when relevant\",\"recursive\":false,\"files\":[{\"path\":\"relative Library markdown path\",\"content\":\"markdown content\"}]},\"reason\":\"why approval is needed\"}. Known library actions include create_folder, create_file, write_markdown, append_markdown, move, delete, replace_lines, cut_lines, replace_find, and cut_find. Known workspace actions include create_folder, create_file, move, and delete. The payload must be structured enough for the tool to execute after user approval. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
+    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If the user asks you to perform a concrete tool action that should require approval, do not claim it is done; reply with {\"action\":\"propose_tool\",\"tool\":\"library|workspace|project|agent|prompt|settings\",\"tool_action\":\"specific action\",\"payload\":{\"summary\":\"what would be done\",\"name\":\"human name when relevant\",\"path\":\"relative path when relevant\",\"from\":\"relative source path for moves\",\"to\":\"relative destination path for moves\",\"library_path\":\"relative Library path when relevant\",\"workspace_path\":\"relative Projects path or existing absolute path when relevant\",\"content\":\"markdown content when relevant\",\"start_line\":1,\"end_line\":1,\"query\":\"search text when relevant\",\"recursive\":false,\"files\":[{\"path\":\"relative Library markdown path\",\"content\":\"markdown content\"}]},\"reason\":\"why approval is needed\"}. Known library actions include create_folder, create_file, write_markdown, append_markdown, move, delete, replace_lines, cut_lines, replace_find, and cut_find. Known workspace actions include create_folder, create_file, move, and delete. For project creation use the canonical project action create_starting_docs_and_project_folder with library_path, optional name, optional workspace_path, summary, and optional files. The payload must be structured enough for the tool to execute after user approval. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
 
     prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));
     prompt.push_str(&format!(
@@ -672,6 +682,25 @@ mod tests {
             Some(serde_json::json!({"command":"rm -rf /"})),
         )
         .is_err());
+    }
+
+    #[test]
+    fn validates_project_creation_aliases() {
+        let (tool, action, payload) = validate_tool_proposal(
+            Some("project"),
+            Some("create-site-library-and-project-folder"),
+            Some(serde_json::json!({
+                "summary": "Create site docs and workspace.",
+                "name": "nomorecare.gg",
+                "library_path": "sites/nomorecare.gg",
+                "workspace_path": "sites/nomorecare.gg"
+            })),
+        )
+        .expect("proposal");
+
+        assert_eq!(tool, "project");
+        assert_eq!(action, "create_site_library_and_project_folder");
+        assert_eq!(payload["library_path"], "sites/nomorecare.gg");
     }
 
     #[test]

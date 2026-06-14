@@ -1253,6 +1253,69 @@ async fn approval_approve_executes_project_starting_docs_without_secret_key() {
 }
 
 #[tokio::test]
+async fn approval_approve_executes_site_project_creation_alias() {
+    let home = std::env::current_dir().expect("current dir").join(format!(
+        ".librarian-test-approval-site-project-{}",
+        Uuid::new_v4()
+    ));
+
+    {
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        let approval = db
+            .create_tool_approval(
+                "project",
+                "create_site_library_and_project_folder",
+                serde_json::json!({
+                    "summary": "Create site docs and workspace for nomorecare.gg.",
+                    "name": "nomorecare.gg",
+                    "library_path": "sites/nomorecare.gg",
+                    "workspace_path": "sites/nomorecare.gg"
+                }),
+            )
+            .await
+            .expect("approval");
+        let state = AppState {
+            db: db.clone(),
+            config: Arc::new(RwLock::new(config.clone())),
+        };
+
+        let result = execute_approval_slash_command(
+            &state,
+            &config,
+            &["approve".to_string(), approval.id.to_string()],
+        )
+        .await
+        .expect("approve");
+
+        assert!(result.reply.contains("Approved and executed"));
+        assert!(home
+            .join("Library")
+            .join("sites")
+            .join("nomorecare.gg")
+            .join("Overview.md")
+            .is_file());
+        assert!(home
+            .join("Projects")
+            .join("sites")
+            .join("nomorecare.gg")
+            .is_dir());
+        let project = db
+            .get_project_by_name_or_id("nomorecare.gg")
+            .await
+            .expect("project");
+        assert_eq!(
+            project.library_path.as_deref(),
+            Some(std::path::Path::new("sites/nomorecare.gg"))
+        );
+    }
+
+    std::fs::remove_dir_all(home).ok();
+}
+
+#[tokio::test]
 async fn approval_executor_handles_library_edits_and_workspace_moves() {
     let home = std::env::current_dir()
         .expect("current dir")
