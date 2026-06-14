@@ -1248,11 +1248,11 @@ Findings and tasks:
 - Tool permissions now exist as a first-pass policy/audit layer. Remaining debt:
   richer interactive approval UX, policy UI, and clearer assistant-initiated
   tool execution review.
-- Admin authentication is not implemented. Before exposing non-localhost admin
-  access, add auth, CSRF/session handling where relevant, and clear bind/router
-  guidance.
-- External HTTP access by IP/router is not a current MVP target. Track it as
-  polish after auth exists.
+- Admin authentication now protects externally reachable binds. Localhost stays
+  frictionless by default; `0.0.0.0`/non-loopback binds require an admin token
+  through config or `LIBRARIAN_ADMIN_TOKEN`, and protected routes accept bearer
+  token auth. Remaining polish: browser login/session UX and CSRF handling
+  before broad router/IP exposure is recommended.
 - Project library UI cannot yet create/link memory folders and working
   directories from the admin surface.
 - Knowledge-base writes are basic Markdown files without conflict handling, rename

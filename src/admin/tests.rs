@@ -1159,6 +1159,25 @@ async fn provider_smoke_endpoint_exposes_dry_run_command() {
 }
 
 #[test]
+fn admin_external_bind_requires_auth_token() {
+    let home = std::env::current_dir()
+        .expect("current dir")
+        .join(format!(".librarian-test-admin-auth-{}", Uuid::new_v4()));
+    let mut config = Config::load_or_default(Some(home.clone())).expect("config");
+
+    assert!(validate_admin_auth_for_bind("127.0.0.1:17377", &config).is_ok());
+    assert!(validate_admin_auth_for_bind("localhost:17377", &config).is_ok());
+    assert!(validate_admin_auth_for_bind("0.0.0.0:17377", &config).is_err());
+
+    config.admin.auth_enabled = true;
+    config.admin.auth_token = Some("secret-token".to_string());
+    assert!(validate_admin_auth_for_bind("0.0.0.0:17377", &config).is_ok());
+    assert!(validate_admin_auth_for_bind("[::]:17377", &config).is_ok());
+
+    std::fs::remove_dir_all(home).ok();
+}
+
+#[test]
 fn normalizes_approval_library_paths_from_user_text() {
     let payload = serde_json::json!({
         "user_message": "Создай стартовую документацию в /Library/Games/AdvenTableDays/ и пустую папку проекта."

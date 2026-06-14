@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
+    body::Body,
     extract::{Path as AxumPath, Query, State},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
     response::{Html, IntoResponse},
     routing::{get, patch, post},
     Json, Router,
@@ -116,6 +119,7 @@ impl ChatProjectContext {
 }
 
 pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
+    validate_admin_auth_for_bind(&bind, &config)?;
     let state = AppState {
         db,
         config: Arc::new(RwLock::new(config)),
@@ -206,6 +210,10 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/approvals/:id/approve", post(approve_tool_approval))
         .route("/api/approvals/:id/reject", post(reject_tool_approval))
         .route("/api/agent-jobs", post(create_job))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_admin_auth,
+        ))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -214,6 +222,79 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
     println!("Librarian admin UI listening on http://{bind}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn validate_admin_auth_for_bind(bind: &str, config: &Config) -> Result<()> {
+    if !is_external_admin_bind(bind) {
+        return Ok(());
+    }
+    if config.admin.auth_enabled
+        && config
+            .admin
+            .auth_token
+            .as_deref()
+            .is_some_and(|v| !v.is_empty())
+    {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "Admin bind `{bind}` is externally reachable. Set `[admin].auth_enabled = true` and `[admin].auth_token`, or set LIBRARIAN_ADMIN_TOKEN before binding outside localhost."
+    )
+}
+
+fn is_external_admin_bind(bind: &str) -> bool {
+    let host = bind
+        .rsplit_once(':')
+        .map(|(host, _)| host.trim_matches(['[', ']']))
+        .unwrap_or(bind)
+        .trim();
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => !ip.is_loopback(),
+        Err(_) => true,
+    }
+}
+
+async fn require_admin_auth(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> impl IntoResponse {
+    let config = state.config.read().await;
+    if !config.admin.auth_enabled {
+        return next.run(request).await;
+    }
+    let Some(expected) = config
+        .admin
+        .auth_token
+        .as_deref()
+        .filter(|token| !token.is_empty())
+    else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "Admin auth is enabled but no admin token is configured.",
+        )
+            .into_response();
+    };
+    let header_ok = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == expected);
+    let query_ok = request.uri().query().is_some_and(|query| {
+        query.split('&').any(|part| {
+            let (key, value) = part.split_once('=').unwrap_or((part, ""));
+            key == "admin_token" && value == expected
+        })
+    });
+    if header_ok || query_ok {
+        next.run(request).await
+    } else {
+        (StatusCode::UNAUTHORIZED, "Admin authentication required.").into_response()
+    }
 }
 
 async fn index(State(state): State<AppState>) -> impl IntoResponse {
@@ -298,6 +379,11 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     let available_slots = max_concurrent_jobs.saturating_sub(running_jobs);
     Json(serde_json::json!({
         "ok": true,
+        "admin": {
+            "bind": config.admin.bind,
+            "auth_enabled": config.admin.auth_enabled,
+            "auth_configured": config.admin.auth_token.as_deref().is_some_and(|token| !token.is_empty()),
+        },
             "worker": {
                 "max_concurrent_jobs": max_concurrent_jobs,
                 "running_jobs": running_jobs,

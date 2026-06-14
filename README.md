@@ -94,7 +94,7 @@ If `~/.local/bin` is not already on `PATH`, the bootstrap adds it to
 Start the admin UI with the command printed at the end:
 
 ```bash
-librarian --home "$HOME/Librarian" admin --bind 0.0.0.0:17377
+librarian --home "$HOME/Librarian" admin
 ```
 
 From Windows with WSL2, open:
@@ -102,6 +102,16 @@ From Windows with WSL2, open:
 ```text
 http://127.0.0.1:17377
 ```
+
+For an externally reachable bind, configure an admin token first:
+
+```bash
+export LIBRARIAN_ADMIN_TOKEN="choose-a-long-local-token"
+librarian --home "$HOME/Librarian" admin --bind 0.0.0.0:17377
+```
+
+Then pass `Authorization: Bearer <token>` from clients that call the admin API.
+Librarian blocks external binds without admin auth.
 
 Run the broad local/preflight smoke suite with one command:
 

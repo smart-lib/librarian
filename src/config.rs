@@ -29,6 +29,10 @@ pub struct Config {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AdminConfig {
     pub bind: String,
+    #[serde(default)]
+    pub auth_enabled: bool,
+    #[serde(default)]
+    pub auth_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -279,6 +283,8 @@ impl Config {
             vault_path: default_vault_path(&home),
             admin: AdminConfig {
                 bind: "127.0.0.1:17377".to_string(),
+                auth_enabled: false,
+                auth_token: None,
             },
             docker: DockerConfig {
                 agent_image: "librarian-agent:latest".to_string(),
@@ -322,6 +328,17 @@ impl Config {
             .and_then(|value| value.parse().ok())
         {
             config.worker.max_concurrent_jobs = value;
+        }
+        if let Ok(token) = std::env::var("LIBRARIAN_ADMIN_TOKEN") {
+            let token = token.trim();
+            if !token.is_empty() {
+                config.admin.auth_enabled = true;
+                config.admin.auth_token = Some(token.to_string());
+            }
+        }
+        if let Ok(value) = std::env::var("LIBRARIAN_ADMIN_AUTH") {
+            let value = value.trim().to_ascii_lowercase();
+            config.admin.auth_enabled = matches!(value.as_str(), "1" | "true" | "yes" | "on");
         }
 
         Ok(config)
