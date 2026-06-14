@@ -1234,8 +1234,10 @@ Findings and tasks:
 - Provider runtime behavior now has a first shared metadata layer describing
   CLI command name, profile env var, profile mount, project instruction file,
   and provider-network needs. Docker launch uses this shared spec for Codex and
-  Claude profile mounts; deeper provider-specific diagnostics and UI auth flows
-  remain.
+  Claude profile mounts. Provider settings now group status by provider, keep
+  auth/build as explicit shell commands, and expose UI-triggered MVP smoke
+  preflight through `/api/providers/:provider/smoke`; deeper provider-specific
+  auth embedding remains provider work.
 - Provider cost/budget logic now accounts for pending reservations before
   dispatch. Pricing profile accuracy remains provider-specific work.
 - Gate/redaction logic is heuristic. It can over-capture high-entropy strings

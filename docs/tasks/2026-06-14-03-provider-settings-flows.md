@@ -22,8 +22,16 @@ actions a user needs, grouped by provider.
 
 ## Progress
 
-- [ ] Scope captured.
-- [ ] Implementation completed.
-- [ ] Tests/smokes run.
-- [ ] Roadmap updated.
-- [ ] Committed separately.
+- [x] Scope captured.
+- [x] Implementation completed.
+- [x] Tests run: `cargo test --quiet`.
+- [x] Roadmap updated.
+- [x] Committed separately: `60b00be Add provider smoke actions to admin UI`.
+
+## Result
+
+Provider settings now keep auth/build as explicit shell commands while provider
+Smoke buttons call a real admin endpoint. `POST /api/providers/{provider}/smoke`
+runs the installed Librarian binary in MVP smoke preflight mode for Codex,
+Claude Code, or OpenRouter, and returns command/stdout/stderr/status for the UI.
+The endpoint also supports dry-run command inspection for automated coverage.

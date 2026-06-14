@@ -1911,11 +1911,6 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           if (provider === 'claude-code') return 'claude';
           return '';
         }
-        function providerSmokeKey(provider) {
-          if (provider === 'claude-code') return 'smoke-claude';
-          if (provider === 'openrouter') return 'smoke-openrouter';
-          return 'smoke-codex';
-        }
         function runtimeSummary(providerRuntime) {
           if (!providerRuntime || !Object.keys(providerRuntime).length) {
             return '<div class="muted tiny">No local runtime profile required.</div>';
@@ -1970,7 +1965,6 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const providerRuntime = runtime[provider] || {};
           const diagnostic = diagnostics.get(provider) || {};
           const authKey = providerAuthKey(provider);
-          const smokeKey = providerSmokeKey(provider);
           const providerStates = providerModels.map(model => {
             const current = states.get(`${provider}:${model.model}`) || states.get(`${provider}:`) || {};
             return `<div class="compact-project">
@@ -1984,7 +1978,7 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
               <h3>${htmlEscape(providerLabel(provider))}</h3>
               <div class="row">
                 ${authKey ? `<button type="button" class="secondary" data-provider-command="${authKey}">Auth</button>` : ''}
-                <button type="button" class="secondary" data-provider-command="${smokeKey}">Smoke</button>
+                <button type="button" class="secondary" data-provider-smoke="${htmlEscape(provider)}">Smoke</button>
               </div>
             </div>
             ${runtimeSummary(providerRuntime)}
@@ -1994,14 +1988,11 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
         const providerTools = `<div class="card">
           <h3>Provider Setup</h3>
-          <div class="muted tiny">Auth still opens in the host shell. These commands match the current Librarian root and are copied into chat.</div>
+          <div class="muted tiny">Auth still opens in the host shell. Smoke buttons on provider cards run local MVP preflight without a real agent call.</div>
           <div class="provider-actions">
             <button type="button" class="secondary" data-provider-command="codex">Codex auth command</button>
             <button type="button" class="secondary" data-provider-command="claude">Claude auth command</button>
             <button type="button" class="secondary" data-provider-command="image">Build image</button>
-            <button type="button" class="secondary" data-provider-command="smoke-codex">Codex smoke</button>
-            <button type="button" class="secondary" data-provider-command="smoke-claude">Claude smoke</button>
-            <button type="button" class="secondary" data-provider-command="smoke-openrouter">OpenRouter smoke</button>
           </div>
         </div>`;
         const groups = providerOrder.map(renderProviderGroup).join('');
@@ -2022,6 +2013,30 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           }[key] || 'Command is not available yet.';
           appendMessage('system', command, 'Provider command');
         }));
+        qsa('[data-provider-smoke]').forEach(button => button.addEventListener('click', () => runProviderSmoke(button.dataset.providerSmoke, button)));
+      }
+      async function runProviderSmoke(provider, button) {
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Running...';
+        try {
+          const response = await fetch(`/api/providers/${encodeURIComponent(provider)}/smoke`, { method: 'POST' });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+          const output = [
+            `Provider smoke: ${data.provider}`,
+            `Status: ${data.success ? 'passed' : 'failed'}${data.status === null || data.status === undefined ? '' : ` (${data.status})`}`,
+            '',
+            data.stdout || '',
+            data.stderr ? `stderr:\n${data.stderr}` : ''
+          ].filter(Boolean).join('\n');
+          appendMessage(data.success ? 'system' : 'error', output, 'Provider smoke');
+        } catch (error) {
+          appendMessage('error', `Provider smoke failed: ${error.message || error}`, 'Provider smoke');
+        } finally {
+          button.disabled = false;
+          button.textContent = original;
+        }
       }
       async function saveCodexRuntime(event) {
         event.preventDefault();

@@ -1115,6 +1115,49 @@ async fn claude_runtime_settings_endpoint_persists_instruction_file() {
     std::fs::remove_dir_all(home).ok();
 }
 
+#[tokio::test]
+async fn provider_smoke_endpoint_exposes_dry_run_command() {
+    let home = std::env::current_dir()
+        .expect("current dir")
+        .join(format!(".librarian-test-provider-smoke-{}", Uuid::new_v4()));
+
+    {
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        let state = AppState {
+            db,
+            config: Arc::new(RwLock::new(config)),
+        };
+
+        let response = provider_smoke(
+            State(state),
+            AxumPath("claude-code".to_string()),
+            Query(ProviderSmokeQuery {
+                dry_run: Some(true),
+            }),
+        )
+        .await
+        .expect("smoke response")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(payload["provider"], "claude-code");
+        assert_eq!(payload["dry_run"], true);
+        let command = payload["command"].as_array().expect("command");
+        assert!(command.iter().any(|part| part == "smoke"));
+        assert!(command.iter().any(|part| part == "mvp"));
+        assert!(command.iter().any(|part| part == "claude-code"));
+    }
+
+    std::fs::remove_dir_all(home).ok();
+}
+
 #[test]
 fn normalizes_approval_library_paths_from_user_text() {
     let payload = serde_json::json!({

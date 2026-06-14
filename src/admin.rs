@@ -168,6 +168,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/secrets/audit", get(secret_audit))
         .route("/api/system-events", get(system_events))
         .route("/api/providers", get(providers_status))
+        .route("/api/providers/:provider/smoke", post(provider_smoke))
         .route("/api/providers/pause", post(pause_provider))
         .route("/api/providers/resume", post(resume_provider))
         .route("/api/usage", get(usage_observations))
@@ -974,6 +975,54 @@ async fn providers_status(State(state): State<AppState>) -> Result<impl IntoResp
                 "instruction_file": config.claude.instruction_file,
             },
         },
+    })))
+}
+
+async fn provider_smoke(
+    State(state): State<AppState>,
+    AxumPath(provider): AxumPath<String>,
+    Query(query): Query<ProviderSmokeQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let provider_arg = match provider.trim().to_ascii_lowercase().as_str() {
+        "codex" => "codex",
+        "claude" | "claude-code" => "claude-code",
+        "openrouter" | "open-router" => "open-router",
+        other => return Err(anyhow::anyhow!("Unknown provider `{other}`").into()),
+    };
+    let config = state.config.read().await.clone();
+    let exe = std::env::current_exe().context("Failed to resolve current Librarian executable")?;
+    let command = vec![
+        admin_shell_path(&exe),
+        "--home".to_string(),
+        admin_shell_path(&config.home),
+        "smoke".to_string(),
+        "mvp".to_string(),
+        "--provider".to_string(),
+        provider_arg.to_string(),
+    ];
+    if query.dry_run.unwrap_or(false) {
+        return Ok(Json(serde_json::json!({
+            "provider": provider_arg,
+            "dry_run": true,
+            "command": command,
+        })));
+    }
+    let output = TokioCommand::new(&exe)
+        .arg("--home")
+        .arg(&config.home)
+        .arg("smoke")
+        .arg("mvp")
+        .arg("--provider")
+        .arg(provider_arg)
+        .output()
+        .await?;
+    Ok(Json(serde_json::json!({
+        "provider": provider_arg,
+        "command": command,
+        "success": output.status.success(),
+        "status": output.status.code(),
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
     })))
 }
 

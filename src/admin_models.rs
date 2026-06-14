@@ -209,3 +209,8 @@ pub struct ProviderControlRequest {
     pub seconds: Option<i64>,
     pub reason: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ProviderSmokeQuery {
+    pub dry_run: Option<bool>,
+}
