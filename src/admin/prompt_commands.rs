@@ -536,20 +536,20 @@ struct PromptBlockPreset {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct PromptPresetDocument {
-    schema: String,
-    target: Option<String>,
-    blocks: Vec<PromptPresetBlock>,
+pub(super) struct PromptPresetDocument {
+    pub(super) schema: String,
+    pub(super) target: Option<String>,
+    pub(super) blocks: Vec<PromptPresetBlock>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct PromptPresetBlock {
-    target: String,
-    name: String,
-    content: String,
-    enabled: bool,
-    position: i64,
-    markdown: bool,
+pub(super) struct PromptPresetBlock {
+    pub(super) target: String,
+    pub(super) name: String,
+    pub(super) content: String,
+    pub(super) enabled: bool,
+    pub(super) position: i64,
+    pub(super) markdown: bool,
 }
 
 fn default_prompt_block_presets() -> Vec<PromptBlockPreset> {
@@ -592,7 +592,7 @@ fn default_prompt_block_presets() -> Vec<PromptBlockPreset> {
     ]
 }
 
-fn prompt_preset_document(
+pub(super) fn prompt_preset_document(
     target: Option<&str>,
     blocks: &[crate::domain::PromptBlock],
 ) -> PromptPresetDocument {
@@ -613,7 +613,7 @@ fn prompt_preset_document(
     }
 }
 
-async fn import_prompt_preset_document(
+pub(super) async fn import_prompt_preset_document(
     db: &Database,
     document: &PromptPresetDocument,
 ) -> Result<Vec<crate::domain::PromptBlock>> {

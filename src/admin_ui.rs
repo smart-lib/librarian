@@ -2139,6 +2139,17 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const blocks = state.promptBlocks;
         const targets = Array.from(new Set(['librarian', 'agents', 'AGENTS.md', 'CLAUDE.md', ...blocks.map(block => block.target)])).sort();
         const targetOptions = targets.map(target => `<option value="${htmlEscape(target)}">${htmlEscape(target)}</option>`).join('');
+        const profiles = `<section class="card stack">
+          <h3>Prompt Profiles</h3>
+          <div class="form-grid">
+            <div><label for="prompt-active-target">Profile</label><select id="prompt-active-target">${targetOptions}</select></div>
+            <button type="button" data-render-active-prompt>Preview</button>
+            <button type="button" class="secondary" data-export-json-prompt>Export JSON</button>
+            <button type="button" class="secondary" data-export-active-prompt>Export to Library</button>
+            <div class="wide"><label for="prompt-import-json">Import preset JSON</label><textarea id="prompt-import-json" rows="5" placeholder='{"schema":"librarian.prompt-presets.v1","blocks":[]}'></textarea></div>
+            <button type="button" data-import-json-prompt>Import JSON</button>
+          </div>
+        </section>`;
         const form = `<form id="prompt-block-form" class="card stack">
           <h3>Add block</h3>
           <div class="form-grid">
@@ -2174,8 +2185,14 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             </div>
           </div>`).join('')}
         </section>`).join('') : '<div class="card muted">No prompt blocks yet.</div>';
-        el('prompt-builder').innerHTML = `${form}<div id="prompt-preview" class="card muted">Choose preview target from any block.</div>${list}`;
+        el('prompt-builder').innerHTML = `${profiles}${form}<div id="prompt-preview" class="card muted">Choose a profile preview.</div><div id="prompt-json" class="card muted" hidden></div>${list}`;
         el('prompt-block-form').addEventListener('submit', createPromptBlockFromUi);
+        el('prompt-active-target').addEventListener('change', event => renderPromptPreview(event.target.value));
+        el('prompt-active-target').value = targets.includes('librarian') ? 'librarian' : targets[0] || 'librarian';
+        qsa('[data-render-active-prompt]').forEach(button => button.addEventListener('click', () => renderPromptPreview(el('prompt-active-target').value)));
+        qsa('[data-export-json-prompt]').forEach(button => button.addEventListener('click', () => exportPromptJson(el('prompt-active-target').value)));
+        qsa('[data-import-json-prompt]').forEach(button => button.addEventListener('click', importPromptJson));
+        qsa('[data-export-active-prompt]').forEach(button => button.addEventListener('click', () => proposePromptExport(el('prompt-active-target').value)));
         qsa('[data-toggle-prompt]').forEach(button => button.addEventListener('click', async () => {
           await fetch(`/api/prompt-blocks/${button.dataset.togglePrompt}/${button.dataset.enabled === 'true' ? 'enable' : 'disable'}`, { method: 'POST' });
           await refresh();
@@ -2197,7 +2214,48 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       }
       async function renderPromptPreview(target) {
         const data = await loadJson(`/api/prompt-blocks/render?target=${encodeURIComponent(target)}`, null);
-        el('prompt-preview').innerHTML = data ? `<h3>${htmlEscape(target)}</h3><pre>${htmlEscape(data.rendered || '')}</pre>` : 'Could not render prompt.';
+        const activeBlocks = state.promptBlocks
+          .filter(block => block.target === target && block.enabled)
+          .sort((a, b) => a.position - b.position);
+        const disabled = state.promptBlocks.filter(block => block.target === target && !block.enabled).length;
+        el('prompt-preview').innerHTML = data ? `
+          <h3>${htmlEscape(target)} <span class="muted tiny">${activeBlocks.length} active · ${disabled} disabled</span></h3>
+          <div class="muted tiny">Render order: ${activeBlocks.map(block => htmlEscape(block.name)).join(' -> ') || 'empty'}</div>
+          <pre>${htmlEscape(data.rendered || '')}</pre>
+        ` : 'Could not render prompt.';
+      }
+      async function exportPromptJson(target) {
+        const data = await loadJson(`/api/prompt-blocks/presets?target=${encodeURIComponent(target)}`, null);
+        const box = el('prompt-json');
+        box.hidden = false;
+        box.className = 'card';
+        box.innerHTML = data ? `<h3>Portable JSON: ${htmlEscape(target)}</h3><pre>${htmlEscape(JSON.stringify(data, null, 2))}</pre>` : 'Could not export prompt presets.';
+      }
+      async function importPromptJson() {
+        const raw = el('prompt-import-json').value.trim();
+        if (!raw) {
+          appendMessage('system', 'Paste prompt preset JSON before importing.', 'Prompt builder');
+          return;
+        }
+        let document;
+        try {
+          document = JSON.parse(raw);
+        } catch (error) {
+          appendMessage('error', `Prompt JSON is invalid: ${error.message || error}`, 'Prompt builder');
+          return;
+        }
+        const response = await fetch('/api/prompt-blocks/import-presets', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ document })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          appendMessage('error', data.error || `Prompt import failed: ${response.status}`, 'Prompt builder');
+          return;
+        }
+        appendMessage('system', `Imported ${Array.isArray(data.imported) ? data.imported.length : 0} prompt block(s).`, 'Prompt builder');
+        await refresh();
       }
       async function savePromptBlock(id) {
         await updatePromptBlock(id, {

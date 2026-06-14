@@ -1360,6 +1360,61 @@ fn parses_prompt_add_block_args() {
     assert!(!request.markdown);
 }
 
+#[tokio::test]
+async fn prompt_preset_api_exports_and_imports_portable_json() {
+    let home = std::env::current_dir()
+        .expect("current dir")
+        .join(format!(".librarian-test-prompt-api-{}", Uuid::new_v4()));
+
+    {
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        db.create_prompt_block("librarian", "Identity", "You are Librarian", true)
+            .await
+            .expect("block");
+        let state = AppState {
+            db: db.clone(),
+            config: Arc::new(RwLock::new(config)),
+        };
+
+        let exported = export_prompt_presets(
+            State(state.clone()),
+            Query(PromptBlocksQuery {
+                target: Some("librarian".to_string()),
+            }),
+        )
+        .await
+        .expect("export")
+        .into_response();
+        assert_eq!(exported.status(), StatusCode::OK);
+        let body = body::to_bytes(exported.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let mut document: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(document["schema"], "librarian.prompt-presets.v1");
+        document["blocks"][0]["content"] = serde_json::json!("Updated identity");
+
+        let imported = import_prompt_presets(
+            State(state.clone()),
+            Json(ImportPromptPresetsRequest { document }),
+        )
+        .await
+        .expect("import")
+        .into_response();
+        assert_eq!(imported.status(), StatusCode::OK);
+        let blocks = db
+            .list_prompt_blocks(Some("librarian"))
+            .await
+            .expect("blocks");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].content, "Updated identity");
+    }
+
+    std::fs::remove_dir_all(home).ok();
+}
+
 #[test]
 fn renders_enabled_prompt_blocks_only() {
     let now = chrono::Utc::now();

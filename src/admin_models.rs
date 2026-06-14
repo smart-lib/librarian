@@ -91,6 +91,11 @@ pub struct ExportPromptRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ImportPromptPresetsRequest {
+    pub document: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct JobGitActionProposalRequest {
     pub action: String,
     pub message: Option<String>,

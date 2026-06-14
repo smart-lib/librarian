@@ -1171,9 +1171,14 @@ Tasks:
 - Add import/export for prompt-builder presets so a working Librarian identity
   can be shared across installs. First slash-command pass exports portable JSON
   without database ids and imports idempotently by `target + name`, with an
-  explicit `--yes` gate and smoke coverage.
+  explicit `--yes` gate and smoke coverage. Admin UI/API now use the same
+  portable `librarian.prompt-presets.v1` format for profile-level export/import,
+  compiled preview, and approval-gated Markdown export into the Library.
 - Add diff/review UI for prompt changes before applying them to the active
-  chat or agent profile.
+  chat or agent profile. First finished UI pass shows active/disabled blocks,
+  render order, compiled output, JSON import/export, and Library export
+  approval flow; richer side-by-side visual diff remains polish, not a blocker
+  for assembling prompt profiles.
 
 Dependencies:
 

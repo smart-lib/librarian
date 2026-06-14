@@ -23,8 +23,16 @@ profiles, not a partial list of blocks.
 
 ## Progress
 
-- [ ] Scope captured.
-- [ ] Implementation completed.
-- [ ] Tests/smokes run.
-- [ ] Roadmap updated.
-- [ ] Committed separately.
+- [x] Scope captured.
+- [x] Implementation completed.
+- [x] Tests run: `cargo test --quiet`.
+- [x] Roadmap updated.
+- [x] Committed separately: `8966a78 Complete prompt builder profile UI`.
+
+## Result
+
+Prompt Builder settings now expose profile-level controls for chat, agent, and
+provider instruction targets. The UI can preview compiled output, export
+portable preset JSON, import preset JSON, and create approval-gated Markdown
+exports into the Library. Backend API coverage verifies export/import upsert
+behavior using the same `librarian.prompt-presets.v1` format as slash commands.

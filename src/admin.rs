@@ -134,9 +134,14 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
             get(prompt_blocks).post(create_prompt_block),
         )
         .route("/api/prompt-blocks/render", get(render_prompt_target))
+        .route("/api/prompt-blocks/presets", get(export_prompt_presets))
         .route(
             "/api/prompt-blocks/export-proposal",
             post(propose_prompt_export),
+        )
+        .route(
+            "/api/prompt-blocks/import-presets",
+            post(import_prompt_presets),
         )
         .route(
             "/api/prompt-blocks/:id",
@@ -711,6 +716,46 @@ async fn propose_prompt_export(
         )
         .await?;
     Ok(Json(approval))
+}
+
+async fn export_prompt_presets(
+    State(state): State<AppState>,
+    Query(query): Query<PromptBlocksQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let blocks = state.db.list_prompt_blocks(query.target.as_deref()).await?;
+    Ok(Json(prompt_preset_document(
+        query.target.as_deref(),
+        &blocks,
+    )))
+}
+
+async fn import_prompt_presets(
+    State(state): State<AppState>,
+    Json(input): Json<ImportPromptPresetsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let config = state.config.read().await.clone();
+    ensure_tool_permission(
+        &state.db,
+        &config,
+        "settings.change",
+        config.tool_permissions.settings_change,
+    )
+    .await?;
+    let document: PromptPresetDocument = serde_json::from_value(input.document)?;
+    let imported = import_prompt_preset_document(&state.db, &document).await?;
+    state
+        .db
+        .add_system_event(
+            "prompt_tool",
+            serde_json::json!({
+                "action": "import_presets",
+                "source": "admin-api",
+                "count": imported.len(),
+                "target": document.target,
+            }),
+        )
+        .await?;
+    Ok(Json(serde_json::json!({ "imported": imported })))
 }
 
 async fn enable_prompt_block(
@@ -3932,7 +3977,8 @@ use approvals::{
 #[path = "admin/prompt_commands.rs"]
 mod prompt_commands;
 use prompt_commands::{
-    execute_prompt_slash_command, parse_prompt_add_block_args, render_prompt_blocks,
+    execute_prompt_slash_command, import_prompt_preset_document, parse_prompt_add_block_args,
+    prompt_preset_document, render_prompt_blocks, PromptPresetDocument,
 };
 
 async fn execute_memory_slash_command(
