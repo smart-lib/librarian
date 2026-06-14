@@ -3968,17 +3968,22 @@ fn project_slash_help() -> &'static str {
 
 #[path = "admin/approvals.rs"]
 mod approvals;
+#[cfg(test)]
 use approvals::{
-    approval_payload_string, approval_project_library_path, approve_and_execute_tool_approval,
-    execute_approval_slash_command, execute_approved_tool_approval, parse_json_payload,
-    reject_tool_approval_by_id,
+    approval_payload_string, approval_project_library_path, execute_approved_tool_approval,
+    parse_json_payload,
+};
+use approvals::{
+    approve_and_execute_tool_approval, execute_approval_slash_command, reject_tool_approval_by_id,
 };
 
 #[path = "admin/prompt_commands.rs"]
 mod prompt_commands;
+#[cfg(test)]
+use prompt_commands::parse_prompt_add_block_args;
 use prompt_commands::{
-    execute_prompt_slash_command, import_prompt_preset_document, parse_prompt_add_block_args,
-    prompt_preset_document, render_prompt_blocks, PromptPresetDocument,
+    execute_prompt_slash_command, import_prompt_preset_document, prompt_preset_document,
+    render_prompt_blocks, PromptPresetDocument,
 };
 
 async fn execute_memory_slash_command(
