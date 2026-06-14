@@ -1970,6 +1970,8 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
             return `<div class="compact-project">
               <strong>${htmlEscape(model.model || 'default')}</strong>
               <div class="muted tiny">${(model.task_hints || []).map(hint => htmlEscape(hint)).join(' - ') || 'general'}</div>
+              <div class="muted tiny">Pricing: ${htmlEscape(model.pricing_kind || 'unknown')} · ${htmlEscape(model.pricing_source || '-')}</div>
+              ${model.pricing_note ? `<details><summary>Pricing note</summary><pre>${htmlEscape(model.pricing_note)}</pre></details>` : ''}
               ${diagnosticSummary(diagnostic, current)}
             </div>`;
           }).join('') || '<div class="muted tiny">No model catalog entry yet.</div>';

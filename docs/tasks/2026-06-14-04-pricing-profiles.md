@@ -23,8 +23,17 @@ instead of vague defaults.
 
 ## Progress
 
-- [ ] Scope captured.
-- [ ] Implementation completed.
-- [ ] Tests run.
-- [ ] Roadmap updated.
-- [ ] Committed separately.
+- [x] Scope captured.
+- [x] Implementation completed.
+- [x] Tests run: `cargo test --quiet`.
+- [x] Roadmap updated.
+- [x] Committed separately: `67d5f9f Expose provider pricing profiles`.
+
+## Result
+
+Model metadata now exposes explicit pricing profiles with `pricing_kind`,
+`pricing_source`, and `pricing_note`. CLI-backed defaults for Codex and Claude
+Code are marked `observed_only`; OpenRouter default is marked `model_required`
+until a concrete OpenRouter model is configured. Budget reservation estimates no
+longer report a generic unknown reason when the real state is observed-only or
+model-specific.

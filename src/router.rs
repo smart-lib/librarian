@@ -14,6 +14,9 @@ pub struct ModelMetadata {
     pub model: String,
     pub input_cost_per_million: Option<f64>,
     pub output_cost_per_million: Option<f64>,
+    pub pricing_kind: String,
+    pub pricing_source: String,
+    pub pricing_note: String,
     pub task_hints: Vec<String>,
 }
 
@@ -70,6 +73,11 @@ pub fn model_catalog() -> Vec<ModelMetadata> {
             model: "codex-cli-default".to_string(),
             input_cost_per_million: None,
             output_cost_per_million: None,
+            pricing_kind: "observed_only".to_string(),
+            pricing_source: "codex-cli-session".to_string(),
+            pricing_note:
+                "Codex CLI pricing depends on the signed-in account and selected model; Librarian records observed usage when the provider exposes it and does not reserve estimated spend from this default profile."
+                    .to_string(),
             task_hints: vec!["coding".to_string(), "repo-edit".to_string()],
         },
         ModelMetadata {
@@ -77,6 +85,11 @@ pub fn model_catalog() -> Vec<ModelMetadata> {
             model: "openrouter-default".to_string(),
             input_cost_per_million: None,
             output_cost_per_million: None,
+            pricing_kind: "model_required".to_string(),
+            pricing_source: "openrouter-model-catalog".to_string(),
+            pricing_note:
+                "OpenRouter prices are model-specific. Configure a concrete model before Librarian can reserve estimated spend; observed API costs are still tracked."
+                    .to_string(),
             task_hints: vec!["api".to_string(), "fallback".to_string()],
         },
         ModelMetadata {
@@ -84,6 +97,11 @@ pub fn model_catalog() -> Vec<ModelMetadata> {
             model: "claude-code-default".to_string(),
             input_cost_per_million: None,
             output_cost_per_million: None,
+            pricing_kind: "observed_only".to_string(),
+            pricing_source: "claude-code-session".to_string(),
+            pricing_note:
+                "Claude Code cost depends on the authenticated CLI account and selected model. Librarian treats this default as observed-only until provider telemetry supplies exact usage."
+                    .to_string(),
             task_hints: vec!["coding".to_string(), "cli".to_string()],
         },
     ]
@@ -190,8 +208,13 @@ pub fn estimate_budget_reservation(job: &Job, prompt_chars: usize) -> BudgetRese
         .into_iter()
         .find(|item| item.provider == provider && Some(item.model.as_str()) == model);
     let estimated_cost_usd = metadata
+        .as_ref()
         .and_then(|item| item.input_cost_per_million)
         .map(|cost_per_million| (estimated_input_tokens as f64 / 1_000_000.0) * cost_per_million);
+    let pricing_kind = metadata
+        .as_ref()
+        .map(|item| item.pricing_kind.as_str())
+        .unwrap_or("unknown");
     BudgetReservationEstimate {
         provider: provider.to_string(),
         model: model.map(ToOwned::to_owned),
@@ -201,8 +224,10 @@ pub fn estimate_budget_reservation(job: &Job, prompt_chars: usize) -> BudgetRese
         reserved: false,
         reason: if estimated_cost_usd.is_some() {
             "reservation_not_created"
+        } else if pricing_kind == "model_required" {
+            "model_pricing_requires_concrete_model"
         } else {
-            "model_pricing_unknown"
+            "pricing_observed_only"
         },
     }
 }
@@ -218,7 +243,9 @@ pub async fn reserve_budget_if_possible(
         return Ok(estimate);
     }
     let Some(cost) = estimate.estimated_cost_usd else {
-        estimate.reason = "model_pricing_unknown";
+        if estimate.reason == "reservation_not_created" {
+            estimate.reason = "pricing_observed_only";
+        }
         return Ok(estimate);
     };
     db.create_budget_reservation(job, &estimate.provider, estimate.model.as_deref(), cost)
@@ -835,7 +862,21 @@ mod tests {
         assert_eq!(estimate.estimated_input_tokens, 5);
         assert_eq!(estimate.estimated_cost_usd, None);
         assert!(!estimate.reserved);
-        assert_eq!(estimate.reason, "model_pricing_unknown");
+        assert_eq!(estimate.reason, "pricing_observed_only");
+    }
+
+    #[test]
+    fn openrouter_default_requires_concrete_model_for_pricing() {
+        let estimate = estimate_budget_reservation(&openrouter_job(), 17);
+        assert_eq!(estimate.estimated_cost_usd, None);
+        assert_eq!(estimate.reason, "model_pricing_requires_concrete_model");
+        let catalog = model_catalog();
+        let openrouter = catalog
+            .iter()
+            .find(|model| model.provider == "openrouter")
+            .expect("openrouter profile");
+        assert_eq!(openrouter.pricing_kind, "model_required");
+        assert!(openrouter.pricing_note.contains("model-specific"));
     }
 
     async fn test_config_and_db(name: &str) -> (Config, Database, PathBuf) {

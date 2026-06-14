@@ -1239,7 +1239,10 @@ Findings and tasks:
   preflight through `/api/providers/:provider/smoke`; deeper provider-specific
   auth embedding remains provider work.
 - Provider cost/budget logic now accounts for pending reservations before
-  dispatch. Pricing profile accuracy remains provider-specific work.
+  dispatch. Model metadata exposes explicit pricing profiles:
+  `observed_only` for CLI-backed Codex/Claude defaults and `model_required` for
+  OpenRouter's default until a concrete model is configured. Budget estimates
+  surface those reasons instead of inventing false token prices.
 - Gate/redaction logic is heuristic. It can over-capture high-entropy strings
   and needs review/undo UX plus stronger tests.
 - Tool permissions now exist as a first-pass policy/audit layer. Remaining debt:
