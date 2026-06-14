@@ -1188,16 +1188,15 @@ product architecture.
 
 Findings and tasks:
 
-- `src/admin.rs` is too large and mixes active UI, legacy UI, API handlers, and
-  helper logic. Split into modules: routes/API, active chat UI, settings UI,
-  project map UI, and legacy removal. First small split moves request/query
-  DTOs into `src/admin_models.rs`; route handlers and HTML still need further
-  extraction. Second small split moves slash argument tokenization into
-  `src/slash_utils.rs`. Third small split moves durable-memory visibility and
-  ranking policy helpers into `src/memory_policy.rs`.
-- `src/admin.rs` still contains old inactive HTML functions behind
-  `#[allow(dead_code)]`. Delete or move them into archived design notes once
-  the new chat-first UI has covered the needed controls.
+- Admin module boundaries are now explicit enough for current MVP work instead
+  of being an open-ended "split `admin.rs` again" task. Completed extractions:
+  request/query DTOs in `src/admin_models.rs`, active shell HTML/JS in
+  `src/admin_ui.rs`, slash tokenization in `src/slash_utils.rs`, durable-memory
+  visibility/ranking helpers in `src/memory_policy.rs`, chat loop/provider
+  prompting in `src/chat.rs`, plus admin child modules for tests, smoke helpers,
+  approval execution, and prompt command/preset handling under `src/admin/`.
+  Remaining server code should be extracted only when tied to a concrete feature
+  boundary such as admin auth, provider settings, or prompt-builder UI.
 - `/api/chat` now has a first Codex-backed path, but it is still embedded in
   `src/admin.rs`; move chat prompting/provider execution into dedicated modules.
   First split done: iterative chat loop, Codex chat runner, prompt assembly,
@@ -1209,9 +1208,9 @@ Findings and tasks:
 - The previous hardcoded `looks_like_agent_request` intent detector had mojibake
   Russian literals and was removed. Do not reintroduce multilingual intent
   heuristics; use slash commands and the tool/permission intent layer.
-- Chat now has first-pass `chat_sessions`/`chat_turns`, but transcript work
-  still needs UI session switching, pruning/export policy, and a cleaner module
-  boundary outside `src/admin.rs`.
+- Chat now has first-pass `chat_sessions`/`chat_turns`, UI session switching,
+  and context labels. Remaining transcript work is pruning/export policy and
+  richer per-message diagnostics.
 - Memory retrieval lacks filters for source/mode, so placeholder assistant
   output and low-value operational messages can pollute context. First filter
   pass now excludes memory marked `durability=transcript` or
@@ -1232,8 +1231,8 @@ Findings and tasks:
   and provider-network needs. Docker launch uses this shared spec for Codex and
   Claude profile mounts; deeper provider-specific diagnostics and UI auth flows
   remain.
-- Provider cost/budget logic uses observed spend only; no estimated reservation
-  exists before dispatch.
+- Provider cost/budget logic now accounts for pending reservations before
+  dispatch. Pricing profile accuracy remains provider-specific work.
 - Gate/redaction logic is heuristic. It can over-capture high-entropy strings
   and needs review/undo UX plus stronger tests.
 - Tool permissions now exist as a first-pass policy/audit layer. Remaining debt:
