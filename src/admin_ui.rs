@@ -300,12 +300,23 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     }
     #settings-open { grid-column: 1; justify-self: start; }
     #projects-open { grid-column: 3; justify-self: end; }
-    #new-chat {
-      grid-column: 3;
-      justify-self: end;
-      margin-right: 58px;
-      font-size: 22px;
-      font-weight: 700;
+    .drawer-action {
+      width: 100%;
+      min-height: 32px;
+      margin-bottom: 4px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: rgba(8, 12, 24, .55);
+      color: var(--chrome);
+      font-size: 12px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      transition: border-color .15s, color .15s, background .15s;
+    }
+    .drawer-action:hover {
+      border-color: var(--line-strong);
+      background: rgba(28, 38, 60, .7);
+      color: var(--chrome-hover);
     }
     .icon-button:hover, .icon-button:focus-visible {
       color: var(--chrome-hover);
@@ -691,14 +702,14 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       background: var(--chrome-hover);
       transform: scale(1.04);
     }
-    .send-button::before {
-      content: "";
-      width: 0;
-      height: 0;
-      border-top: 8px solid transparent;
-      border-bottom: 8px solid transparent;
-      border-left: 13px solid currentColor;
-      transform: translateX(1px);
+    .send-button svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     .slash-palette {
       position: absolute;
@@ -934,6 +945,18 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       align-items: end;
     }
     .form-grid .wide { grid-column: span 2; }
+    #chat-settings-form .form-grid {
+      grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    }
+    #tool-permissions-form { grid-column: 1 / -1; }
+    .perm-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+    .perm-grid label { overflow-wrap: anywhere; }
+    .perm-save { justify-self: start; }
     .prompt-block {
       border-top: 1px solid var(--line);
       padding-top: 12px;
@@ -1132,6 +1155,7 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           <div class="d-context" id="context-line">GLOBAL CONVERSATION</div>
           <div class="drawer-extra">
             <div class="d-slogan-inner" id="motto-line">Smart. Silent. Steady.</div>
+            <button id="new-chat" class="drawer-action" type="button" aria-label="New chat">+ New chat</button>
             <div class="d-row"><div class="d-row-label">PATH</div><div class="d-row-value" id="drawer-path">Global conversation</div></div>
             <div class="d-row"><div class="d-row-label">SESSION</div><div class="d-row-value" id="drawer-session">new chat</div></div>
             <div class="d-row"><div class="d-row-label">MEMORY</div><div class="d-row-value" id="drawer-memory">loading</div></div>
@@ -1140,7 +1164,6 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           </div>
         </div>
       </div>
-      <button id="new-chat" class="corner-btn" data-tip="New chat" type="button" aria-label="New chat">+</button>
       <button id="projects-open" class="corner-btn" data-tip="Library" type="button" aria-label="Library">
         <svg viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/>
@@ -1169,7 +1192,9 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           <button class="composer-tool" type="button" id="composer-library">Library</button>
         </div>
         <textarea id="goal-input" name="goal" placeholder="Message Librarian" autocomplete="off" required></textarea>
-        <button class="send-button" type="submit" aria-label="Send message" title="Send"></button>
+        <button class="send-button" type="submit" aria-label="Send message" title="Send">
+          <svg viewBox="0 0 24 24"><path d="M22 2 L11 13"/><path d="M22 2 L15 22 L11 13 L2 9 Z"/></svg>
+        </button>
       </div>
     </form>
   </div>
@@ -1810,13 +1835,13 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         ];
         return `<form id="tool-permissions-form" class="card stack">
           <h3>Tool Permissions</h3>
-          <div class="form-grid">
+          <div class="perm-grid">
             <div><label for="permission-preset">Preset</label><select id="permission-preset">
               ${['balanced', 'autopilot', 'confirm', 'locked_down', 'custom'].map(option => `<option value="${option}" ${option === (permissions.preset || 'balanced') ? 'selected' : ''}>${option}</option>`).join('')}
             </select></div>
             ${keys.map(key => `<div><label for="perm-${key}">${key}</label>${policySelect(key, permissions[key] || 'ask')}</div>`).join('')}
-            <button type="submit">Save</button>
           </div>
+          <button class="perm-save" type="submit">Save</button>
         </form>`;
       }
       async function saveToolPermissions(event) {
@@ -3191,7 +3216,9 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         input.setSelectionRange(input.value.length, input.value.length);
         updateSlashPalette();
       });
-      el('new-chat').addEventListener('click', () => {
+      el('new-chat').addEventListener('click', event => {
+        event.stopPropagation();
+        el('drawer').classList.remove('open');
         state.chatSessionId = null;
         el('thread').innerHTML = '';
         appendMessage('assistant', 'New chat started.', assistantName());
