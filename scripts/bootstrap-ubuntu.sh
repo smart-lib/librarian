@@ -9,7 +9,7 @@ run_doctor=1
 agent_image_ready=0
 librarian_home="${LIBRARIAN_HOME:-$HOME/Librarian}"
 install_bin=""
-bind="${LIBRARIAN_ADMIN_BIND:-0.0.0.0:17377}"
+bind="${LIBRARIAN_ADMIN_BIND:-127.0.0.1:17377}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -220,9 +220,7 @@ fi
 "$bin" --home "$librarian_home" setup --yes --runtime host --skip-doctor
 "$bin" --home "$librarian_home" config show >/dev/null
 
-if [[ "$bind" != "127.0.0.1:17377" ]]; then
-  "$bin" --home "$librarian_home" config show >/dev/null
-  python3 - "$librarian_home/.cfg/config.toml" "$bind" <<'PY'
+python3 - "$librarian_home/.cfg/config.toml" "$bind" <<'PY'
 from pathlib import Path
 import sys
 
@@ -239,7 +237,6 @@ else:
     lines.append(f'bind = "{bind}"')
 path.write_text("\n".join(lines) + "\n")
 PY
-fi
 
 if [[ "$build_agent_image" -eq 1 ]]; then
   if docker info >/dev/null 2>&1; then

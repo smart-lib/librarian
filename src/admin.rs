@@ -229,7 +229,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
     Ok(())
 }
 
-fn validate_admin_auth_for_bind(bind: &str, config: &Config) -> Result<()> {
+pub(crate) fn validate_admin_auth_for_bind(bind: &str, config: &Config) -> Result<()> {
     if !is_external_admin_bind(bind) {
         return Ok(());
     }
@@ -247,7 +247,7 @@ fn validate_admin_auth_for_bind(bind: &str, config: &Config) -> Result<()> {
     )
 }
 
-fn is_external_admin_bind(bind: &str) -> bool {
+pub(crate) fn is_external_admin_bind(bind: &str) -> bool {
     let host = bind
         .rsplit_once(':')
         .map(|(host, _)| host.trim_matches(['[', ']']))

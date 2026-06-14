@@ -3705,6 +3705,7 @@ async fn run_doctor(config: &Config) -> Result<()> {
                 config.budget.daily_project_usd
             ),
         ),
+        admin_bind_check(config),
     ];
 
     let mut provider_states = Vec::new();
@@ -3806,6 +3807,29 @@ fn launch_context_registration_check(config: &Config, projects: &[Project]) -> D
             "Run Librarian from the directory you want to use as context, or pass an explicit project path.",
         ),
     }
+}
+
+fn admin_bind_check(config: &Config) -> DoctorCheck {
+    if !admin::is_external_admin_bind(&config.admin.bind) {
+        return DoctorCheck::ok("admin bind", config.admin.bind.clone());
+    }
+    if config.admin.auth_enabled
+        && config
+            .admin
+            .auth_token
+            .as_deref()
+            .is_some_and(|token| !token.is_empty())
+    {
+        return DoctorCheck::ok(
+            "admin bind",
+            format!("{} with auth enabled", config.admin.bind),
+        );
+    }
+    DoctorCheck::warn(
+        "admin bind",
+        format!("{} is externally reachable without auth", config.admin.bind),
+        "Use `librarian admin --bind 127.0.0.1:17377`, or configure `[admin].auth_enabled = true` with an auth token before external binds.",
+    )
 }
 
 fn launch_context_registration_check_for(
@@ -4288,6 +4312,29 @@ mod tests {
 
         assert_eq!(candidate, root.join("Projects").join("LibrarianSource"));
         assert!(occupied.join("README.md").exists());
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn doctor_warns_for_external_admin_bind_without_auth() {
+        let root = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-admin-bind-{}", Uuid::new_v4()));
+        let mut config = Config::load_or_default(Some(root.clone())).expect("config");
+        config.admin.bind = "0.0.0.0:17377".to_string();
+        config.admin.auth_enabled = false;
+        config.admin.auth_token = None;
+
+        let check = admin_bind_check(&config);
+
+        assert_eq!(check.label, "admin bind");
+        assert_eq!(check.severity, DoctorSeverity::Warn);
+        assert!(check
+            .next_step
+            .as_deref()
+            .expect("next step")
+            .contains("127.0.0.1:17377"));
 
         std::fs::remove_dir_all(root).ok();
     }

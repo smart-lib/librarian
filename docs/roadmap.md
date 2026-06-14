@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.20`; bump at least the minor version when a visible
+- Current crate version: `0.2.21`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -200,6 +200,9 @@ next.
 - Doctor output now highlights the overall status, distinguishes state root
   from launch context, and prints a single next important step plus remaining
   blockers.
+- Ubuntu bootstrap/upgrade now defaults the admin UI back to localhost and
+  rewrites the configured bind on upgrade, repairing old installs that kept
+  `0.0.0.0:17377` without admin auth.
 - Admin UI shell now treats chat as the primary screen, keeps browser-level
   scrolling locked to the viewport, moves operational settings into a
   full-screen tabbed overlay, and adds the first visual project-map surface.
