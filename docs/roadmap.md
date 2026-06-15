@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.32`; bump at least the minor version when a visible
+- Current crate version: `0.2.33`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -900,9 +900,11 @@ Tasks:
 - Stop/restart the autonomous service during Ubuntu upgrades when it was active
   before the binary replacement. First bootstrap pass does this for the
   `librarian.service` user unit. Follow-up pass regenerates the user unit during
-  upgrade/start/restart, adds `SupplementaryGroups=docker` when the current user
-  is in the docker group, and probes Docker from the user-service context so
-  doctor can catch shell-vs-service group mismatches.
+  upgrade/start/restart and probes Docker from the user-service context so
+  doctor can catch shell-vs-service group mismatches. User units intentionally
+  do not set `SupplementaryGroups=docker`; that caused startup instability in
+  WSL user systemd. Service start/restart now verifies that the daemon remains
+  active and points to `journalctl --user` when it exits immediately.
 - Add admin UI controls/readouts for worker service status, queue depth, active
   jobs, and the next action needed to make queued jobs run.
 - Keep manual commands (`worker --once`, `worker`, `scheduler --once`,

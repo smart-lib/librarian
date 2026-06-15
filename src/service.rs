@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
     time::Duration,
 };
 
@@ -37,16 +36,7 @@ pub fn unit_path() -> Result<PathBuf> {
         .join(SERVICE_NAME))
 }
 
-pub fn render_systemd_user_unit(
-    binary: &Path,
-    home: &Path,
-    supplementary_groups: &[String],
-) -> String {
-    let supplementary_groups = if supplementary_groups.is_empty() {
-        String::new()
-    } else {
-        format!("SupplementaryGroups={}\n", supplementary_groups.join(" "))
-    };
+pub fn render_systemd_user_unit(binary: &Path, home: &Path) -> String {
     format!(
         r#"[Unit]
 Description=Librarian autonomous daemon
@@ -54,7 +44,7 @@ After=default.target
 
 [Service]
 Type=simple
-{}ExecStart={} --home {} daemon
+ExecStart={} --home {} daemon
 WorkingDirectory={}
 Restart=on-failure
 RestartSec=5
@@ -63,7 +53,6 @@ Environment=RUST_LOG=librarian=info,tower_http=info
 [Install]
 WantedBy=default.target
 "#,
-        supplementary_groups,
         systemd_quote(binary),
         systemd_quote(home),
         systemd_quote(home),
@@ -77,16 +66,14 @@ pub async fn install(config: &Config, enable: bool, start: bool) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let binary = std::env::current_exe().context("resolve current executable")?;
-    fs::write(
-        &unit_path,
-        render_systemd_user_unit(&binary, &config.home, &service_supplementary_groups()),
-    )?;
+    fs::write(&unit_path, render_systemd_user_unit(&binary, &config.home))?;
     systemctl_user(&["daemon-reload"]).await?;
     if enable {
         systemctl_user(&["enable", SERVICE_NAME]).await?;
     }
     if start {
         systemctl_user(&["restart", SERVICE_NAME]).await?;
+        ensure_service_active_after_start("restart").await?;
     }
     Ok(())
 }
@@ -111,7 +98,8 @@ pub async fn start(config: &Config) -> Result<()> {
         );
     }
     install(config, false, false).await?;
-    systemctl_user(&["start", SERVICE_NAME]).await
+    systemctl_user(&["start", SERVICE_NAME]).await?;
+    ensure_service_active_after_start("start").await
 }
 
 pub async fn stop() -> Result<()> {
@@ -128,7 +116,8 @@ pub async fn restart(config: &Config) -> Result<()> {
     }
     let enabled = systemctl_user_success(&["is-enabled", "--quiet", SERVICE_NAME]).await;
     install(config, enabled, false).await?;
-    systemctl_user(&["restart", SERVICE_NAME]).await
+    systemctl_user(&["restart", SERVICE_NAME]).await?;
+    ensure_service_active_after_start("restart").await
 }
 
 pub async fn status(config: Option<&Config>) -> ServiceStatus {
@@ -237,39 +226,6 @@ async fn service_runtime_probe(config: &Config) -> ServiceRuntimeProbe {
     }
 }
 
-fn service_supplementary_groups() -> Vec<String> {
-    if group_exists("docker") && current_user_groups().iter().any(|group| group == "docker") {
-        vec!["docker".to_string()]
-    } else {
-        Vec::new()
-    }
-}
-
-fn group_exists(group: &str) -> bool {
-    fs::read_to_string("/etc/group")
-        .map(|content| {
-            content
-                .lines()
-                .any(|line| line.split(':').next() == Some(group))
-        })
-        .unwrap_or(false)
-}
-
-fn current_user_groups() -> Vec<String> {
-    Command::new("id")
-        .arg("-nG")
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .map(|group| group.to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn compact_detail(value: &str) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() <= 240 {
@@ -282,16 +238,33 @@ fn compact_detail(value: &str) -> String {
 }
 
 async fn ensure_systemctl() -> Result<()> {
-    let status = TokioCommand::new("systemctl")
+    let output = TokioCommand::new("systemctl")
         .arg("--user")
         .arg("--version")
-        .status()
+        .output()
         .await
         .context("run systemctl --user --version")?;
-    if !status.success() {
+    if !output.status.success() {
         bail!("systemctl --user is not available in this session");
     }
     Ok(())
+}
+
+async fn ensure_service_active_after_start(action: &str) -> Result<()> {
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    if systemctl_user_success(&["is-active", "--quiet", SERVICE_NAME]).await {
+        return Ok(());
+    }
+    let state = systemctl_user_text(&["is-active", SERVICE_NAME])
+        .await
+        .unwrap_or_else(|error| format!("unknown ({error})"));
+    bail!(
+        "{} {} returned, but the service is not active (state: {}). Run `journalctl --user -u {} -n 80 --no-pager` for the exact startup error.",
+        SERVICE_NAME,
+        action,
+        state.trim(),
+        SERVICE_NAME,
+    )
 }
 
 async fn systemctl_user(args: &[&str]) -> Result<()> {
@@ -320,6 +293,20 @@ async fn systemctl_user_success(args: &[&str]) -> bool {
         .await
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+async fn systemctl_user_text(args: &[&str]) -> Result<String> {
+    let output = TokioCommand::new("systemctl")
+        .arg("--user")
+        .args(args)
+        .output()
+        .await
+        .with_context(|| format!("run systemctl --user {}", args.join(" ")))?;
+    Ok(format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
 }
 
 async fn systemctl_user_passthrough(args: &[&str]) -> Result<()> {
@@ -352,7 +339,6 @@ mod tests {
         let unit = render_systemd_user_unit(
             Path::new("/home/user/Librarian/.app/bin/librarian"),
             Path::new("/home/user/Librarian"),
-            &[],
         );
         assert!(unit.contains(
             "ExecStart=/home/user/Librarian/.app/bin/librarian --home /home/user/Librarian daemon"
@@ -366,7 +352,6 @@ mod tests {
         let unit = render_systemd_user_unit(
             Path::new("/home/user/My Apps/librarian"),
             Path::new("/home/user/My Librarian"),
-            &[],
         );
         assert!(unit.contains(
             "ExecStart=\"/home/user/My Apps/librarian\" --home \"/home/user/My Librarian\" daemon"
@@ -374,13 +359,12 @@ mod tests {
     }
 
     #[test]
-    fn renders_unit_with_docker_supplementary_group() {
+    fn user_unit_does_not_try_to_set_supplementary_groups() {
         let unit = render_systemd_user_unit(
             Path::new("/home/user/Librarian/.app/bin/librarian"),
             Path::new("/home/user/Librarian"),
-            &["docker".to_string()],
         );
-        assert!(unit.contains("SupplementaryGroups=docker"));
+        assert!(!unit.contains("SupplementaryGroups="));
         assert!(unit.contains("ExecStart=/home/user/Librarian/.app/bin/librarian"));
     }
 }
