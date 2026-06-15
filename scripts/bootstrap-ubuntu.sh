@@ -10,6 +10,7 @@ agent_image_ready=0
 librarian_home="${LIBRARIAN_HOME:-$HOME/Librarian}"
 install_bin=""
 bind="${LIBRARIAN_ADMIN_BIND:-127.0.0.1:17377}"
+librarian_service_was_active=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -159,6 +160,10 @@ cd "$repo_root"
 if [[ -z "$install_bin" ]]; then
   install_bin="$librarian_home/.app/bin/librarian"
 fi
+if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet librarian.service 2>/dev/null; then
+  librarian_service_was_active=1
+  systemctl --user stop librarian.service || true
+fi
 mkdir -p "$(dirname "$install_bin")"
 install_tmp="$(dirname "$install_bin")/.librarian.new.$$"
 cp "$repo_root/target/release/librarian" "$install_tmp"
@@ -219,6 +224,10 @@ BASHRC
 fi
 "$bin" --home "$librarian_home" setup --yes --runtime host --skip-doctor
 "$bin" --home "$librarian_home" config show >/dev/null
+if [[ "$librarian_service_was_active" -eq 1 ]] && command -v systemctl >/dev/null 2>&1; then
+  systemctl --user daemon-reload || true
+  systemctl --user start librarian.service || true
+fi
 
 python3 - "$librarian_home/.cfg/config.toml" "$bind" <<'PY'
 from pathlib import Path

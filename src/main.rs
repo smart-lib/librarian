@@ -5,6 +5,7 @@ mod agent_policy;
 mod broker;
 mod chat;
 mod config;
+mod daemon;
 mod db;
 mod docker_runner;
 mod domain;
@@ -19,6 +20,7 @@ mod providers;
 mod router;
 mod scheduler;
 mod secrets;
+mod service;
 mod slash_utils;
 mod third_eye;
 mod vault;
@@ -184,6 +186,37 @@ enum Command {
         #[arg(long)]
         concurrency: Option<usize>,
     },
+    Daemon {
+        #[arg(long)]
+        once: bool,
+        #[arg(long)]
+        background: bool,
+        #[arg(long)]
+        concurrency: Option<usize>,
+        #[arg(long, default_value_t = 5)]
+        scheduler_interval_seconds: u64,
+        #[arg(long, default_value_t = 2)]
+        idle_interval_seconds: u64,
+    },
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ServiceCommand {
+    Install {
+        #[arg(long)]
+        enable: bool,
+        #[arg(long)]
+        start: bool,
+    },
+    Start,
+    Stop,
+    Restart,
+    Status,
+    Uninstall,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1994,6 +2027,66 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Command::Daemon {
+            once,
+            background,
+            concurrency,
+            scheduler_interval_seconds,
+            idle_interval_seconds,
+        } => {
+            if background {
+                service::install(&config, true, true).await?;
+                println!("Librarian daemon service installed/enabled and started.");
+            } else {
+                config.ensure_layout()?;
+                let db = Database::connect(&config).await?;
+                db.migrate().await?;
+                let concurrency = concurrency
+                    .unwrap_or(config.worker.max_concurrent_jobs)
+                    .max(1);
+                daemon::run(
+                    config,
+                    db,
+                    daemon::DaemonOptions {
+                        once,
+                        concurrency,
+                        scheduler_interval_seconds,
+                        idle_interval_seconds,
+                    },
+                )
+                .await?;
+            }
+        }
+        Command::Service { command } => match command {
+            ServiceCommand::Install { enable, start } => {
+                service::install(&config, enable, start).await?;
+                println!(
+                    "Installed {}. enable={}, start={}",
+                    service::SERVICE_NAME,
+                    enable,
+                    start
+                );
+            }
+            ServiceCommand::Start => {
+                service::start().await?;
+                println!("Started {}.", service::SERVICE_NAME);
+            }
+            ServiceCommand::Stop => {
+                service::stop().await?;
+                println!("Stopped {}.", service::SERVICE_NAME);
+            }
+            ServiceCommand::Restart => {
+                service::restart().await?;
+                println!("Restarted {}.", service::SERVICE_NAME);
+            }
+            ServiceCommand::Status => {
+                service::print_status().await?;
+            }
+            ServiceCommand::Uninstall => {
+                service::uninstall().await?;
+                println!("Uninstalled {}.", service::SERVICE_NAME);
+            }
+        },
     }
 
     Ok(())
@@ -3713,10 +3806,16 @@ async fn run_doctor(config: &Config) -> Result<()> {
         Ok(db) => match db.migrate().await {
             Ok(()) => {
                 provider_states = db.list_provider_states().await.unwrap_or_default();
+                let jobs = db.list_jobs().await.unwrap_or_default();
+                let queued_jobs = jobs
+                    .iter()
+                    .filter(|job| matches!(job.status, JobStatus::Queued))
+                    .count();
                 checks.push(launch_context_registration_check(
                     config,
                     &db.list_projects().await?,
                 ));
+                checks.push(daemon_service_check(service::status().await, queued_jobs));
                 DoctorCheck::ok(
                     "sqlite",
                     format!("opened and migrated {}", config.database_path.display()),
@@ -4203,6 +4302,44 @@ fn command_next_step(label: &str, detail: &str) -> &'static str {
     }
 }
 
+fn daemon_service_check(status: service::ServiceStatus, queued_jobs: usize) -> DoctorCheck {
+    if !status.supported {
+        if queued_jobs > 0 {
+            return DoctorCheck::warn(
+                "daemon service",
+                format!("{}; queued_jobs={queued_jobs}", status.detail),
+                "Run `librarian worker --once`, `librarian worker`, or use a supported service manager.",
+            );
+        }
+        return DoctorCheck::warn(
+            "daemon service",
+            status.detail,
+            "Run `librarian daemon` in a terminal, or use `librarian service install --enable --start` on a systemd user session.",
+        );
+    }
+    if status.active {
+        return DoctorCheck::ok(
+            "daemon service",
+            format!(
+                "{}; queued_jobs={queued_jobs}; autonomous worker/scheduler loop is active",
+                status.detail
+            ),
+        );
+    }
+    if queued_jobs > 0 {
+        return DoctorCheck::warn(
+            "daemon service",
+            format!("{}; queued_jobs={queued_jobs}", status.detail),
+            "Start autonomous execution with `librarian service start`, `librarian daemon --background`, or run `librarian worker --once` manually.",
+        );
+    }
+    DoctorCheck::warn(
+        "daemon service",
+        status.detail,
+        "Install/start autonomous execution with `librarian service install --enable --start`, or run `librarian daemon` manually.",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4259,6 +4396,48 @@ mod tests {
 
         assert!(error.to_string().contains("cargo test --quiet"));
         assert!(error.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn daemon_service_check_warns_when_queue_cannot_run() {
+        let check = daemon_service_check(
+            service::ServiceStatus {
+                supported: true,
+                installed: true,
+                active: false,
+                enabled: true,
+                detail: "librarian.service installed; active=false; enabled=true".to_string(),
+            },
+            2,
+        );
+
+        assert_eq!(check.severity, DoctorSeverity::Warn);
+        assert_eq!(check.label, "daemon service");
+        assert!(check.detail.contains("queued_jobs=2"));
+        assert!(check
+            .next_step
+            .as_deref()
+            .expect("next step")
+            .contains("librarian service start"));
+    }
+
+    #[test]
+    fn daemon_service_check_ok_when_active() {
+        let check = daemon_service_check(
+            service::ServiceStatus {
+                supported: true,
+                installed: true,
+                active: true,
+                enabled: true,
+                detail: "librarian.service installed; active=true; enabled=true".to_string(),
+            },
+            1,
+        );
+
+        assert_eq!(check.severity, DoctorSeverity::Ok);
+        assert!(check
+            .detail
+            .contains("autonomous worker/scheduler loop is active"));
     }
 
     #[test]

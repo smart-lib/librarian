@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.27`; bump at least the minor version when a visible
+- Current crate version: `0.2.28`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -105,8 +105,8 @@ Status: Done.
 
 Operational note: the worker and scheduler exist as long-running CLI loops
 (`librarian worker` and `librarian scheduler`), plus `--once` modes for manual
-tests. Librarian does not yet install or supervise them as system services, and
-the admin server does not currently embed an automatic worker loop.
+tests. First daemon pass adds `librarian daemon`, which runs scheduler ticks and
+worker batches in one autonomous process without starting the admin UI.
 
 ## Milestone 5: Vector Memory
 
@@ -879,7 +879,8 @@ Dependencies:
 
 ## Priority 6A: Worker And Scheduler Service Lifecycle
 
-Status: Planned.
+Status: First Ubuntu/Linux pass implemented. Real validation still needs to run
+inside the user's WSL/Ubuntu environment.
 
 Goal: queued agent work should not depend on the user remembering to run a
 manual terminal command after approving a job.
@@ -888,9 +889,14 @@ Tasks:
 
 - Add an install/start/stop/status surface for long-running worker and scheduler
   processes on the current golden path, starting with Linux/Ubuntu systemd user
-  services.
+  services. First pass adds `librarian service install/start/stop/restart/status/uninstall`.
 - Add doctor checks that report whether the worker loop and scheduler loop are
   installed/running, and show the exact command to start them when they are not.
+  First pass reports `daemon service`, including queued-job warnings when no
+  autonomous executor is active.
+- Stop/restart the autonomous service during Ubuntu upgrades when it was active
+  before the binary replacement. First bootstrap pass does this for the
+  `librarian.service` user unit.
 - Add admin UI controls/readouts for worker service status, queue depth, active
   jobs, and the next action needed to make queued jobs run.
 - Keep manual commands (`worker --once`, `worker`, `scheduler --once`,
