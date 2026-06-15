@@ -341,7 +341,7 @@ fn validate_tool_proposal(
     payload: Option<serde_json::Value>,
 ) -> Result<(String, String, serde_json::Value)> {
     let tool = normalize_tool_token(tool.unwrap_or_default());
-    let action = normalize_tool_token(action.unwrap_or_default());
+    let action = normalize_tool_action(&tool, action.unwrap_or_default());
     let payload = payload.unwrap_or_else(|| serde_json::json!({}));
     if !payload.is_object() {
         anyhow::bail!("Tool proposal payload must be a JSON object");
@@ -360,7 +360,7 @@ fn validate_tool_proposal(
         ("prompt", "add_block" | "add-block") => &["target", "name", "content"],
         ("agent", "launch" | "queue") => &["goal"][..],
         ("agent", _) => anyhow::bail!(
-            "Unsupported agent proposal `{tool}.{action}`. Use exact action `agent.launch` and put the requested work in payload.goal."
+            "Unsupported agent proposal `{tool}.{action}`. Use tool `agent` with tool_action `launch` and put the requested work in payload.goal."
         ),
         _ => anyhow::bail!("Unsupported tool proposal `{tool}.{action}`"),
     };
@@ -376,6 +376,15 @@ fn normalize_tool_token(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace('-', "_")
 }
 
+fn normalize_tool_action(tool: &str, value: &str) -> String {
+    let action = normalize_tool_token(value).replace('.', "_");
+    let prefix = format!("{tool}_");
+    action
+        .strip_prefix(&prefix)
+        .map(ToOwned::to_owned)
+        .unwrap_or(action)
+}
+
 fn is_project_creation_tool_action(action: &str) -> bool {
     matches!(
         action,
@@ -389,30 +398,30 @@ fn is_project_creation_tool_action(action: &str) -> bool {
 }
 
 fn available_tool_actions_prompt() -> &'static str {
-    r#"Only these exact tool/action pairs are available. Do not invent action names.
+    r#"Only these exact tool/tool_action pairs are available. Do not invent action names. In JSON, put the left value in `tool` and the right value in `tool_action`.
 
-- library.create_folder: create a folder under Library. Required payload: path.
-- library.create_file: create a file under Library. Required payload: path.
-- library.write_markdown: overwrite a Markdown file under Library. Required payload: path, content.
-- library.append_markdown: append Markdown under Library. Required payload: path, content.
-- library.move: move a Library item. Required payload: from, to.
-- library.delete: delete a Library item. Required payload: path.
-- library.replace_lines: replace an inclusive line range in a Library Markdown file. Required payload: path, start_line, end_line, content.
-- library.cut_lines: remove an inclusive line range in a Library Markdown file. Required payload: path, start_line, end_line.
-- library.replace_find: replace text found in a Library Markdown file. Required payload: path, query, content.
-- library.cut_find: remove text found in a Library Markdown file. Required payload: path, query.
-- library.replace_section: replace a Markdown heading section under Library. Required payload: path, heading, content.
-- library.cut_section: remove a Markdown heading section under Library. Required payload: path, heading.
-- workspace.create_folder: create a folder under Projects. Required payload: path.
-- workspace.create_file: create a file under Projects. Required payload: path.
-- workspace.move: move a Projects item. Required payload: from, to.
-- workspace.delete: delete a Projects item. Required payload: path.
-- project.create_starting_docs_and_project_folder: create a Library documentation node plus a matching project workspace. Required payload: library_path. Optional payload: name, workspace_path, summary, files.
-- memory.remember: store durable memory. Required payload: content.
-- prompt.add_block: add a prompt-builder block. Required payload: target, name, content.
-- agent.launch: queue background project work for an agent. Required payload: goal. Optional payload: project, provider, read_only, allow_network, secret_grant_token.
+- tool=library, tool_action=create_folder: create a folder under Library. Required payload: path.
+- tool=library, tool_action=create_file: create a file under Library. Required payload: path.
+- tool=library, tool_action=write_markdown: overwrite a Markdown file under Library. Required payload: path, content.
+- tool=library, tool_action=append_markdown: append Markdown under Library. Required payload: path, content.
+- tool=library, tool_action=move: move a Library item. Required payload: from, to.
+- tool=library, tool_action=delete: delete a Library item. Required payload: path.
+- tool=library, tool_action=replace_lines: replace an inclusive line range in a Library Markdown file. Required payload: path, start_line, end_line, content.
+- tool=library, tool_action=cut_lines: remove an inclusive line range in a Library Markdown file. Required payload: path, start_line, end_line.
+- tool=library, tool_action=replace_find: replace text found in a Library Markdown file. Required payload: path, query, content.
+- tool=library, tool_action=cut_find: remove text found in a Library Markdown file. Required payload: path, query.
+- tool=library, tool_action=replace_section: replace a Markdown heading section under Library. Required payload: path, heading, content.
+- tool=library, tool_action=cut_section: remove a Markdown heading section under Library. Required payload: path, heading.
+- tool=workspace, tool_action=create_folder: create a folder under Projects. Required payload: path.
+- tool=workspace, tool_action=create_file: create a file under Projects. Required payload: path.
+- tool=workspace, tool_action=move: move a Projects item. Required payload: from, to.
+- tool=workspace, tool_action=delete: delete a Projects item. Required payload: path.
+- tool=project, tool_action=create_starting_docs_and_project_folder: create a Library documentation node plus a matching project workspace. Required payload: library_path. Optional payload: name, workspace_path, summary, files.
+- tool=memory, tool_action=remember: store durable memory. Required payload: content.
+- tool=prompt, tool_action=add_block: add a prompt-builder block. Required payload: target, name, content.
+- tool=agent, tool_action=launch: queue background project work for an agent. Required payload: goal. Optional payload: project, provider, read_only, allow_network, secret_grant_token.
 
-For git clone, build, tests, refactors, or other open-ended project work, use agent.launch. Put the complete task in payload.goal. Do not create clone/build/test-specific tool_action names.
+For git clone, build, tests, refactors, or other open-ended project work, use tool=agent with tool_action=launch. Put the complete task in payload.goal. Do not create clone/build/test-specific tool_action names.
 "#
 }
 
@@ -772,6 +781,16 @@ mod tests {
             "Clone git@github.com:no-more-care/nomorecare.gg.git into the empty workspace."
         );
 
+        let (_, action, _) = validate_tool_proposal(
+            Some("agent"),
+            Some("agent.launch"),
+            Some(serde_json::json!({
+                "goal": "Clone git@github.com:no-more-care/nomorecare.gg.git into the empty workspace."
+            })),
+        )
+        .expect("fully qualified action should normalize");
+        assert_eq!(action, "launch");
+
         let error = validate_tool_proposal(
             Some("agent"),
             Some("clone_repository_into_project_folder"),
@@ -781,7 +800,7 @@ mod tests {
         )
         .expect_err("invented action must fail")
         .to_string();
-        assert!(error.contains("Use exact action `agent.launch`"));
+        assert!(error.contains("tool_action `launch`"));
     }
 
     #[test]
@@ -790,7 +809,7 @@ mod tests {
         let prompt = build_librarian_chat_prompt(&config, "", None, &[], &[], "", 1, 5);
 
         assert!(prompt.contains("## Available Tool Actions"));
-        assert!(prompt.contains("agent.launch"));
+        assert!(prompt.contains("tool=agent, tool_action=launch"));
         assert!(prompt.contains("Do not invent action names"));
     }
 
