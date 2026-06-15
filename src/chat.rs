@@ -84,6 +84,7 @@ async fn run_librarian_chat_loop_with_runner(
     let project_id = project.map(|project| project.id);
     let max_iterations = config.chat.max_iterations.clamp(1, 100);
     let mut context_packs = vec![initial_context_pack];
+    let mut tool_feedback = Vec::new();
     let mut trace = Vec::new();
     let mut last_raw_reply = String::new();
 
@@ -102,6 +103,7 @@ async fn run_librarian_chat_loop_with_runner(
             recent_turns,
             &context_packs,
             &librarian_instruction_blocks,
+            &tool_feedback,
             iteration,
             max_iterations,
         );
@@ -233,35 +235,71 @@ async fn run_librarian_chat_loop_with_runner(
                 context_packs.push(context_pack);
             }
             "propose_tool" => {
-                let (tool, tool_action, mut payload) = validate_tool_proposal(
+                let proposal = validate_tool_proposal(
                     directive.tool.as_deref(),
                     directive.tool_action.as_deref(),
                     directive.payload,
-                )?;
-                if let Some(object) = payload.as_object_mut() {
-                    if tool == "agent"
-                        && matches!(tool_action.as_str(), "launch" | "queue")
-                        && object.get("project").is_none()
-                    {
-                        let Some(project) = project else {
-                            anyhow::bail!(
-                                "Agent launch proposals require a current project context or payload.project"
+                )
+                .and_then(|(tool, tool_action, mut payload)| {
+                    if let Some(object) = payload.as_object_mut() {
+                        if tool == "agent"
+                            && matches!(tool_action.as_str(), "launch" | "queue")
+                            && object.get("project").is_none()
+                        {
+                            let Some(project) = project else {
+                                anyhow::bail!(
+                                    "Agent launch proposals require a current project context or payload.project"
+                                );
+                            };
+                            object.insert(
+                                "project".to_string(),
+                                serde_json::json!(project.name.clone()),
                             );
-                        };
+                        }
                         object.insert(
-                            "project".to_string(),
-                            serde_json::json!(project.name.clone()),
+                            "chat_scope".to_string(),
+                            serde_json::json!(project.map(|project| project.name.clone())),
+                        );
+                        object.insert(
+                            "user_message".to_string(),
+                            serde_json::json!(message.trim()),
                         );
                     }
-                    object.insert(
-                        "chat_scope".to_string(),
-                        serde_json::json!(project.map(|project| project.name.clone())),
-                    );
-                    object.insert(
-                        "user_message".to_string(),
-                        serde_json::json!(message.trim()),
-                    );
-                }
+                    Ok((tool, tool_action, payload))
+                });
+
+                let (tool, tool_action, payload) = match proposal {
+                    Ok(proposal) => proposal,
+                    Err(error) => {
+                        let error = error.to_string();
+                        trace.push(serde_json::json!({
+                            "iteration": iteration,
+                            "action": "tool_proposal_feedback",
+                            "error": error,
+                            "reason": directive.reason,
+                            "prompt_version": prompt_version,
+                            "prompt_chars": prompt_chars,
+                            "reply_chars": raw_reply.chars().count(),
+                            "provider_elapsed_ms": provider_elapsed_ms,
+                        }));
+                        if iteration == max_iterations {
+                            return Ok(LibrarianChatResult {
+                                reply: format!(
+                                    "I could not prepare that action after {iteration} attempt(s): {error}"
+                                ),
+                                iterations: iteration,
+                                memory_hits: combined_memory_hits(&context_packs),
+                                trace,
+                                mode: "codex-chat",
+                                ui: None,
+                            });
+                        }
+                        tool_feedback.push(format!(
+                            "Previous tool proposal failed validation: {error}. Correct the JSON and try again, or ask the user one clarifying question. Do not repeat the same invalid proposal."
+                        ));
+                        continue;
+                    }
+                };
                 let approval = db
                     .create_tool_approval(&tool, &tool_action, payload)
                     .await?;
@@ -463,6 +501,7 @@ fn build_librarian_chat_prompt(
     recent_turns: &[ChatTurn],
     context_packs: &[ContextPack],
     instruction_blocks: &str,
+    tool_feedback: &[String],
     iteration: usize,
     max_iterations: usize,
 ) -> String {
@@ -502,6 +541,13 @@ fn build_librarian_chat_prompt(
     ));
     if iteration >= max_iterations {
         prompt.push_str("This is the final allowed iteration. Do not request another memory search; answer with the available context or ask one clarifying question.\n\n");
+    }
+    if !tool_feedback.is_empty() {
+        prompt.push_str("## Tool Proposal Feedback\n\n");
+        for (index, feedback) in tool_feedback.iter().enumerate() {
+            prompt.push_str(&format!("{}. {}\n", index + 1, feedback.trim()));
+        }
+        prompt.push_str("\n");
     }
     prompt.push_str("## Recent Conversation\n\n");
     let recent_turns = recent_turns
@@ -806,7 +852,7 @@ mod tests {
     #[test]
     fn chat_prompt_lists_canonical_tool_manifest() {
         let config = Config::load_or_default(None).expect("config");
-        let prompt = build_librarian_chat_prompt(&config, "", None, &[], &[], "", 1, 5);
+        let prompt = build_librarian_chat_prompt(&config, "", None, &[], &[], "", &[], 1, 5);
 
         assert!(prompt.contains("## Available Tool Actions"));
         assert!(prompt.contains("tool=agent, tool_action=launch"));
@@ -980,6 +1026,69 @@ mod tests {
         std::fs::remove_dir_all(home).ok();
     }
 
+    #[tokio::test]
+    async fn chat_loop_feedback_recovers_invalid_tool_proposal() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-chat-tool-feedback-{}",
+            Uuid::new_v4()
+        ));
+
+        {
+            let mut config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.chat.max_iterations = 3;
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let workspace_path = config
+                .home
+                .join("Projects")
+                .join("sites")
+                .join("nomorecare.gg");
+            std::fs::create_dir_all(&workspace_path).expect("workspace");
+            let project = db
+                .add_project("Nomorecare Gg", &workspace_path)
+                .await
+                .expect("project");
+            let initial_context = ContextPack {
+                query: "clone repo".to_string(),
+                project_id: Some(project.id),
+                activity_id: None,
+                generated_at: chrono::Utc::now(),
+                hits: Vec::new(),
+            };
+            let mut runner = MockChatRunner::new(vec![
+                r#"{"action":"propose_tool","tool":"agent","tool_action":"clone_repository_into_project_folder","payload":{"goal":"Clone git@github.com:no-more-care/nomorecare.gg.git into the current empty workspace.","allow_network":true},"reason":"user asked to clone a repo"}"#,
+                r#"{"action":"propose_tool","tool":"agent","tool_action":"launch","payload":{"goal":"Clone git@github.com:no-more-care/nomorecare.gg.git into the current empty workspace.","allow_network":true},"reason":"corrected to canonical agent launch"}"#,
+            ]);
+
+            let result = run_librarian_chat_loop_with_runner(
+                &db,
+                &config,
+                "Clone the repo into this project.",
+                Some(&project),
+                &[],
+                initial_context,
+                &mut runner,
+            )
+            .await
+            .expect("chat loop");
+
+            assert_eq!(result.iterations, 2);
+            assert_eq!(runner.calls, 2);
+            assert_eq!(result.trace[0]["action"], "tool_proposal_feedback");
+            assert!(runner.prompts[1].contains("## Tool Proposal Feedback"));
+            assert!(runner.prompts[1].contains("Previous tool proposal failed validation"));
+            assert!(result.reply.contains("prepared an action"));
+            let ui = result.ui.expect("ui metadata");
+            assert_eq!(ui["approval"]["tool"], "agent");
+            assert_eq!(ui["approval"]["action"], "launch");
+            assert_eq!(ui["approval"]["payload"]["project"], "Nomorecare Gg");
+            assert!(db.list_tool_approvals(10).await.expect("approvals").len() == 1);
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
     #[test]
     fn filters_placeholder_chat_memory_from_context_hits() {
         let pack = ContextPack {
@@ -1048,6 +1157,7 @@ mod tests {
                 hits: Vec::new(),
             }],
             "",
+            &[],
             1,
             5,
         );
