@@ -85,6 +85,7 @@ async fn run_librarian_chat_loop_with_runner(
     let max_iterations = config.chat.max_iterations.clamp(1, 100);
     let mut context_packs = vec![initial_context_pack];
     let job_snapshot = active_job_snapshot(db, project_id).await?;
+    let job_event_snapshot = recent_job_event_snapshot(db, project_id).await?;
     let mut tool_feedback = Vec::new();
     let mut trace = Vec::new();
     let mut last_raw_reply = String::new();
@@ -105,6 +106,7 @@ async fn run_librarian_chat_loop_with_runner(
             &context_packs,
             &librarian_instruction_blocks,
             &job_snapshot,
+            &job_event_snapshot,
             &tool_feedback,
             iteration,
             max_iterations,
@@ -511,6 +513,104 @@ async fn active_job_snapshot(db: &Database, project_id: Option<Uuid>) -> Result<
     Ok(lines.join("\n"))
 }
 
+async fn recent_job_event_snapshot(db: &Database, project_id: Option<Uuid>) -> Result<String> {
+    let mut jobs = db
+        .list_jobs()
+        .await?
+        .into_iter()
+        .filter(|job| project_id.is_none_or(|id| job.project_id == id))
+        .filter(|job| {
+            matches!(
+                job.status,
+                crate::domain::JobStatus::Failed
+                    | crate::domain::JobStatus::Cancelled
+                    | crate::domain::JobStatus::Completed
+            )
+        })
+        .collect::<Vec<_>>();
+    jobs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    let mut lines = Vec::new();
+    for job in jobs.iter().take(5) {
+        let id = job.id.to_string();
+        let short_id = &id[..8];
+        lines.push(format!(
+            "- job={short_id}; status={:?}; provider={:?}; updated={}; goal={}",
+            job.status,
+            job.provider,
+            job.updated_at.to_rfc3339(),
+            compact_prompt_line(&job.goal, 160)
+        ));
+        let events = db.list_job_events(job.id).await?;
+        let interesting = events
+            .iter()
+            .rev()
+            .filter(|event| {
+                matches!(
+                    event.kind.as_str(),
+                    "stderr"
+                        | "stdout"
+                        | "failure_category"
+                        | "status"
+                        | "vault"
+                        | "post_run_review_skipped"
+                        | "provider_diagnostic"
+                )
+            })
+            .take(6)
+            .collect::<Vec<_>>();
+        for event in interesting.into_iter().rev() {
+            lines.push(format!(
+                "  - {} {} {}",
+                event.created_at.to_rfc3339(),
+                event.kind,
+                compact_prompt_line(&job_event_payload_summary(&event.payload), 220)
+            ));
+        }
+    }
+    if jobs.len() > 5 {
+        lines.push(format!(
+            "- ... {} more recent terminal jobs omitted",
+            jobs.len() - 5
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn job_event_payload_summary(payload: &serde_json::Value) -> String {
+    if let Some(line) = payload.get("line").and_then(|value| value.as_str()) {
+        return line.to_string();
+    }
+    if let Some(category) = payload.get("category") {
+        let code = category
+            .get("code")
+            .and_then(|value| value.as_str())
+            .unwrap_or("failure");
+        let message = category
+            .get("message")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let next_step = category
+            .get("next_step")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        return [code, message, next_step]
+            .into_iter()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join(": ");
+    }
+    if let Some(status) = payload.get("status").and_then(|value| value.as_str()) {
+        if let Some(exit_code) = payload.get("exit_code").and_then(|value| value.as_i64()) {
+            return format!("{status} exit_code={exit_code}");
+        }
+        return status.to_string();
+    }
+    if let Some(path) = payload.get("run_summary").and_then(|value| value.as_str()) {
+        return format!("run_summary={path}");
+    }
+    serde_json::to_string(payload).unwrap_or_else(|_| "<unreadable event payload>".to_string())
+}
+
 fn compact_prompt_line(value: &str, max_chars: usize) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() <= max_chars {
@@ -563,6 +663,7 @@ fn build_librarian_chat_prompt(
     context_packs: &[ContextPack],
     instruction_blocks: &str,
     job_snapshot: &str,
+    job_event_snapshot: &str,
     tool_feedback: &[String],
     iteration: usize,
     max_iterations: usize,
@@ -585,6 +686,7 @@ fn build_librarian_chat_prompt(
     prompt.push_str("Do not claim to have launched agents, edited files, changed settings, or used tools unless the provided context explicitly says so.\n");
     prompt.push_str("Use the retrieved memory as context, but do not dump it back verbatim. Answer naturally and helpfully.\n");
     prompt.push_str("If the user asks for work that should become an agent task, discuss the plan and say that launching a background agent should be an explicit separate action.\n");
+    prompt.push_str("If the user asks about existing agent job status, failures, logs, or what went wrong, answer from Active Agent Jobs and Recent Agent Job Events. Do not launch a new agent merely to inspect Librarian's own job state.\n");
     prompt.push_str("Keep the answer concise unless the user asks for detail.\n\n");
     if !instruction_blocks.trim().is_empty() {
         prompt.push_str("## Librarian Instruction Blocks\n\n");
@@ -605,6 +707,13 @@ fn build_librarian_chat_prompt(
         );
     } else {
         prompt.push_str(job_snapshot.trim());
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str("## Recent Agent Job Events\n\n");
+    if job_event_snapshot.trim().is_empty() {
+        prompt.push_str("No recent failed/cancelled/completed agent job events in this scope.\n\n");
+    } else {
+        prompt.push_str(job_event_snapshot.trim());
         prompt.push_str("\n\n");
     }
     prompt.push_str(&format!(
@@ -923,7 +1032,8 @@ mod tests {
     #[test]
     fn chat_prompt_lists_canonical_tool_manifest() {
         let config = Config::load_or_default(None).expect("config");
-        let prompt = build_librarian_chat_prompt(&config, "", None, &[], &[], "", "", &[], 1, 5);
+        let prompt =
+            build_librarian_chat_prompt(&config, "", None, &[], &[], "", "", "", &[], 1, 5);
 
         assert!(prompt.contains("## Available Tool Actions"));
         assert!(prompt.contains("tool=agent, tool_action=launch"));
@@ -1171,6 +1281,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_prompt_includes_recent_job_failure_events_for_current_project() {
+        let home = std::env::current_dir().expect("current dir").join(format!(
+            ".librarian-test-chat-job-events-{}",
+            Uuid::new_v4()
+        ));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let workspace_path = config
+                .home
+                .join("Projects")
+                .join("sites")
+                .join("nomorecare.gg");
+            std::fs::create_dir_all(&workspace_path).expect("workspace");
+            let project = db
+                .add_project("Nomorecare Gg", &workspace_path)
+                .await
+                .expect("project");
+            let job = db
+                .create_job(
+                    project.id,
+                    crate::domain::ProviderKind::Codex,
+                    "Clone git@github.com:no-more-care/nomorecare.gg.git into the workspace.",
+                    crate::domain::MountMode::ReadWrite,
+                    crate::domain::NetworkMode::Open,
+                    None,
+                )
+                .await
+                .expect("job");
+            db.add_job_event(
+                job.id,
+                "stderr",
+                serde_json::json!({
+                    "line": "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock"
+                }),
+            )
+            .await
+            .expect("stderr event");
+            db.update_job_status(job.id, crate::domain::JobStatus::Failed)
+                .await
+                .expect("failed status");
+            let initial_context = ContextPack {
+                query: "what failed?".to_string(),
+                project_id: Some(project.id),
+                activity_id: None,
+                generated_at: chrono::Utc::now(),
+                hits: Vec::new(),
+            };
+            let mut runner = MockChatRunner::new(vec!["The Docker socket was not accessible."]);
+
+            let result = run_librarian_chat_loop_with_runner(
+                &db,
+                &config,
+                "Посмотри, в чём была проблема",
+                Some(&project),
+                &[],
+                initial_context,
+                &mut runner,
+            )
+            .await
+            .expect("chat loop");
+
+            assert_eq!(result.iterations, 1);
+            assert!(runner.prompts[0].contains("## Recent Agent Job Events"));
+            assert!(runner.prompts[0].contains("docker.sock"));
+            assert!(runner.prompts[0]
+                .contains("Do not launch a new agent merely to inspect Librarian's own job state"));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
     async fn chat_loop_feedback_recovers_invalid_tool_proposal() {
         let home = std::env::current_dir().expect("current dir").join(format!(
             ".librarian-test-chat-tool-feedback-{}",
@@ -1300,6 +1486,7 @@ mod tests {
                 generated_at: chrono::Utc::now(),
                 hits: Vec::new(),
             }],
+            "",
             "",
             "",
             &[],

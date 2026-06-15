@@ -488,6 +488,18 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
     .message.approval::before {
       content: "APPROVAL";
     }
+    .message.approval.approval-terminal {
+      padding: 10px 12px;
+      margin-right: min(14%, 120px);
+      border-color: rgba(112, 220, 192, .35);
+      border-left-color: var(--accent);
+      background: linear-gradient(180deg, rgba(112, 220, 192, .10), rgba(123, 177, 255, .035));
+      box-shadow: 0 0 16px rgba(112, 220, 192, .08);
+    }
+    .message.approval.approval-terminal::before {
+      content: "DECISION";
+      color: var(--accent);
+    }
     .message.agent-card {
       border-color: rgba(123, 177, 255, .42);
       background: linear-gradient(180deg, rgba(123, 177, 255, .13), rgba(112, 220, 192, .045));
@@ -559,12 +571,21 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       color: var(--text);
       margin-bottom: 10px;
     }
+    .approval-terminal .approval-head,
+    .approval-terminal .approval-summary {
+      margin-bottom: 4px;
+    }
     .approval-paths {
       display: grid;
       gap: 5px;
       margin: 0 0 12px;
       color: var(--muted);
       font-size: 13px;
+    }
+    .approval-terminal .approval-paths {
+      gap: 2px;
+      margin-bottom: 4px;
+      font-size: 12px;
     }
     .approval-actions {
       display: flex;
@@ -584,6 +605,12 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       margin-top: 10px;
       color: var(--muted);
       font-size: 13px;
+    }
+    .approval-terminal .approval-status,
+    .approval-terminal details,
+    .approval-terminal small {
+      margin-top: 4px;
+      font-size: 12px;
     }
     .agent-event-list {
       display: grid;
@@ -1392,15 +1419,21 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           ? (approvedAgentLaunch ? 'Queued' : approval.status)
           : 'Review';
         const terminalNote = approvedAgentLaunch
-          ? 'The request is approved and queued. It will run when a Librarian worker is running.'
+          ? 'Approved and queued. The daemon or worker will pick it up.'
           : terminal
             ? approval.status
             : '';
-        article.className = 'message assistant approval';
+        const visiblePaths = terminal ? paths.slice(0, 2) : paths;
+        const pathHtml = visiblePaths.length
+          ? visiblePaths.map(path => `<div>${htmlEscape(path)}</div>`).join('')
+          : terminal
+            ? ''
+            : '<div>No paths declared.</div>';
+        article.className = `message assistant approval${terminal ? ' approval-terminal' : ''}`;
         article.innerHTML = `
           <div class="approval-head"><span>${htmlEscape(headText)}</span><span class="approval-risk">${htmlEscape(riskText)}</span></div>
           <div class="approval-summary">${htmlEscape(summary)}</div>
-          <div class="approval-paths">${paths.length ? paths.map(path => `<div>${htmlEscape(path)}</div>`).join('') : '<div>No paths declared.</div>'}</div>
+          ${pathHtml ? `<div class="approval-paths">${pathHtml}</div>` : ''}
           ${terminal ? '' : `<div class="approval-actions">
             <button type="button" data-approval-decision="approve">Approve</button>
             <button type="button" class="reject" data-approval-decision="reject">Reject</button>
@@ -1722,6 +1755,10 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           return fallback;
         }
       }
+      async function latestApprovalSnapshot(approval) {
+        if (!approval?.id) return approval;
+        return await loadJson(`/api/approvals/${encodeURIComponent(approval.id)}`, approval);
+      }
       async function refresh() {
         const [health, projects, projectMap, promptBlocks, jobs, chatSessions, providers, events] = await Promise.all([
           loadJson('/api/health', null),
@@ -1773,7 +1810,8 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           const contextLabel = turnContextLabel(turn);
           const article = appendMessage(turn.role === 'assistant' ? 'assistant' : 'user', turn.content, turn.role === 'assistant' ? assistantName() : '', contextLabel);
           if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'approval') {
-            setApprovalCard(article, turn.metadata.ui.approval, turn.content, assistantName());
+            const approval = await latestApprovalSnapshot(turn.metadata.ui.approval);
+            setApprovalCard(article, approval, turn.content, assistantName());
           } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'context_switch') {
             setContextSwitchCard(article, turn.metadata.ui, assistantName());
           } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'agent_action') {

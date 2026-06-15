@@ -213,6 +213,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
         .route("/api/chat/sessions/:id/turns", get(chat_session_turns))
         .route("/api/chat", post(librarian_chat))
         .route("/api/slash-commands", get(slash_commands))
+        .route("/api/approvals/:id", get(tool_approval))
         .route("/api/approvals/:id/approve", post(approve_tool_approval))
         .route("/api/approvals/:id/reject", post(reject_tool_approval))
         .route("/api/agent-jobs", post(create_job))
@@ -1892,6 +1893,14 @@ async fn chat_session_turns(
         "session": session,
         "turns": turns,
     })))
+}
+
+async fn tool_approval(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<impl IntoResponse, ApiError> {
+    let approval = state.db.get_tool_approval(id).await?;
+    Ok(Json(approval))
 }
 
 async fn approve_tool_approval(

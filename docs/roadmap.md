@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.28`; bump at least the minor version when a visible
+- Current crate version: `0.2.29`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -274,7 +274,10 @@ Tasks:
 - Feed compact active job state into the Librarian chat prompt. Current pass
   includes queued/preparing/running/heartbeat-missed jobs for the current
   project context, or all active jobs in global context, so Librarian can answer
-  from SQLite job state instead of guessing from chat history.
+  from SQLite job state instead of guessing from chat history. Follow-up pass
+  adds recent terminal job events for the same scope, including stderr,
+  structured failure categories, and run-summary links, so Librarian can
+  diagnose its own failed jobs without launching another agent.
 - Add permissioned dialogue-aware context switching. The `context_switch`
   policy controls whether Librarian may infer/switch context automatically:
   `deny` keeps the current/global context, `ask` is the default and should lead
@@ -919,7 +922,8 @@ Tasks:
 - Ensure cancellation kills the child process and leaves a clear event trail.
 - Add structured failure categories where the worker currently records generic
   errors. First pass is implemented; expand as real provider/runtime failures
-  are observed.
+  are observed. Current pass adds `runtime_permission_denied` for Docker socket
+  access failures such as `permission denied ... /var/run/docker.sock`.
 - Keep recovery conservative: never delete or reset project files, only
   Librarian-managed runtime artifacts/containers.
 
@@ -1104,7 +1108,10 @@ readiness or a later planned milestone.
   and restores context-switch cards from chat history. Job review cards can now
   create commit/revert approval proposals from the UI and immediately swap into
   the same Approve/Reject card flow, so normal review does not require copying
-  approval ids.
+  approval ids. Follow-up pass refreshes approval records from the backend while
+  restoring chat history, so executed/rejected cards do not resurrect stale
+  pending buttons after reload; terminal approval cards collapse into compact
+  summaries with details behind a disclosure.
 - Keep chat latency visible: pending assistant messages should show an inline
   thinking/loading state, and completed turns should have backend timing events
   plus human-readable timing metadata in the UI. First UI pass now shows

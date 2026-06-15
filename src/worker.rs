@@ -745,6 +745,12 @@ fn failure_category(code: &'static str) -> FailureCategory {
             message: "The configured container runtime is not reachable.",
             next_step: "Start Docker/Podman, fix the runtime connection, or use the WSL Podman fallback.",
         },
+        "runtime_permission_denied" => FailureCategory {
+            code,
+            severity: "error",
+            message: "The worker or daemon user cannot access the container runtime socket.",
+            next_step: "Run `docker info` as the same user/session, fix docker group/socket permissions, then restart `librarian.service` or the worker process.",
+        },
         "agent_image_missing" => FailureCategory {
             code,
             severity: "error",
@@ -814,6 +820,13 @@ fn execution_error_category(error: &str) -> FailureCategory {
 
 fn output_failure_category(text: &str) -> Option<FailureCategory> {
     let lower = text.to_ascii_lowercase();
+    if lower.contains("permission denied")
+        && (lower.contains("docker api")
+            || lower.contains("docker.sock")
+            || lower.contains("/var/run/docker.sock"))
+    {
+        return Some(failure_category("runtime_permission_denied"));
+    }
     if lower.contains("cannot connect to podman")
         || lower.contains("docker daemon")
         || lower.contains("podman machine")
@@ -861,6 +874,15 @@ mod tests {
             output_failure_category("Cannot connect to Podman. Please verify your connection")
                 .expect("category");
         assert_eq!(category.code, "runtime_unavailable");
+    }
+
+    #[test]
+    fn categorizes_runtime_permission_denied_output_failure() {
+        let category = output_failure_category(
+            "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock",
+        )
+        .expect("category");
+        assert_eq!(category.code, "runtime_permission_denied");
     }
 
     #[test]
