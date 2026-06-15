@@ -84,6 +84,7 @@ async fn run_librarian_chat_loop_with_runner(
     let project_id = project.map(|project| project.id);
     let max_iterations = config.chat.max_iterations.clamp(1, 100);
     let mut context_packs = vec![initial_context_pack];
+    let job_snapshot = active_job_snapshot(db, project_id).await?;
     let mut tool_feedback = Vec::new();
     let mut trace = Vec::new();
     let mut last_raw_reply = String::new();
@@ -103,6 +104,7 @@ async fn run_librarian_chat_loop_with_runner(
             recent_turns,
             &context_packs,
             &librarian_instruction_blocks,
+            &job_snapshot,
             &tool_feedback,
             iteration,
             max_iterations,
@@ -463,6 +465,65 @@ For git clone, build, tests, refactors, or other open-ended project work, use to
 "#
 }
 
+async fn active_job_snapshot(db: &Database, project_id: Option<Uuid>) -> Result<String> {
+    let mut jobs = db
+        .list_jobs()
+        .await?
+        .into_iter()
+        .filter(|job| {
+            matches!(
+                job.status,
+                crate::domain::JobStatus::Queued
+                    | crate::domain::JobStatus::Preparing
+                    | crate::domain::JobStatus::Running
+                    | crate::domain::JobStatus::HeartbeatMissed
+            )
+        })
+        .filter(|job| project_id.is_none_or(|id| job.project_id == id))
+        .collect::<Vec<_>>();
+    jobs.sort_by_key(|job| job.created_at);
+    let mut lines = Vec::new();
+    for job in jobs.iter().take(8) {
+        let id = job.id.to_string();
+        let short_id = &id[..8];
+        let heartbeat = job
+            .last_heartbeat_at
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_else(|| "-".to_string());
+        lines.push(format!(
+            "- id={short_id}; status={:?}; provider={:?}; project_id={}; mount={:?}; network={:?}; updated={}; heartbeat={}; goal={}",
+            job.status,
+            job.provider,
+            job.project_id,
+            job.mount_mode,
+            job.network_mode,
+            job.updated_at.to_rfc3339(),
+            heartbeat,
+            compact_prompt_line(&job.goal, 180),
+        ));
+    }
+    if jobs.len() > lines.len() {
+        lines.push(format!(
+            "- ... {} more active jobs omitted",
+            jobs.len() - lines.len()
+        ));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn compact_prompt_line(value: &str, max_chars: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let mut output = normalized
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    output.push('…');
+    output
+}
+
 fn chat_provider_unavailable_result(
     config: &Config,
     error: anyhow::Error,
@@ -501,6 +562,7 @@ fn build_librarian_chat_prompt(
     recent_turns: &[ChatTurn],
     context_packs: &[ContextPack],
     instruction_blocks: &str,
+    job_snapshot: &str,
     tool_feedback: &[String],
     iteration: usize,
     max_iterations: usize,
@@ -536,6 +598,15 @@ fn build_librarian_chat_prompt(
     prompt.push_str("\n\n");
 
     prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));
+    prompt.push_str("## Active Agent Jobs\n\n");
+    if job_snapshot.trim().is_empty() {
+        prompt.push_str(
+            "No queued, preparing, running, or heartbeat-missed agent jobs in this scope.\n\n",
+        );
+    } else {
+        prompt.push_str(job_snapshot.trim());
+        prompt.push_str("\n\n");
+    }
     prompt.push_str(&format!(
         "## Loop Budget\n\nIteration {iteration} of {max_iterations}. Stop early and answer when you have enough context.\n\n"
     ));
@@ -852,7 +923,7 @@ mod tests {
     #[test]
     fn chat_prompt_lists_canonical_tool_manifest() {
         let config = Config::load_or_default(None).expect("config");
-        let prompt = build_librarian_chat_prompt(&config, "", None, &[], &[], "", &[], 1, 5);
+        let prompt = build_librarian_chat_prompt(&config, "", None, &[], &[], "", "", &[], 1, 5);
 
         assert!(prompt.contains("## Available Tool Actions"));
         assert!(prompt.contains("tool=agent, tool_action=launch"));
@@ -1027,6 +1098,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_prompt_includes_active_jobs_for_current_project() {
+        let home = std::env::current_dir()
+            .expect("current dir")
+            .join(format!(".librarian-test-chat-jobs-{}", Uuid::new_v4()));
+
+        {
+            let config = Config::load_or_default(Some(home.clone())).expect("config");
+            config.ensure_layout().expect("layout");
+            let db = Database::connect(&config).await.expect("db");
+            db.migrate().await.expect("migrate");
+            let matching_path = config.home.join("Projects").join("matching");
+            let other_path = config.home.join("Projects").join("other");
+            std::fs::create_dir_all(&matching_path).expect("matching workspace");
+            std::fs::create_dir_all(&other_path).expect("other workspace");
+            let matching_project = db
+                .add_project("Matching", &matching_path)
+                .await
+                .expect("matching project");
+            let other_project = db
+                .add_project("Other", &other_path)
+                .await
+                .expect("other project");
+            db.create_job(
+                matching_project.id,
+                crate::domain::ProviderKind::Codex,
+                "Clone the important repository.",
+                crate::domain::MountMode::ReadWrite,
+                crate::domain::NetworkMode::Open,
+                None,
+            )
+            .await
+            .expect("matching job");
+            db.create_job(
+                other_project.id,
+                crate::domain::ProviderKind::Codex,
+                "Do not include this unrelated job.",
+                crate::domain::MountMode::ReadWrite,
+                crate::domain::NetworkMode::Open,
+                None,
+            )
+            .await
+            .expect("other job");
+            let initial_context = ContextPack {
+                query: "status".to_string(),
+                project_id: Some(matching_project.id),
+                activity_id: None,
+                generated_at: chrono::Utc::now(),
+                hits: Vec::new(),
+            };
+            let mut runner = MockChatRunner::new(vec!["Jobs noted."]);
+
+            let result = run_librarian_chat_loop_with_runner(
+                &db,
+                &config,
+                "what is running?",
+                Some(&matching_project),
+                &[],
+                initial_context,
+                &mut runner,
+            )
+            .await
+            .expect("chat loop");
+
+            assert_eq!(result.iterations, 1);
+            assert!(runner.prompts[0].contains("## Active Agent Jobs"));
+            assert!(runner.prompts[0].contains("Clone the important repository."));
+            assert!(!runner.prompts[0].contains("Do not include this unrelated job."));
+        }
+
+        std::fs::remove_dir_all(home).ok();
+    }
+
+    #[tokio::test]
     async fn chat_loop_feedback_recovers_invalid_tool_proposal() {
         let home = std::env::current_dir().expect("current dir").join(format!(
             ".librarian-test-chat-tool-feedback-{}",
@@ -1156,6 +1300,7 @@ mod tests {
                 generated_at: chrono::Utc::now(),
                 hits: Vec::new(),
             }],
+            "",
             "",
             &[],
             1,

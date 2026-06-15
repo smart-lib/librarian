@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.26`; bump at least the minor version when a visible
+- Current crate version: `0.2.27`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -102,6 +102,11 @@ Status: Done.
   changing it through persisted config, CLI, and admin commands for stronger
   hosts.
 - Schedule create/update/delete, enable/disable, and manual run controls.
+
+Operational note: the worker and scheduler exist as long-running CLI loops
+(`librarian worker` and `librarian scheduler`), plus `--once` modes for manual
+tests. Librarian does not yet install or supervise them as system services, and
+the admin server does not currently embed an automatic worker loop.
 
 ## Milestone 5: Vector Memory
 
@@ -266,6 +271,10 @@ Tasks:
   that context in the top chat badge plus each message. Second backend pass adds
   explicit memory scope modes: current node, subtree, ancestors,
   node+ancestors, and selected context set.
+- Feed compact active job state into the Librarian chat prompt. Current pass
+  includes queued/preparing/running/heartbeat-missed jobs for the current
+  project context, or all active jobs in global context, so Librarian can answer
+  from SQLite job state instead of guessing from chat history.
 - Add permissioned dialogue-aware context switching. The `context_switch`
   policy controls whether Librarian may infer/switch context automatically:
   `deny` keeps the current/global context, `ask` is the default and should lead
@@ -867,6 +876,25 @@ Dependencies:
 - Existing job events.
 - Priority 4 preflight events improve this view but do not block the first UI
   pass.
+
+## Priority 6A: Worker And Scheduler Service Lifecycle
+
+Status: Planned.
+
+Goal: queued agent work should not depend on the user remembering to run a
+manual terminal command after approving a job.
+
+Tasks:
+
+- Add an install/start/stop/status surface for long-running worker and scheduler
+  processes on the current golden path, starting with Linux/Ubuntu systemd user
+  services.
+- Add doctor checks that report whether the worker loop and scheduler loop are
+  installed/running, and show the exact command to start them when they are not.
+- Add admin UI controls/readouts for worker service status, queue depth, active
+  jobs, and the next action needed to make queued jobs run.
+- Keep manual commands (`worker --once`, `worker`, `scheduler --once`,
+  `scheduler`) as explicit debugging and smoke-test paths.
 
 ## Priority 7: Runtime Cleanup and Failure Categories
 
