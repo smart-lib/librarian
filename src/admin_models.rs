@@ -23,6 +23,11 @@ pub struct LibrarianChatRequest {
     pub session_id: Option<uuid::Uuid>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct ApprovalDecisionRequest {
+    pub session_id: Option<uuid::Uuid>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChatSessionsQuery {
     pub limit: Option<i64>,

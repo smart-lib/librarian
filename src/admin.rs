@@ -1897,9 +1897,19 @@ async fn chat_session_turns(
 async fn approve_tool_approval(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<Uuid>,
+    request: Request<Body>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let input = approval_decision_request(request).await?;
     let config = state.config.read().await.clone();
     let (approval, output) = approve_and_execute_tool_approval(&state, &config, id).await?;
+    record_approval_decision_turn(
+        &state,
+        input.session_id,
+        &approval,
+        Some(&output),
+        "approved",
+    )
+    .await?;
     Ok(Json(serde_json::json!({
         "approval": approval,
         "output": output,
@@ -1909,9 +1919,82 @@ async fn approve_tool_approval(
 async fn reject_tool_approval(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<Uuid>,
+    request: Request<Body>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let input = approval_decision_request(request).await?;
     let approval = reject_tool_approval_by_id(&state, id).await?;
+    record_approval_decision_turn(&state, input.session_id, &approval, None, "rejected").await?;
     Ok(Json(serde_json::json!({ "approval": approval })))
+}
+
+async fn approval_decision_request(request: Request<Body>) -> Result<ApprovalDecisionRequest> {
+    let bytes = axum::body::to_bytes(request.into_body(), 16 * 1024)
+        .await
+        .context("read approval decision request")?;
+    if bytes.is_empty() {
+        return Ok(ApprovalDecisionRequest::default());
+    }
+    serde_json::from_slice(&bytes).context("parse approval decision request")
+}
+
+async fn record_approval_decision_turn(
+    state: &AppState,
+    session_id: Option<Uuid>,
+    approval: &crate::domain::ToolApproval,
+    output: Option<&serde_json::Value>,
+    decision: &str,
+) -> Result<()> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    if state.db.get_chat_session(session_id).await.is_err() {
+        return Ok(());
+    }
+    let content = approval_decision_turn_content(approval, output, decision);
+    state
+        .db
+        .add_chat_turn(
+            session_id,
+            "system",
+            &content,
+            None,
+            serde_json::json!({
+                "event": "approval_decision",
+                "approval_id": approval.id,
+                "tool": approval.tool,
+                "action": approval.action,
+                "decision": decision,
+                "output": output,
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+fn approval_decision_turn_content(
+    approval: &crate::domain::ToolApproval,
+    output: Option<&serde_json::Value>,
+    decision: &str,
+) -> String {
+    if decision == "approved" && approval.tool == "agent" && approval.action == "launch" {
+        let job_id = output
+            .and_then(|value| value.get("job"))
+            .and_then(|value| value.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let status = output
+            .and_then(|value| value.get("job"))
+            .and_then(|value| value.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Queued");
+        return format!(
+            "Approval approved for agent.launch. Background job {job_id} is {status}. This queued the job; it will run only when a Librarian worker is running."
+        );
+    }
+    format!(
+        "Approval {decision}: {}.{} ({})",
+        approval.tool, approval.action, approval.id
+    )
 }
 
 async fn resolve_chat_project_context(

@@ -1369,11 +1369,14 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
         return article;
       }
-      function setApprovalCard(article, approval, fallbackText, detail) {
+      function setApprovalCard(article, approval, fallbackText, detail, output) {
         const payload = approval?.payload || {};
+        const job = output?.job || null;
         const paths = [];
         if (payload.library_path) paths.push(`Knowledge base: ${payload.library_path}`);
         if (payload.workspace_path) paths.push(`Project folder: ${payload.workspace_path}`);
+        if (job?.id) paths.push(`Queued job: ${job.id}`);
+        if (job?.status) paths.push(`Job status: ${job.status}`);
         if (Array.isArray(payload.files)) {
           for (const file of payload.files.slice(0, 4)) {
             if (file?.path) paths.push(`File: ${file.path}`);
@@ -1381,17 +1384,29 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         }
         const summary = payload.summary || fallbackText || `${approval?.tool || 'tool'} ${approval?.action || 'action'}`;
         const terminal = approval?.status && approval.status !== 'Pending';
+        const approvedAgentLaunch = terminal && approval?.status === 'Executed' && approval?.tool === 'agent' && approval?.action === 'launch';
+        const headText = terminal
+          ? (approval?.status === 'Rejected' ? 'Approval rejected' : approvedAgentLaunch ? 'Agent job queued' : 'Approval complete')
+          : 'Approval needed';
+        const riskText = terminal
+          ? (approvedAgentLaunch ? 'Queued' : approval.status)
+          : 'Review';
+        const terminalNote = approvedAgentLaunch
+          ? 'The request is approved and queued. It will run when a Librarian worker is running.'
+          : terminal
+            ? approval.status
+            : '';
         article.className = 'message assistant approval';
         article.innerHTML = `
-          <div class="approval-head"><span>Approval needed</span><span class="approval-risk">Review</span></div>
+          <div class="approval-head"><span>${htmlEscape(headText)}</span><span class="approval-risk">${htmlEscape(riskText)}</span></div>
           <div class="approval-summary">${htmlEscape(summary)}</div>
           <div class="approval-paths">${paths.length ? paths.map(path => `<div>${htmlEscape(path)}</div>`).join('') : '<div>No paths declared.</div>'}</div>
-          <div class="approval-actions">
+          ${terminal ? '' : `<div class="approval-actions">
             <button type="button" data-approval-decision="approve">Approve</button>
             <button type="button" class="reject" data-approval-decision="reject">Reject</button>
-          </div>
-          <details><summary>Technical details</summary><pre>${htmlEscape(JSON.stringify({ id: approval?.id, tool: approval?.tool, action: approval?.action, payload }, null, 2))}</pre></details>
-          ${terminal ? `<div class="approval-status">${htmlEscape(approval.status)}</div>` : ''}
+          </div>`}
+          ${terminalNote ? `<div class="approval-status">${htmlEscape(terminalNote)}</div>` : ''}
+          <details><summary>Technical details</summary><pre>${htmlEscape(JSON.stringify({ id: approval?.id, tool: approval?.tool, action: approval?.action, payload, output }, null, 2))}</pre></details>
         `;
         if (detail) {
           const small = document.createElement('small');
@@ -1399,7 +1414,6 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           article.appendChild(small);
         }
         article.querySelectorAll('[data-approval-decision]').forEach(button => {
-          if (terminal) button.disabled = true;
           button.addEventListener('click', () => decideApproval(article, approval?.id, button.dataset.approvalDecision));
         });
         el('chat-log').scrollTop = el('chat-log').scrollHeight;
@@ -1628,12 +1642,23 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           status.className = 'approval-status';
           article.appendChild(status);
         }
-        status.textContent = decision === 'approve' ? 'Approving and running...' : 'Rejecting...';
+        status.textContent = decision === 'approve' ? 'Approving...' : 'Rejecting...';
         try {
-          const response = await fetch(`/api/approvals/${encodeURIComponent(approvalId)}/${decision}`, { method: 'POST' });
+          const response = await fetch(`/api/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ session_id: state.chatSessionId || null })
+          });
           const data = await response.json();
           if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-          status.textContent = decision === 'approve' ? 'Approved and executed.' : 'Rejected.';
+          const output = data.output || null;
+          const approval = data.approval || {};
+          const message = decision === 'approve' && output?.job
+            ? `Approved. Agent job queued: ${shortId(output.job.id)}. Start or keep a worker running to execute it.`
+            : decision === 'approve'
+              ? 'Approved and applied.'
+              : 'Rejected.';
+          setApprovalCard(article, approval, message, 'Approval decision', output);
           await refresh();
         } catch (error) {
           status.textContent = `Could not ${decision}: ${error.message || error}`;

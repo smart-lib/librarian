@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.25`; bump at least the minor version when a visible
+- Current crate version: `0.2.26`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -666,7 +666,10 @@ Permission model:
   separate `tool=agent` and `tool_action=launch` fields, while accepting the
   fully qualified `agent.launch` form as equivalent. Tool proposal validation
   errors now feed back into the Librarian chat loop as recoverable iteration
-  context instead of immediately surfacing as endpoint errors. Execution still
+  context instead of immediately surfacing as endpoint errors. Approval decisions
+  from the chat UI now collapse pending cards into terminal state, label
+  `agent.launch` results as queued background jobs, and write the decision back
+  into the chat transcript when a session id is available. Execution still
   passes through the normal permission gates and tool sandboxes.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
