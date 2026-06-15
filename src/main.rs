@@ -2068,7 +2068,7 @@ async fn main() -> Result<()> {
                 );
             }
             ServiceCommand::Start => {
-                service::start().await?;
+                service::start(&config).await?;
                 println!("Started {}.", service::SERVICE_NAME);
             }
             ServiceCommand::Stop => {
@@ -2076,11 +2076,11 @@ async fn main() -> Result<()> {
                 println!("Stopped {}.", service::SERVICE_NAME);
             }
             ServiceCommand::Restart => {
-                service::restart().await?;
+                service::restart(&config).await?;
                 println!("Restarted {}.", service::SERVICE_NAME);
             }
             ServiceCommand::Status => {
-                service::print_status().await?;
+                service::print_status(&config).await?;
             }
             ServiceCommand::Uninstall => {
                 service::uninstall().await?;
@@ -3815,7 +3815,10 @@ async fn run_doctor(config: &Config) -> Result<()> {
                     config,
                     &db.list_projects().await?,
                 ));
-                checks.push(daemon_service_check(service::status().await, queued_jobs));
+                checks.push(daemon_service_check(
+                    service::status(Some(config)).await,
+                    queued_jobs,
+                ));
                 DoctorCheck::ok(
                     "sqlite",
                     format!("opened and migrated {}", config.database_path.display()),
@@ -4286,7 +4289,7 @@ fn command_next_step(label: &str, detail: &str) -> &'static str {
         return "Start/fix Podman, or run `librarian runtime use-wsl-podman` if the WSL Podman machine is usable.";
     }
     if detail.contains("permission denied") && detail.contains("docker") {
-        return "Your user cannot access Docker yet. Open a new Ubuntu shell, or run the command through `sg docker -c 'librarian runtime build-agent-image'`.";
+        return "Docker works in the shell only if this process has docker group/socket access. For the daemon, run `librarian service restart`; if it still fails, restart the WSL distro or user systemd manager.";
     }
     match label {
         "container runtime" => {
@@ -4318,6 +4321,18 @@ fn daemon_service_check(status: service::ServiceStatus, queued_jobs: usize) -> D
         );
     }
     if status.active {
+        if let Some(probe) = status.runtime_probe.as_ref() {
+            if !probe.ok {
+                return DoctorCheck::error(
+                    "daemon service",
+                    format!(
+                        "{}; queued_jobs={queued_jobs}; runtime_probe={}",
+                        status.detail, probe.detail
+                    ),
+                    "Run `librarian service restart` to regenerate the user unit. If Docker still fails from the service context, restart the WSL distro or user systemd manager so docker group membership is refreshed.",
+                );
+            }
+        }
         return DoctorCheck::ok(
             "daemon service",
             format!(
@@ -4407,6 +4422,7 @@ mod tests {
                 active: false,
                 enabled: true,
                 detail: "librarian.service installed; active=false; enabled=true".to_string(),
+                runtime_probe: None,
             },
             2,
         );
@@ -4430,6 +4446,11 @@ mod tests {
                 active: true,
                 enabled: true,
                 detail: "librarian.service installed; active=true; enabled=true".to_string(),
+                runtime_probe: Some(service::ServiceRuntimeProbe {
+                    ok: true,
+                    detail: "runtime is reachable from the user service manager context"
+                        .to_string(),
+                }),
             },
             1,
         );
@@ -4438,6 +4459,32 @@ mod tests {
         assert!(check
             .detail
             .contains("autonomous worker/scheduler loop is active"));
+    }
+
+    #[test]
+    fn daemon_service_check_errors_when_active_runtime_probe_fails() {
+        let check = daemon_service_check(
+            service::ServiceStatus {
+                supported: true,
+                installed: true,
+                active: true,
+                enabled: true,
+                detail: "librarian.service installed; active=true; enabled=true; service runtime probe=failed".to_string(),
+                runtime_probe: Some(service::ServiceRuntimeProbe {
+                    ok: false,
+                    detail: "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock".to_string(),
+                }),
+            },
+            1,
+        );
+
+        assert_eq!(check.severity, DoctorSeverity::Error);
+        assert!(check.detail.contains("docker.sock"));
+        assert!(check
+            .next_step
+            .as_deref()
+            .expect("next step")
+            .contains("librarian service restart"));
     }
 
     #[test]

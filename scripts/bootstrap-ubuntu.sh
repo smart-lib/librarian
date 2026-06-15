@@ -225,8 +225,7 @@ fi
 "$bin" --home "$librarian_home" setup --yes --runtime host --skip-doctor
 "$bin" --home "$librarian_home" config show >/dev/null
 if [[ "$librarian_service_was_active" -eq 1 ]] && command -v systemctl >/dev/null 2>&1; then
-  systemctl --user daemon-reload || true
-  systemctl --user start librarian.service || true
+  "$bin" --home "$librarian_home" service install --enable --start || systemctl --user start librarian.service || true
 fi
 
 python3 - "$librarian_home/.cfg/config.toml" "$bind" <<'PY'

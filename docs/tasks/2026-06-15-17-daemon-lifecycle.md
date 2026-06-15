@@ -75,6 +75,11 @@ the worker lifecycle contract.
 - Doctor reports daemon/service status and warns when queued jobs cannot run
   because no daemon/worker is active.
 - Ubuntu upgrade stops/restarts the daemon service when appropriate.
+- Follow-up repair: service install/start/restart regenerates the user unit,
+  includes `SupplementaryGroups=docker` when the current user is in the docker
+  group, and doctor/status probe the configured runtime through `systemd-run
+  --user` so Docker socket permission mismatches in the service context are
+  visible instead of looking like agent failures.
 - Tests cover unit rendering/status logic that does not require a real systemd
   session.
 - Roadmap and version are updated.
