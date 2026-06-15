@@ -8,6 +8,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
     process::Command,
 };
+use uuid::Uuid;
 
 use crate::{
     config::Config,
@@ -366,15 +367,19 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
                 json!({ "status": format!("{:?}", final_status), "exit_code": code }),
             )
             .await?;
-            db.add_job_event(
-                job.id,
-                "failure_category",
-                json!({
-                    "category": exit_failure_category(code, matches!(final_status, JobStatus::Cancelled)),
-                    "exit_code": code,
-                }),
-            )
-            .await?;
+            let final_category =
+                exit_failure_category(code, matches!(final_status, JobStatus::Cancelled));
+            if !should_skip_final_failure_category(&db, job.id, &final_category).await? {
+                db.add_job_event(
+                    job.id,
+                    "failure_category",
+                    json!({
+                        "category": final_category,
+                        "exit_code": code,
+                    }),
+                )
+                .await?;
+            }
             router::record_job_usage_estimate(&db, &job, prompt_len, Some(code)).await?;
             let path = vault.write_run_summary(
                 &project,
@@ -851,6 +856,30 @@ fn output_failure_category(text: &str) -> Option<FailureCategory> {
     None
 }
 
+async fn should_skip_final_failure_category(
+    db: &Database,
+    job_id: Uuid,
+    category: &FailureCategory,
+) -> Result<bool> {
+    if !matches!(category.code, "nonzero_exit" | "unknown_failure") {
+        return Ok(false);
+    }
+    let events = db.list_job_events(job_id).await?;
+    Ok(events.iter().any(|event| {
+        event.kind == "failure_category"
+            && event
+                .payload
+                .get("category")
+                .and_then(|category| category.get("code"))
+                .and_then(|code| code.as_str())
+                .is_some_and(is_specific_failure_category)
+    }))
+}
+
+fn is_specific_failure_category(code: &str) -> bool {
+    !matches!(code, "nonzero_exit" | "unknown_failure")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -906,6 +935,49 @@ mod tests {
     #[test]
     fn categorizes_cancelled_exit() {
         assert_eq!(exit_failure_category(1, true).code, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn skips_generic_final_category_after_specific_runtime_category() {
+        let (config, db, home) = test_config_and_db("failure-category-priority").await;
+        let project_path = home.join("Projects").join("Priority");
+        std::fs::create_dir_all(&project_path).expect("project dir");
+        let project = db
+            .add_project("Priority", &project_path)
+            .await
+            .expect("project");
+        let job = db
+            .create_job(
+                project.id,
+                ProviderKind::Codex,
+                "Trigger a runtime permission failure.",
+                MountMode::ReadWrite,
+                NetworkMode::Open,
+                None,
+            )
+            .await
+            .expect("job");
+        db.add_job_event(
+            job.id,
+            "failure_category",
+            json!({ "category": failure_category("runtime_permission_denied") }),
+        )
+        .await
+        .expect("failure category");
+
+        assert!(
+            should_skip_final_failure_category(&db, job.id, &failure_category("nonzero_exit"))
+                .await
+                .expect("skip check")
+        );
+        assert!(
+            !should_skip_final_failure_category(&db, job.id, &failure_category("cancelled"))
+                .await
+                .expect("cancelled check")
+        );
+
+        drop(config);
+        std::fs::remove_dir_all(home).ok();
     }
 
     #[tokio::test]

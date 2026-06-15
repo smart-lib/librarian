@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.29`; bump at least the minor version when a visible
+- Current crate version: `0.2.30`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -923,7 +923,9 @@ Tasks:
 - Add structured failure categories where the worker currently records generic
   errors. First pass is implemented; expand as real provider/runtime failures
   are observed. Current pass adds `runtime_permission_denied` for Docker socket
-  access failures such as `permission denied ... /var/run/docker.sock`.
+  access failures such as `permission denied ... /var/run/docker.sock`, and
+  keeps that specific category from being overwritten by the generic final
+  `nonzero_exit` category.
 - Keep recovery conservative: never delete or reset project files, only
   Librarian-managed runtime artifacts/containers.
 

@@ -33,7 +33,8 @@ page reload, so already executed approvals could show buttons again.
 - `admin_ui.rs` refreshes approval status while restoring chat history and uses a
   compact terminal approval-card layout.
 - `worker.rs` emits `runtime_permission_denied` for Docker socket permission
-  errors.
+  errors, and generic final exit categories no longer overwrite a more specific
+  category already observed from stdout/stderr.
 
 ## Validation
 
