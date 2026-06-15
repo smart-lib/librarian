@@ -28,7 +28,8 @@ use crate::{
     config::{Config, ToolPermissionPolicy, ToolPermissionPreset, ToolPermissionsConfig},
     db::Database,
     domain::{
-        JobStatus, MemoryKind, MountMode, Project, ScheduleKind, ScheduleStatus, ToolApprovalStatus,
+        Job, JobStatus, MemoryKind, MountMode, Project, ScheduleKind, ScheduleStatus,
+        ToolApprovalStatus,
     },
     gates, job_review, library_tools,
     library_tools::LibraryRoot,
@@ -4700,67 +4701,10 @@ async fn execute_agent_slash_command(
                     }),
                 ));
             }
-            let project = state.db.get_project_by_name_or_id(&request.project).await?;
-            let network_mode = router::default_network_mode_for_provider(
-                &request.provider,
-                request.allow_network,
-                request.secret_grant_token.is_some(),
-            );
-            let mount_mode = if request.read_only {
-                MountMode::ReadOnly
-            } else {
-                MountMode::ReadWrite
-            };
-            agent_policy::ensure_agent_job_allowed(
-                &project,
-                mount_mode,
-                JobCreationSource::ExplicitUserAction,
-            )?;
-            let job = state
-                .db
-                .create_job(
-                    project.id,
-                    request.provider,
-                    &request.goal,
-                    mount_mode,
-                    network_mode,
-                    request.secret_grant_token.as_deref(),
-                )
-                .await?;
-            let context_pack = memory::retrieve_context_with_config(
-                &state.db,
-                Some(config),
-                memory::RetrievalRequest {
-                    query: request.goal.clone(),
-                    project_id: Some(project.id),
-                    activity_id: None,
-                    limit: config.chat.memory_hit_limit,
-                },
-            )
-            .await?;
-            state
-                .db
-                .add_job_event(
-                    job.id,
-                    "context_pack",
-                    serde_json::json!({
-                        "query": context_pack.query,
-                        "generated_at": context_pack.generated_at,
-                        "hits": context_pack.hits,
-                    }),
-                )
-                .await?;
-            state
-                .db
-                .add_job_event(
-                    job.id,
-                    "queued_from_chat",
-                    serde_json::json!({
-                        "source": "slash-command",
-                        "project": project.name,
-                    }),
-                )
-                .await?;
+            let request = AgentLaunchRequest::from(request);
+            let goal = request.goal.clone();
+            let (job, project) =
+                queue_agent_launch(state, config, request, "slash-command").await?;
             agent_slash_reply(
                 &format!(
                     "Queued background agent job.\n{}\n\nRun `librarian worker --once` or keep a worker running to execute it.",
@@ -4772,7 +4716,7 @@ async fn execute_agent_slash_command(
                     "command": command,
                     "job": job,
                     "project": project.name,
-                    "goal": request.goal,
+                    "goal": goal,
                 }),
             )
         }
@@ -4854,6 +4798,99 @@ struct AgentLaunchSlashRequest {
     allow_network: bool,
     read_only: bool,
     confirmed: bool,
+}
+
+struct AgentLaunchRequest {
+    project: String,
+    goal: String,
+    provider: crate::domain::ProviderKind,
+    secret_grant_token: Option<String>,
+    allow_network: bool,
+    read_only: bool,
+}
+
+impl From<AgentLaunchSlashRequest> for AgentLaunchRequest {
+    fn from(request: AgentLaunchSlashRequest) -> Self {
+        Self {
+            project: request.project,
+            goal: request.goal,
+            provider: request.provider,
+            secret_grant_token: request.secret_grant_token,
+            allow_network: request.allow_network,
+            read_only: request.read_only,
+        }
+    }
+}
+
+async fn queue_agent_launch(
+    state: &AppState,
+    config: &Config,
+    request: AgentLaunchRequest,
+    source: &str,
+) -> Result<(Job, Project)> {
+    let project = state.db.get_project_by_name_or_id(&request.project).await?;
+    let network_mode = router::default_network_mode_for_provider(
+        &request.provider,
+        request.allow_network,
+        request.secret_grant_token.is_some(),
+    );
+    let mount_mode = if request.read_only {
+        MountMode::ReadOnly
+    } else {
+        MountMode::ReadWrite
+    };
+    agent_policy::ensure_agent_job_allowed(
+        &project,
+        mount_mode,
+        JobCreationSource::ExplicitUserAction,
+    )?;
+    let job = state
+        .db
+        .create_job(
+            project.id,
+            request.provider,
+            &request.goal,
+            mount_mode,
+            network_mode,
+            request.secret_grant_token.as_deref(),
+        )
+        .await?;
+    let context_pack = memory::retrieve_context_with_config(
+        &state.db,
+        Some(config),
+        memory::RetrievalRequest {
+            query: request.goal.clone(),
+            project_id: Some(project.id),
+            activity_id: None,
+            limit: config.chat.memory_hit_limit,
+        },
+    )
+    .await?;
+    state
+        .db
+        .add_job_event(
+            job.id,
+            "context_pack",
+            serde_json::json!({
+                "query": context_pack.query,
+                "generated_at": context_pack.generated_at,
+                "hits": context_pack.hits,
+            }),
+        )
+        .await?;
+    state
+        .db
+        .add_job_event(
+            job.id,
+            "queued_from_chat",
+            serde_json::json!({
+                "source": source,
+                "project": project.name,
+            }),
+        )
+        .await?;
+
+    Ok((job, project))
 }
 
 fn parse_agent_launch_args(args: &[String]) -> Result<AgentLaunchSlashRequest> {

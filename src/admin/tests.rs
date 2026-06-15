@@ -654,6 +654,77 @@ async fn explicit_agent_slash_command_creates_one_queued_job() {
     std::fs::remove_dir_all(home).ok();
 }
 
+#[tokio::test]
+async fn approval_agent_launch_queues_one_background_job() {
+    let home = std::env::current_dir()
+        .expect("current dir")
+        .join(format!(".librarian-test-agent-approval-{}", Uuid::new_v4()));
+
+    {
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+        let db = Database::connect(&config).await.expect("db");
+        db.migrate().await.expect("migrate");
+        let workspace_path = config
+            .home
+            .join("Projects")
+            .join("sites")
+            .join("nomorecare.gg");
+        std::fs::create_dir_all(&workspace_path).expect("workspace");
+        let project = db
+            .add_project("Nomorecare Gg", &workspace_path)
+            .await
+            .expect("project");
+        let approval = db
+            .create_tool_approval(
+                "agent",
+                "launch",
+                serde_json::json!({
+                    "project": "Nomorecare Gg",
+                    "summary": "Clone the site repository into the current empty workspace.",
+                    "goal": "Clone git@github.com:no-more-care/nomorecare.gg.git into the current empty workspace.",
+                    "provider": "codex",
+                    "read_only": false,
+                    "allow_network": true
+                }),
+            )
+            .await
+            .expect("approval");
+        let state = AppState {
+            db: db.clone(),
+            config: Arc::new(RwLock::new(config.clone())),
+        };
+
+        let result = execute_approval_slash_command(
+            &state,
+            &config,
+            &["approve".to_string(), approval.id.to_string()],
+        )
+        .await
+        .expect("approve");
+
+        assert!(result.reply.contains("Approved and executed"));
+        let jobs = db.list_jobs().await.expect("jobs");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].project_id, project.id);
+        assert!(matches!(jobs[0].status, JobStatus::Queued));
+        assert!(matches!(jobs[0].mount_mode, MountMode::ReadWrite));
+        assert!(matches!(
+            jobs[0].network_mode,
+            crate::domain::NetworkMode::Open
+        ));
+        assert!(jobs[0]
+            .goal
+            .contains("git@github.com:no-more-care/nomorecare.gg.git"));
+        let events = db.list_job_events(jobs[0].id).await.expect("events");
+        assert!(events.iter().any(|event| {
+            event.kind == "queued_from_chat" && event.payload["source"] == "approval"
+        }));
+    }
+
+    std::fs::remove_dir_all(home).ok();
+}
+
 #[test]
 fn splits_quoted_slash_command_arguments() {
     let args = split_slash_args(r#"mkdir library "Project Shelf/Book Notes""#).expect("args");

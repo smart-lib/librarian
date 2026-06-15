@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.22`; bump at least the minor version when a visible
+- Current crate version: `0.2.23`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -658,8 +658,12 @@ Permission model:
   executor pass expands approved actions to library move/delete and line/search
   Markdown edits, workspace create/move/delete, and starter project creation.
   Third pass validates assistant-emitted tool/action/payload contracts before
-  creating approval records, including section-edit actions. Execution still
-  passes through the normal permission gates and tool sandboxes.
+  creating approval records, including section-edit actions. Fourth pass renders
+  a canonical tool/action manifest into the Librarian chat prompt and adds the
+  generic `agent.launch` approval path, so open-ended work such as cloning a git
+  repository is queued as a normal background agent job instead of becoming a
+  one-off invented tool action. Execution still passes through the normal
+  permission gates and tool sandboxes.
 - All tool calls, including denied and direct slash-command calls, are logged to
   history/system events so Librarian can account for them in future context.
   First pass logs `tool_permission` decisions and mutating library/workspace
@@ -912,7 +916,10 @@ Tasks:
   context filtering test excludes the old local-memory responder echoes.
 - Add tests for the explicit chat-to-agent boundary. First pass done: `/agent
   launch ... --yes` through `/api/chat` creates exactly one queued job and a
-  `queued_from_chat` event.
+  `queued_from_chat` event. Follow-up coverage verifies that approved
+  `agent.launch` proposals queue the same kind of background job and that
+  invented agent action names are rejected with guidance to use the canonical
+  action.
 - Add tests for bounded iterative chat behavior. First pass done: mock-runner
   coverage verifies that repeated `search_memory` directives stop at
   `[chat].max_iterations` without calling the real provider.

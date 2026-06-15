@@ -239,6 +239,20 @@ async fn run_librarian_chat_loop_with_runner(
                     directive.payload,
                 )?;
                 if let Some(object) = payload.as_object_mut() {
+                    if tool == "agent"
+                        && matches!(tool_action.as_str(), "launch" | "queue")
+                        && object.get("project").is_none()
+                    {
+                        let Some(project) = project else {
+                            anyhow::bail!(
+                                "Agent launch proposals require a current project context or payload.project"
+                            );
+                        };
+                        object.insert(
+                            "project".to_string(),
+                            serde_json::json!(project.name.clone()),
+                        );
+                    }
                     object.insert(
                         "chat_scope".to_string(),
                         serde_json::json!(project.map(|project| project.name.clone())),
@@ -344,6 +358,10 @@ fn validate_tool_proposal(
         ("project", action) if is_project_creation_tool_action(action) => &["library_path"][..],
         ("memory", "remember" | "add") => &["content"][..],
         ("prompt", "add_block" | "add-block") => &["target", "name", "content"],
+        ("agent", "launch" | "queue") => &["goal"][..],
+        ("agent", _) => anyhow::bail!(
+            "Unsupported agent proposal `{tool}.{action}`. Use exact action `agent.launch` and put the requested work in payload.goal."
+        ),
         _ => anyhow::bail!("Unsupported tool proposal `{tool}.{action}`"),
     };
     for key in required {
@@ -368,6 +386,34 @@ fn is_project_creation_tool_action(action: &str) -> bool {
             | "create_project_library_and_workspace"
             | "create_library_and_workspace"
     )
+}
+
+fn available_tool_actions_prompt() -> &'static str {
+    r#"Only these exact tool/action pairs are available. Do not invent action names.
+
+- library.create_folder: create a folder under Library. Required payload: path.
+- library.create_file: create a file under Library. Required payload: path.
+- library.write_markdown: overwrite a Markdown file under Library. Required payload: path, content.
+- library.append_markdown: append Markdown under Library. Required payload: path, content.
+- library.move: move a Library item. Required payload: from, to.
+- library.delete: delete a Library item. Required payload: path.
+- library.replace_lines: replace an inclusive line range in a Library Markdown file. Required payload: path, start_line, end_line, content.
+- library.cut_lines: remove an inclusive line range in a Library Markdown file. Required payload: path, start_line, end_line.
+- library.replace_find: replace text found in a Library Markdown file. Required payload: path, query, content.
+- library.cut_find: remove text found in a Library Markdown file. Required payload: path, query.
+- library.replace_section: replace a Markdown heading section under Library. Required payload: path, heading, content.
+- library.cut_section: remove a Markdown heading section under Library. Required payload: path, heading.
+- workspace.create_folder: create a folder under Projects. Required payload: path.
+- workspace.create_file: create a file under Projects. Required payload: path.
+- workspace.move: move a Projects item. Required payload: from, to.
+- workspace.delete: delete a Projects item. Required payload: path.
+- project.create_starting_docs_and_project_folder: create a Library documentation node plus a matching project workspace. Required payload: library_path. Optional payload: name, workspace_path, summary, files.
+- memory.remember: store durable memory. Required payload: content.
+- prompt.add_block: add a prompt-builder block. Required payload: target, name, content.
+- agent.launch: queue background project work for an agent. Required payload: goal. Optional payload: project, provider, read_only, allow_network, secret_grant_token.
+
+For git clone, build, tests, refactors, or other open-ended project work, use agent.launch. Put the complete task in payload.goal. Do not create clone/build/test-specific tool_action names.
+"#
 }
 
 fn chat_provider_unavailable_result(
@@ -435,7 +481,11 @@ fn build_librarian_chat_prompt(
         prompt.push_str(instruction_blocks.trim());
         prompt.push_str("\n\n");
     }
-    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}. If the user asks you to perform a concrete tool action that should require approval, do not claim it is done; reply with {\"action\":\"propose_tool\",\"tool\":\"library|workspace|project|agent|prompt|settings\",\"tool_action\":\"specific action\",\"payload\":{\"summary\":\"what would be done\",\"name\":\"human name when relevant\",\"path\":\"relative path when relevant\",\"from\":\"relative source path for moves\",\"to\":\"relative destination path for moves\",\"library_path\":\"relative Library path when relevant\",\"workspace_path\":\"relative Projects path or existing absolute path when relevant\",\"content\":\"markdown content when relevant\",\"start_line\":1,\"end_line\":1,\"query\":\"search text when relevant\",\"recursive\":false,\"files\":[{\"path\":\"relative Library markdown path\",\"content\":\"markdown content\"}]},\"reason\":\"why approval is needed\"}. Known library actions include create_folder, create_file, write_markdown, append_markdown, move, delete, replace_lines, cut_lines, replace_find, and cut_find. Known workspace actions include create_folder, create_file, move, and delete. For project creation use the canonical project action create_starting_docs_and_project_folder with library_path, optional name, optional workspace_path, summary, and optional files. The payload must be structured enough for the tool to execute after user approval. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
+    prompt.push_str("You may answer directly in plain text. If and only if you need another memory search before answering, reply with a single JSON object and no prose: {\"action\":\"search_memory\",\"query\":\"short search query\",\"reason\":\"why this extra lookup is needed\"}. If you need the user to clarify, reply with {\"action\":\"clarify\",\"question\":\"your question\"}.\n\n");
+    prompt.push_str("If the user asks you to perform a concrete tool action that should require approval, do not claim it is done. Reply with one JSON object and no prose: {\"action\":\"propose_tool\",\"tool\":\"library|workspace|project|agent|prompt|memory\",\"tool_action\":\"one exact action from Available Tool Actions\",\"payload\":{\"summary\":\"what would be done\"},\"reason\":\"why approval is needed\"}. The payload must be structured enough for the tool to execute after user approval. If you use JSON, it is an internal control message and will not be shown directly.\n\n");
+    prompt.push_str("## Available Tool Actions\n\n");
+    prompt.push_str(available_tool_actions_prompt());
+    prompt.push_str("\n\n");
 
     prompt.push_str(&format!("## Current Scope\n\n{scope}\n\n"));
     prompt.push_str(&format!(
@@ -701,6 +751,47 @@ mod tests {
         assert_eq!(tool, "project");
         assert_eq!(action, "create_site_library_and_project_folder");
         assert_eq!(payload["library_path"], "sites/nomorecare.gg");
+    }
+
+    #[test]
+    fn validates_canonical_agent_launch_only() {
+        let (tool, action, payload) = validate_tool_proposal(
+            Some("agent"),
+            Some("launch"),
+            Some(serde_json::json!({
+                "goal": "Clone git@github.com:no-more-care/nomorecare.gg.git into the empty workspace.",
+                "allow_network": true
+            })),
+        )
+        .expect("proposal");
+
+        assert_eq!(tool, "agent");
+        assert_eq!(action, "launch");
+        assert_eq!(
+            payload["goal"],
+            "Clone git@github.com:no-more-care/nomorecare.gg.git into the empty workspace."
+        );
+
+        let error = validate_tool_proposal(
+            Some("agent"),
+            Some("clone_repository_into_project_folder"),
+            Some(serde_json::json!({
+                "goal": "Clone git@github.com:no-more-care/nomorecare.gg.git"
+            })),
+        )
+        .expect_err("invented action must fail")
+        .to_string();
+        assert!(error.contains("Use exact action `agent.launch`"));
+    }
+
+    #[test]
+    fn chat_prompt_lists_canonical_tool_manifest() {
+        let config = Config::load_or_default(None).expect("config");
+        let prompt = build_librarian_chat_prompt(&config, "", None, &[], &[], "", 1, 5);
+
+        assert!(prompt.contains("## Available Tool Actions"));
+        assert!(prompt.contains("agent.launch"));
+        assert!(prompt.contains("Do not invent action names"));
     }
 
     #[test]

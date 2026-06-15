@@ -626,6 +626,40 @@ pub(super) async fn execute_approved_tool_approval(
                 .await?;
             Ok(serde_json::json!({ "block_id": block.id, "target": block.target }))
         }
+        ("agent", "launch" | "queue") => {
+            ensure_tool_permission(
+                &state.db,
+                config,
+                "agent.launch",
+                config.tool_permissions.agent_launch,
+            )
+            .await?;
+            let project =
+                approval_payload_string_any(&approval.payload, &["project", "chat_scope"])?;
+            let goal = approval_payload_string(&approval.payload, "goal")?;
+            let provider = approval_payload_optional_string(&approval.payload, "provider")
+                .map(|value| router::parse_provider_kind(&value))
+                .transpose()?
+                .unwrap_or(crate::domain::ProviderKind::Codex);
+            let secret_grant_token =
+                approval_payload_optional_string(&approval.payload, "secret_grant_token");
+            let request = AgentLaunchRequest {
+                project,
+                goal,
+                provider,
+                secret_grant_token,
+                allow_network: approval_payload_bool(&approval.payload, "allow_network")
+                    .unwrap_or(false),
+                read_only: approval_payload_bool(&approval.payload, "read_only").unwrap_or(false),
+            };
+            let goal = request.goal.clone();
+            let (job, project) = queue_agent_launch(state, config, request, "approval").await?;
+            Ok(serde_json::json!({
+                "job": job,
+                "project": project,
+                "goal": goal,
+            }))
+        }
         ("git", "commit") => execute_git_commit_approval(state, approval).await,
         ("git", "revert") => execute_git_revert_approval(state, approval).await,
         ("git", "push") => {
