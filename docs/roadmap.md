@@ -9,7 +9,7 @@ the product direction.
 - Branch: `develop`.
 - Baseline checkpoint: `main` contains the initial scaffold commit.
 - Current phase: working Librarian chat MVP.
-- Current crate version: `0.2.31`; bump at least the minor version when a visible
+- Current crate version: `0.2.32`; bump at least the minor version when a visible
   MVP capability group lands, not only patch fixes.
 - Next implementation focus: harden provider-backed chat/tools into reliable
   user workflows: context-aware memory, tool execution approvals, prompt
@@ -1103,7 +1103,9 @@ readiness or a later planned milestone.
   routing. First agent pass returns `agent_action` metadata for `/agent list`,
   `/agent status`, `/agent events`, `/agent preflight`, `/agent launch`,
   `/agent cancel`, and `/agent retry`; the chat UI renders it as a compact
-  card and restores it from chat history.
+  card and restores it from chat history. Follow-up pass refreshes job-backed
+  cards from `/api/jobs/:id` during transcript restore so stale queued cards
+  become failed/completed/running after a page reload.
 - Replace raw approval slash output with first-class chat approval cards:
   summarize the requested action in human language, show affected paths and
   risk level, and provide Approve/Reject buttons. Keep approval ids available

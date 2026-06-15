@@ -1501,6 +1501,31 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
       function agentJobStatus(job) {
         return job?.status || job?.state || job?.status_label || 'Queued';
       }
+      async function latestAgentActionSnapshot(ui) {
+        const job = agentJobFromUi(ui);
+        const jobId = ui?.job_id || job?.id || '';
+        if (!jobId) return ui;
+        const latestJob = await loadJson(`/api/jobs/${encodeURIComponent(jobId)}`, null);
+        if (!latestJob?.id) return ui;
+        return {
+          ...ui,
+          job: latestJob,
+          job_id: latestJob.id,
+          status: agentJobStatus(latestJob)
+        };
+      }
+      function agentActionTitle(command, status) {
+        const normalized = String(status || '').toLowerCase();
+        if (normalized === 'failed') return 'Background agent failed';
+        if (normalized === 'completed') return 'Background agent completed';
+        if (normalized === 'cancelled') return 'Background agent cancelled';
+        if (normalized === 'running') return 'Background agent running';
+        if (normalized === 'preparing') return 'Background agent preparing';
+        if (normalized === 'queued') return 'Background agent queued';
+        if (command === 'preflight') return 'Agent preflight';
+        if (command === 'list') return 'Agent jobs';
+        return 'Agent action';
+      }
       function setAgentActionCard(article, ui, fallbackText, detail) {
         const job = agentJobFromUi(ui);
         const jobId = ui?.job_id || job?.id || '';
@@ -1508,16 +1533,12 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
         const status = ui?.status || (job ? agentJobStatus(job) : 'ready');
         const project = ui?.project || job?.project_name || job?.project || '';
         const goal = ui?.goal || job?.goal || fallbackText || '';
-        const title = command === 'launch' || command === 'queue'
-          ? 'Background agent queued'
-          : command === 'preflight'
-            ? 'Agent preflight'
-            : command === 'list'
-              ? 'Agent jobs'
-              : 'Agent action';
+        const title = agentActionTitle(command, status);
         const rows = [];
         if (project) rows.push(`Project: ${project}`);
         if (jobId) rows.push(`Job: ${jobId}`);
+        if (job?.updated_at) rows.push(`Updated: ${job.updated_at}`);
+        if (job?.finished_at) rows.push(`Finished: ${job.finished_at}`);
         if (goal) rows.push(`Goal: ${goal}`);
         if (Array.isArray(ui?.jobs)) rows.push(`Jobs shown: ${ui.jobs.length}`);
         article.className = 'message assistant agent-card';
@@ -1815,7 +1836,8 @@ pub fn chat_first_app_html(bind: &str, worker_concurrency: usize) -> String {
           } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'context_switch') {
             setContextSwitchCard(article, turn.metadata.ui, assistantName());
           } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'agent_action') {
-            setAgentActionCard(article, turn.metadata.ui, turn.content, assistantName());
+            const ui = await latestAgentActionSnapshot(turn.metadata.ui);
+            setAgentActionCard(article, ui, turn.content, assistantName());
           } else if (turn.role === 'assistant' && turn.metadata?.ui?.type === 'job_review') {
             setJobReviewCard(article, turn.metadata.ui, turn.content, assistantName());
           }
