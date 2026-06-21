@@ -10,6 +10,7 @@ mod db;
 mod docker_runner;
 mod domain;
 mod gates;
+mod git_proxy;
 mod job_review;
 mod library_tools;
 mod memory;
@@ -1312,6 +1313,7 @@ async fn main() -> Result<()> {
                 mount_mode: job.mount_mode,
                 network_mode: job.network_mode,
                 secret_grant_token,
+                git_grant_token: None,
             };
             let runner = DockerRunner::new(config.clone());
             let docker_command = runner.docker_command_parts(&spec).await?;
@@ -3673,6 +3675,7 @@ async fn run_claude_launch_contract_smoke(config: &Config) -> Result<()> {
         mount_mode: MountMode::ReadOnly,
         network_mode: domain::NetworkMode::Provider,
         secret_grant_token: None,
+        git_grant_token: None,
     };
     let command = DockerRunner::new(smoke_config)
         .docker_command_parts(&spec)

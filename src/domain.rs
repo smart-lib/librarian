@@ -338,6 +338,7 @@ pub struct AgentRunSpec {
     pub mount_mode: MountMode,
     pub network_mode: NetworkMode,
     pub secret_grant_token: Option<String>,
+    pub git_grant_token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -47,6 +47,11 @@ impl DockerRunner {
             NetworkMode::Provider | NetworkMode::Open => {}
         }
 
+        if spec.secret_grant_token.is_some() || spec.git_grant_token.is_some() {
+            parts.push("--add-host".to_string());
+            parts.push("host.containers.internal:host-gateway".to_string());
+        }
+
         if let Some(token) = &spec.secret_grant_token {
             parts.push("--env".to_string());
             parts.push(format!("LIBRARIAN_SECRET_GRANT_TOKEN={token}"));
@@ -55,6 +60,18 @@ impl DockerRunner {
                 "LIBRARIAN_BROKER_URL={}",
                 self.config.broker.container_url
             ));
+        }
+        if let Some(token) = &spec.git_grant_token {
+            write_git_proxy_wrapper(&run_dir)?;
+            parts.push("--env".to_string());
+            parts.push(format!("LIBRARIAN_GIT_GRANT_TOKEN={token}"));
+            parts.push("--env".to_string());
+            parts.push(format!(
+                "LIBRARIAN_BROKER_URL={}",
+                self.config.broker.container_url
+            ));
+            parts.push("--mount".to_string());
+            parts.push(git_wrapper_mount(&self.config, &run_dir));
         }
         prepare_ssh_known_hosts(&run_dir)?;
         parts.push("--env".to_string());
@@ -235,6 +252,82 @@ fn run_mount(config: &Config, run_dir: &std::path::Path) -> String {
     )
 }
 
+fn git_wrapper_mount(config: &Config, run_dir: &std::path::Path) -> String {
+    format!(
+        "type=bind,source={},target=/usr/local/bin/git,readonly",
+        mount_source(config, &run_dir.join("git"))
+    )
+}
+
+fn write_git_proxy_wrapper(run_dir: &std::path::Path) -> Result<()> {
+    let path = run_dir.join("git");
+    fs::write(&path, GIT_PROXY_WRAPPER)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("Failed to chmod {}", path.display()))?;
+    }
+    Ok(())
+}
+
+const GIT_PROXY_WRAPPER: &str = r#"#!/usr/bin/env node
+const http = require('http');
+
+const token = process.env.LIBRARIAN_GIT_GRANT_TOKEN;
+const base = process.env.LIBRARIAN_BROKER_URL;
+if (!token || !base) {
+  console.error('LIBRARIAN_DIAGNOSTIC git_proxy_missing: brokered git is not configured for this agent job');
+  process.exit(126);
+}
+
+const url = new URL('/v1/git/execute', base);
+const body = JSON.stringify({
+  token,
+  cwd: process.cwd(),
+  argv: process.argv.slice(2)
+});
+
+const req = http.request({
+  hostname: url.hostname,
+  port: url.port || 80,
+  path: url.pathname,
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'content-length': Buffer.byteLength(body)
+  }
+}, (res) => {
+  let chunks = '';
+  res.setEncoding('utf8');
+  res.on('data', chunk => chunks += chunk);
+  res.on('end', () => {
+    let payload;
+    try {
+      payload = JSON.parse(chunks || '{}');
+    } catch (error) {
+      console.error(chunks);
+      process.exit(1);
+    }
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      console.error(payload.error || chunks || `git proxy failed with HTTP ${res.statusCode}`);
+      process.exit(1);
+    }
+    if (payload.stdout) process.stdout.write(payload.stdout);
+    if (payload.stderr) process.stderr.write(payload.stderr);
+    process.exit(payload.exit_code ?? 1);
+  });
+});
+
+req.on('error', (error) => {
+  console.error(`LIBRARIAN_DIAGNOSTIC git_proxy_unreachable: ${error.message}`);
+  process.exit(126);
+});
+req.write(body);
+req.end();
+"#;
+
 fn prepare_ssh_known_hosts(run_dir: &std::path::Path) -> Result<()> {
     let ssh_dir = run_dir.join("ssh");
     fs::create_dir_all(&ssh_dir)
@@ -406,6 +499,7 @@ mod tests {
                 mount_mode: MountMode::ReadOnly,
                 network_mode: NetworkMode::None,
                 secret_grant_token: None,
+                git_grant_token: Some("git-grant-token".to_string()),
             };
 
             let command = DockerRunner::new(config)
@@ -415,6 +509,16 @@ mod tests {
 
             let run_dir = home.join(".app").join("runs").join(job_id.to_string());
             assert!(command.iter().any(|part| part == "--env"));
+            assert!(command
+                .iter()
+                .any(|part| part == "LIBRARIAN_GIT_GRANT_TOKEN=git-grant-token"));
+            assert!(command
+                .iter()
+                .any(|part| part == "host.containers.internal:host-gateway"));
+            assert!(command
+                .iter()
+                .any(|part| part.contains("target=/usr/local/bin/git")));
+            assert!(run_dir.join("git").is_file());
             assert!(command.iter().any(|part| part.contains(
                 "GIT_SSH_COMMAND=ssh -o UserKnownHostsFile=/workspace/run/ssh/known_hosts"
             )));
@@ -479,6 +583,7 @@ mod tests {
                 mount_mode: MountMode::ReadOnly,
                 network_mode: NetworkMode::Provider,
                 secret_grant_token: None,
+                git_grant_token: None,
             };
 
             let command = DockerRunner::new(config)
@@ -521,6 +626,7 @@ mod tests {
                 mount_mode: MountMode::ReadOnly,
                 network_mode: NetworkMode::Provider,
                 secret_grant_token: None,
+                git_grant_token: None,
             };
 
             let command = DockerRunner::new(config)

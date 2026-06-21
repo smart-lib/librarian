@@ -17,7 +17,7 @@ use crate::{
     domain::{
         AgentInstructionFile, AgentRunSpec, Job, JobStatus, MemoryKind, Project, ProviderKind,
     },
-    gates, job_review,
+    gates, git_proxy, job_review,
     memory::{self, RetrievalRequest},
     prompt,
     providers::runtime,
@@ -247,6 +247,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         prompt::prompt_block_version(Some(prompt::TARGET_AGENTS), &agent_blocks);
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
     let instruction_files = provider_instruction_files(&db, &config, &job.provider).await?;
+    let git_grant_token = git_proxy::create_git_proxy_grant_for_job(&config, &db, job.id).await?;
     let enriched_prompt = prompt::build_agent_prompt(
         &project,
         &job.goal,
@@ -264,6 +265,7 @@ async fn run_job(config: Config, db: Database, mut job: Job) -> Result<()> {
         mount_mode: job.mount_mode,
         network_mode: job.network_mode,
         secret_grant_token: job.secret_grant_token.clone(),
+        git_grant_token,
     };
     let prompt_len = spec.prompt.chars().count();
 
@@ -556,6 +558,7 @@ async fn prepare_job(
         prompt::prompt_block_version(Some(prompt::TARGET_AGENTS), &agent_blocks);
     let agent_instruction_blocks = prompt::render_prompt_blocks(&agent_blocks);
     let instruction_files = provider_instruction_files(db, config, &job.provider).await?;
+    let git_grant_token = git_proxy::create_git_proxy_grant_for_job(config, db, job.id).await?;
     let enriched_prompt = prompt::build_agent_prompt(
         &project,
         &job.goal,
@@ -574,6 +577,7 @@ async fn prepare_job(
         mount_mode: job.mount_mode,
         network_mode: job.network_mode,
         secret_grant_token: job.secret_grant_token.clone(),
+        git_grant_token,
     };
     let command = DockerRunner::new(config.clone())
         .docker_command_parts(&spec)

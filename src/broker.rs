@@ -10,7 +10,7 @@ use axum::{
 use serde::Deserialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use crate::{config::Config, db::Database, secrets};
+use crate::{config::Config, db::Database, git_proxy, secrets};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ProviderProxyPolicyRoute {
@@ -36,6 +36,7 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/secrets/resolve", post(resolve_secret))
+        .route("/v1/git/execute", post(execute_git))
         .route("/v1/proxy/:provider/*path", post(proxy_provider))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
@@ -44,6 +45,14 @@ pub async fn serve(bind: String, db: Database, config: Config) -> Result<()> {
     println!("Librarian broker listening on http://{bind}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn execute_git(
+    State(state): State<BrokerState>,
+    Json(input): Json<git_proxy::GitProxyRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let response = git_proxy::handle_git_proxy(&state.config, &state.db, input).await?;
+    Ok(Json(response))
 }
 
 async fn health() -> impl IntoResponse {

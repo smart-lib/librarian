@@ -66,6 +66,7 @@ mod tests {
             mount_mode: MountMode::ReadOnly,
             network_mode: NetworkMode::Provider,
             secret_grant_token: None,
+            git_grant_token: None,
         }
     }
 

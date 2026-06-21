@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::{config::Config, db::Database, scheduler, worker};
+use crate::{broker, config::Config, db::Database, scheduler, worker};
 
 #[derive(Clone, Debug)]
 pub struct DaemonOptions {
@@ -21,6 +21,15 @@ pub async fn run(config: Config, db: Database, options: DaemonOptions) -> Result
         scheduler_interval.as_secs(),
         idle_interval.as_secs()
     );
+
+    let broker_bind = config.broker.bind.clone();
+    let broker_db = db.clone();
+    let broker_config = config.clone();
+    tokio::spawn(async move {
+        if let Err(error) = broker::serve(broker_bind, broker_db, broker_config).await {
+            eprintln!("Librarian broker stopped: {error}");
+        }
+    });
 
     if options.once {
         run_once(config, db, concurrency).await?;
