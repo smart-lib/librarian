@@ -79,8 +79,23 @@ impl DockerRunner {
                 );
             }
             if let Some(user) = container_user_for_host_path(host_home)? {
+                write_container_identity_files(&run_dir, &user)?;
                 parts.push("--user".to_string());
-                parts.push(user);
+                parts.push(user.spec());
+                parts.push("--mount".to_string());
+                parts.push(identity_file_mount(
+                    &self.config,
+                    &run_dir,
+                    "passwd",
+                    "/etc/passwd",
+                ));
+                parts.push("--mount".to_string());
+                parts.push(identity_file_mount(
+                    &self.config,
+                    &run_dir,
+                    "group",
+                    "/etc/group",
+                ));
             }
             if let Some(env_name) = runtime.profile_env {
                 parts.push("--env".to_string());
@@ -214,6 +229,19 @@ fn run_mount(config: &Config, run_dir: &std::path::Path) -> String {
     )
 }
 
+fn identity_file_mount(
+    config: &Config,
+    run_dir: &std::path::Path,
+    filename: &str,
+    target: &str,
+) -> String {
+    format!(
+        "type=bind,source={},target={},readonly",
+        mount_source(config, &run_dir.join(filename)),
+        target
+    )
+}
+
 fn instruction_file_mount(
     config: &Config,
     run_dir: &std::path::Path,
@@ -258,17 +286,45 @@ fn mount_source(config: &Config, path: &std::path::Path) -> String {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ContainerUser {
+    uid: u32,
+    gid: u32,
+}
+
+impl ContainerUser {
+    fn spec(&self) -> String {
+        format!("{}:{}", self.uid, self.gid)
+    }
+}
+
+fn write_container_identity_files(run_dir: &std::path::Path, user: &ContainerUser) -> Result<()> {
+    let passwd = format!(
+        "root:x:0:0:root:/root:/bin/sh\nagent:x:{}:{}:Librarian Agent:/home/agent:/bin/sh\n",
+        user.uid, user.gid
+    );
+    let group = format!("root:x:0:\nagent:x:{}:\n", user.gid);
+    fs::write(run_dir.join("passwd"), passwd)
+        .with_context(|| format!("Failed to write {}", run_dir.join("passwd").display()))?;
+    fs::write(run_dir.join("group"), group)
+        .with_context(|| format!("Failed to write {}", run_dir.join("group").display()))?;
+    Ok(())
+}
+
 #[cfg(unix)]
-fn container_user_for_host_path(path: &std::path::Path) -> Result<Option<String>> {
+fn container_user_for_host_path(path: &std::path::Path) -> Result<Option<ContainerUser>> {
     use std::os::unix::fs::MetadataExt;
 
     let metadata =
         std::fs::metadata(path).with_context(|| format!("Failed to inspect {}", path.display()))?;
-    Ok(Some(format!("{}:{}", metadata.uid(), metadata.gid())))
+    Ok(Some(ContainerUser {
+        uid: metadata.uid(),
+        gid: metadata.gid(),
+    }))
 }
 
 #[cfg(not(unix))]
-fn container_user_for_host_path(_path: &std::path::Path) -> Result<Option<String>> {
+fn container_user_for_host_path(_path: &std::path::Path) -> Result<Option<ContainerUser>> {
     Ok(None)
 }
 
@@ -306,8 +362,9 @@ mod tests {
             std::fs::create_dir_all(&project).expect("project");
             config.codex.host_home = Some(codex_home);
             config.codex.mount_host_home = true;
+            let job_id = Uuid::new_v4();
             let spec = AgentRunSpec {
-                job_id: Uuid::new_v4(),
+                job_id,
                 project_path: project,
                 provider: ProviderKind::Codex,
                 goal: "test".to_string(),
@@ -324,7 +381,31 @@ mod tests {
                 .expect("command");
 
             #[cfg(unix)]
-            assert!(command.iter().any(|part| part == "--user"));
+            {
+                use std::os::unix::fs::MetadataExt;
+
+                let metadata = std::fs::metadata(&codex_home).expect("codex home metadata");
+                assert!(command.iter().any(|part| part == "--user"));
+                assert!(command
+                    .iter()
+                    .any(|part| part == &format!("{}:{}", metadata.uid(), metadata.gid())));
+                assert!(command
+                    .iter()
+                    .any(|part| part.contains("target=/etc/passwd")));
+                assert!(command
+                    .iter()
+                    .any(|part| part.contains("target=/etc/group")));
+
+                let run_dir = home.join(".app").join("runs").join(job_id.to_string());
+                let passwd = std::fs::read_to_string(run_dir.join("passwd")).expect("passwd");
+                let group = std::fs::read_to_string(run_dir.join("group")).expect("group");
+                assert!(passwd.contains(&format!(
+                    "agent:x:{}:{}:Librarian Agent:/home/agent:/bin/sh",
+                    metadata.uid(),
+                    metadata.gid()
+                )));
+                assert!(group.contains(&format!("agent:x:{}:", metadata.gid())));
+            }
             #[cfg(not(unix))]
             assert!(!command.iter().any(|part| part == "--user"));
         }
