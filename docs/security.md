@@ -42,7 +42,10 @@ it, so it should not be the default for untrusted agent work.
 
 The default broker bind is `127.0.0.1:17379`. Containers use
 `broker.container_url` from config, defaulting to
-`http://host.containers.internal:17379`.
+`http://host.containers.internal:17379`. When the daemon owns containerized
+work and the container URL uses a host-gateway address, the daemon may listen on
+a container-reachable bind for that port; broker operations that expose secrets
+or git credentials still require scoped grant tokens.
 
 ## Prompt And Response Gates
 

@@ -22,7 +22,7 @@ pub async fn run(config: Config, db: Database, options: DaemonOptions) -> Result
         idle_interval.as_secs()
     );
 
-    let broker_bind = config.broker.bind.clone();
+    let broker_bind = container_reachable_broker_bind(&config);
     let broker_db = db.clone();
     let broker_config = config.clone();
     tokio::spawn(async move {
@@ -58,6 +58,30 @@ pub async fn run(config: Config, db: Database, options: DaemonOptions) -> Result
     }
 }
 
+fn container_reachable_broker_bind(config: &Config) -> String {
+    let Some((host, port)) = split_host_port(&config.broker.bind) else {
+        return config.broker.bind.clone();
+    };
+    if !is_loopback_host(host) || !container_url_uses_host_gateway(&config.broker.container_url) {
+        return config.broker.bind.clone();
+    }
+    format!("0.0.0.0:{port}")
+}
+
+fn split_host_port(value: &str) -> Option<(&str, &str)> {
+    value.rsplit_once(':')
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
+}
+
+fn container_url_uses_host_gateway(value: &str) -> bool {
+    value.contains("://host.containers.internal:")
+        || value.contains("://host.docker.internal:")
+        || value.contains("://172.17.0.1:")
+}
+
 async fn run_once(config: Config, db: Database, concurrency: usize) -> Result<()> {
     let report = scheduler::tick(&db, &config).await?;
     println!(
@@ -71,4 +95,39 @@ async fn run_once(config: Config, db: Database, concurrency: usize) -> Result<()
         println!("Worker ran {ran} job(s).");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_broker_bind_is_container_reachable_for_host_gateway_url() {
+        let mut config = Config::load_or_default(None).expect("config");
+        config.broker.bind = "127.0.0.1:17379".to_string();
+        config.broker.container_url = "http://host.containers.internal:17379".to_string();
+
+        assert_eq!(container_reachable_broker_bind(&config), "0.0.0.0:17379");
+    }
+
+    #[test]
+    fn daemon_broker_bind_respects_explicit_non_loopback_bind() {
+        let mut config = Config::load_or_default(None).expect("config");
+        config.broker.bind = "192.168.1.20:17379".to_string();
+        config.broker.container_url = "http://host.containers.internal:17379".to_string();
+
+        assert_eq!(
+            container_reachable_broker_bind(&config),
+            "192.168.1.20:17379"
+        );
+    }
+
+    #[test]
+    fn daemon_broker_bind_stays_loopback_for_loopback_container_url() {
+        let mut config = Config::load_or_default(None).expect("config");
+        config.broker.bind = "127.0.0.1:17379".to_string();
+        config.broker.container_url = "http://127.0.0.1:17379".to_string();
+
+        assert_eq!(container_reachable_broker_bind(&config), "127.0.0.1:17379");
+    }
 }
