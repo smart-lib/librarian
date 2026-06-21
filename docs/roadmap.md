@@ -707,6 +707,149 @@ Slash commands:
   `library_tool`, `workspace_tool`, `memory_tool`, and `settings_tool` events
   for mutating commands.
 
+## Priority 1D: Lightweight Research Tool Loop Agents
+
+Status: Planned research/design track.
+
+Working definition: RTL means a Research/Tool Loop rather than classic
+single-shot RAG. Librarian decomposes an analysis request into bounded research
+tasks, launches one or more lightweight specialist agents, lets each agent use a
+small role-appropriate tool set to inspect Library, Projects, memory, and
+selected external/context sources, then synthesizes their findings into a final
+answer or a structured Markdown artifact in `Library`.
+
+Goal: make Librarian good at gathering and analyzing information without always
+spawning heavyweight coding containers. Containerized background agents remain
+the right default for code execution, dependency installation, risky project
+writes, and provider CLI isolation. Lightweight analysis agents should be cheap,
+auditable, mostly read-only, and able to run inside the host orchestrator or a
+small worker process when they only need bounded native tools.
+
+Research direction: RTL and RAG should be complementary. RAG is still useful
+for fast recall over indexed memory and documents, especially when a direct
+answer needs a small set of relevant chunks. RTL is better when the task needs
+iterative search, source-specific operations, counting, comparison, tree
+inspection, structured extraction, or parallel investigation. The desired shape
+is closer to agentic retrieval: the model chooses retrieval/tool actions at
+runtime, observes results, refines the query, and hands back a compact evidence
+packet for synthesis.
+
+Minimum tool coverage:
+
+- Common read/query primitives shared by Library, Projects, and memory:
+  `list_tree`, `glob`, `find_paths`, `read_slice`, `stat`, `metadata`,
+  `search_text`, `count_matches`, `summarize_matches`, and
+  `sample_matches`.
+- Library-specific documentation tools: Markdown heading outline, frontmatter
+  read/update, wikilink/backlink scan, section read, section replace proposal,
+  duplicate-note detection, broken-link report, stale-run-summary scan, and
+  note clustering by folder/tag/link neighborhood.
+- Project-specific analysis tools: file tree with include/exclude filters,
+  regex search with match counts per file, language/filetype breakdown,
+  dependency manifest discovery, test/config/script discovery, git status/log
+  summaries, symbol or outline extraction where cheap, and read-only diff
+  summaries. Mutating project operations stay behind existing workspace/agent
+  policy gates.
+- Memory-specific tools: scoped memory search, recent memory by project/node,
+  memory type histogram, contradiction/supersession traversal, confidence and
+  salience filters, raw transcript exclusion by default, and citation-oriented
+  memory packet export.
+- Cross-source analysis tools: compare two source sets, build evidence tables,
+  deduplicate overlapping findings, cite source paths/ids, and emit structured
+  JSON plus Markdown summaries so a synthesis agent does not need raw bulk
+  context.
+
+Architecture requirements:
+
+- Build one shared native tool substrate first. Library, Projects, and memory
+  tools should reuse path validation, glob/regex compilation, result paging,
+  limit enforcement, audit events, permission gates, redaction, and structured
+  result schemas instead of growing three parallel implementations.
+- Model sources as capabilities over common traits: `TreeSource`,
+  `TextSearchSource`, `DocumentSource`, `StructuredRecordSource`, and
+  `MutableDocumentSource` where needed. Library and Projects can share the
+  filesystem-backed traits; memory uses SQLite-backed implementations with the
+  same query/result envelope.
+- Every tool must support explicit limits: max files scanned, max bytes read,
+  max matches, timeout, follow-symlinks policy, binary-file handling, and
+  pagination cursor. Defaults should favor small evidence packets over dumping
+  whole files into prompts.
+- Tool results should be typed and citeable: source kind, relative path or
+  memory id, byte/line ranges when available, match counts, truncated flags,
+  and stable event ids.
+- Keep write operations proposal-oriented for lightweight agents. A research
+  agent may propose a Library note edit, memory correction, or project action,
+  but execution still goes through the existing approval/policy layer.
+
+Agent orchestration:
+
+- Add a lightweight `analysis_agent` job kind separate from containerized
+  `provider_agent` jobs. It can run inside the daemon with strict tool limits
+  or in a small local worker pool, with concurrency and budget separate from
+  coding agents.
+- Support role-specialized subagents such as `library_researcher`,
+  `project_inspector`, `memory_auditor`, `evidence_checker`, and
+  `synthesis_writer`.
+- The Librarian overseer should plan subtasks, select sources and roles, launch
+  subagents, collect evidence packets, then either synthesize directly or
+  launch a dedicated synthesis agent.
+- Parallel fan-out should be bounded by source, role, and budget. The default
+  path should remain one or two agents for ordinary questions, with larger
+  fan-out requiring explicit approval or a higher autonomy preset.
+- Store each subagent result as an auditable run artifact: prompt/instruction
+  version, tool manifest version, tool calls, source ids, summary, confidence,
+  and unresolved questions.
+
+Tools vs embedded MCP server:
+
+- Native tools are the preferred first implementation for core Library,
+  Projects, and memory access because they can reuse current Rust modules,
+  permission gates, audit logs, slash commands, smoke tests, and structured
+  admin UI affordances without adding a protocol boundary.
+- MCP is attractive once the tool catalog needs to be shared with external
+  clients/providers or when a provider natively speaks MCP. It gives standard
+  discovery, JSON schema tool descriptions, resources, pagination patterns, and
+  model-controlled tool invocation semantics.
+- MCP costs: another server lifecycle, protocol versioning, trust/admission
+  policy, tool allowlists, prompt-injection surface, stdio/process hardening,
+  and extra test matrix. Do not put the first core tool boundary behind MCP
+  unless it is still backed by the same native capability layer.
+- Recommended sequence: implement a native `ToolRegistry` and capability
+  interfaces first; expose the same registry through slash commands, internal
+  agent tools, admin API, and later an optional local MCP server adapter. MCP
+  should be an adapter over the registry, not the source of business logic.
+
+Tool discovery and prompt economy:
+
+- Do not render a huge global tool list into every prompt. Maintain a canonical
+  machine-readable tool manifest with name, role tags, source kind, risk level,
+  required permission, input/output schema, token-cost hints, and examples.
+- Select a compact role-specific manifest at launch time. A
+  `project_inspector` sees project read/search/git-summary tools; a
+  `memory_auditor` sees scoped memory search and correction-proposal tools; a
+  `synthesis_writer` sees evidence packets and Library write-proposal tools.
+- Let agents ask for additional tool groups through a controlled
+  `request_toolset` action when they can justify the need. The overseer applies
+  permission policy and records the expansion.
+- Prefer hierarchical discovery for large catalogs: start with tool groups and
+  schemas, then reveal detailed examples only for selected groups. This keeps
+  stable prompt prefixes cacheable while letting tools grow.
+
+Acceptance criteria:
+
+- A user can ask Librarian to analyze a folder, project, or memory scope and get
+  a cited answer without launching a containerized coding agent.
+- A lightweight agent can list a directory tree with regex/path filters, count
+  keyword or regex matches across bounded files, read selected slices, and
+  return a structured evidence packet.
+- The same read/search/count primitives work across Library, Projects, and
+  memory, with source-specific adapters rather than duplicated implementations.
+- Tool calls are permissioned, audited, paginated/limited, and visible in chat
+  or run summaries.
+- Librarian can fan out to at least two role-specialized analysis agents and
+  synthesize their results into a Markdown note under `Library` through the
+  approval/write path.
+
 ## Priority 2: Prompt Builder and Instruction Authoring
 
 Status: Backend model started.
@@ -1441,6 +1584,24 @@ planned.
   Sources: <https://sqlite.org/vec1>,
   <https://github.com/asg017/sqlite-vec>,
   <https://github.com/asg017/sqlite-vss>
+- RAG remains useful as a fast indexed recall layer, but research direction for
+  Librarian should move toward agentic retrieval/tool loops when tasks require
+  iterative source selection, counting, comparison, or structured evidence
+  gathering. The original RAG formulation combines parametric model knowledge
+  with non-parametric retrieved memory; newer agentic/tool-use work emphasizes
+  interleaving reasoning with actions and exposing retrieval tools to the model
+  at runtime instead of stuffing a fixed retrieval set into the prompt.
+  Sources: <https://arxiv.org/abs/2005.11401>,
+  <https://arxiv.org/abs/2210.03629>,
+  <https://arxiv.org/abs/2602.03442>
+- MCP is a good future adapter for tool/resource interoperability, but the core
+  Library/Projects/memory tools should first live in a native registry so they
+  reuse Librarian permissions, audit logs, source-specific limits, and tests.
+  The MCP specification supports model-discoverable tools, resources, schemas,
+  and structured tool results, while also requiring access control, rate
+  limiting, output sanitization, confirmation UX, timeouts, and audit logging.
+  Sources: <https://modelcontextprotocol.io/specification/2025-06-18/server/tools>,
+  <https://modelcontextprotocol.io/specification/2025-06-18/server/resources>
 
 ## Open Questions
 
