@@ -28,7 +28,7 @@ mod worker;
 
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -498,6 +498,28 @@ enum SecretsCommand {
         #[arg(long)]
         value: Option<String>,
     },
+    GitSshKey {
+        name: String,
+        #[arg(long)]
+        key_file: Option<PathBuf>,
+        #[arg(long)]
+        value: Option<String>,
+        #[arg(long = "remote")]
+        allowed_remotes: Vec<String>,
+        #[arg(long)]
+        default_for_project: Option<String>,
+    },
+    GitHttpsToken {
+        name: String,
+        #[arg(long)]
+        value: Option<String>,
+        #[arg(long = "remote")]
+        allowed_remotes: Vec<String>,
+        #[arg(long)]
+        default_for_project: Option<String>,
+        #[arg(long)]
+        expires_at: Option<String>,
+    },
     List,
     Grant {
         secret: String,
@@ -688,6 +710,45 @@ fn resolve_cli_home(cli: &Cli) -> Result<Option<PathBuf>> {
         Ok(Some(default))
     } else {
         Ok(Some(PathBuf::from(input)))
+    }
+}
+
+fn read_secret_plaintext(value: Option<String>, file: Option<&Path>) -> Result<String> {
+    if let Some(value) = value {
+        return Ok(value);
+    }
+    if let Some(file) = file {
+        return fs::read_to_string(file)
+            .with_context(|| format!("Failed to read secret file {}", file.display()));
+    }
+    let mut input = String::new();
+    io::stdin()
+        .read_to_string(&mut input)
+        .context("Failed to read secret value from stdin")?;
+    let value = input.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        anyhow::bail!("Secret value is empty. Pass --value, --key-file, or pipe it on stdin.");
+    }
+    Ok(value)
+}
+
+fn git_secret_metadata(
+    allowed_remotes: &[String],
+    default_for_project: Option<&str>,
+    expires_at: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "allowed_remotes": allowed_remotes,
+        "default_for_project": default_for_project,
+        "expires_at": expires_at,
+    })
+}
+
+fn format_remote_list(remotes: &[String]) -> String {
+    if remotes.is_empty() {
+        "<none yet>".to_string()
+    } else {
+        remotes.join(", ")
     }
 }
 
@@ -1698,6 +1759,64 @@ async fn main() -> Result<()> {
                     println!(
                         "Stored secret {} `{}` for provider {} using {}",
                         record.id, record.name, record.provider, record.encryption
+                    );
+                }
+                SecretsCommand::GitSshKey {
+                    name,
+                    key_file,
+                    value,
+                    allowed_remotes,
+                    default_for_project,
+                } => {
+                    let plaintext = read_secret_plaintext(value, key_file.as_deref())?;
+                    let record = vault
+                        .store_with_metadata(
+                            &db,
+                            &name,
+                            "git",
+                            "ssh-private-key",
+                            &plaintext,
+                            git_secret_metadata(
+                                &allowed_remotes,
+                                default_for_project.as_deref(),
+                                None,
+                            ),
+                        )
+                        .await?;
+                    println!(
+                        "Stored git SSH key {} `{}`. Allowed remotes: {}",
+                        record.id,
+                        record.name,
+                        format_remote_list(&allowed_remotes)
+                    );
+                }
+                SecretsCommand::GitHttpsToken {
+                    name,
+                    value,
+                    allowed_remotes,
+                    default_for_project,
+                    expires_at,
+                } => {
+                    let plaintext = read_secret_plaintext(value, None)?;
+                    let record = vault
+                        .store_with_metadata(
+                            &db,
+                            &name,
+                            "git",
+                            "https-token",
+                            &plaintext,
+                            git_secret_metadata(
+                                &allowed_remotes,
+                                default_for_project.as_deref(),
+                                expires_at.as_deref(),
+                            ),
+                        )
+                        .await?;
+                    println!(
+                        "Stored git HTTPS token {} `{}`. Allowed remotes: {}",
+                        record.id,
+                        record.name,
+                        format_remote_list(&allowed_remotes)
                     );
                 }
                 SecretsCommand::List => {

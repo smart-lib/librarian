@@ -33,7 +33,21 @@ impl SecretVault {
         kind: &str,
         plaintext: &str,
     ) -> Result<SecretRecord> {
+        self.store_with_metadata(db, name, provider, kind, plaintext, serde_json::json!({}))
+            .await
+    }
+
+    pub async fn store_with_metadata(
+        &self,
+        db: &Database,
+        name: &str,
+        provider: &str,
+        kind: &str,
+        plaintext: &str,
+        metadata: serde_json::Value,
+    ) -> Result<SecretRecord> {
         let encrypted = encrypt_secret(&self.config, plaintext.as_bytes())?;
+        let metadata = merge_secret_metadata(metadata, plaintext.len());
         let record = db
             .upsert_secret_record(
                 name,
@@ -41,10 +55,7 @@ impl SecretVault {
                 kind,
                 encrypted.bytes,
                 encrypted.scheme,
-                serde_json::json!({
-                    "stored_by": "secret-vault",
-                    "plaintext_len": plaintext.len(),
-                }),
+                metadata,
             )
             .await?;
         db.add_secret_audit_event(
@@ -179,6 +190,23 @@ impl SecretVault {
             }
         }
     }
+}
+
+fn merge_secret_metadata(
+    mut metadata: serde_json::Value,
+    plaintext_len: usize,
+) -> serde_json::Value {
+    if !metadata.is_object() {
+        metadata = serde_json::json!({});
+    }
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("stored_by".to_string(), serde_json::json!("secret-vault"));
+        object.insert(
+            "plaintext_len".to_string(),
+            serde_json::json!(plaintext_len),
+        );
+    }
+    metadata
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
