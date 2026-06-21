@@ -56,6 +56,12 @@ impl DockerRunner {
                 self.config.broker.container_url
             ));
         }
+        prepare_ssh_known_hosts(&run_dir)?;
+        parts.push("--env".to_string());
+        parts.push(
+            "GIT_SSH_COMMAND=ssh -o UserKnownHostsFile=/workspace/run/ssh/known_hosts -o StrictHostKeyChecking=accept-new"
+                .to_string(),
+        );
 
         let runtime = runtime_spec(&spec.provider, &self.config);
         if runtime.mount_host_home {
@@ -229,6 +235,33 @@ fn run_mount(config: &Config, run_dir: &std::path::Path) -> String {
     )
 }
 
+fn prepare_ssh_known_hosts(run_dir: &std::path::Path) -> Result<()> {
+    let ssh_dir = run_dir.join("ssh");
+    fs::create_dir_all(&ssh_dir)
+        .with_context(|| format!("Failed to create {}", ssh_dir.display()))?;
+    let target = ssh_dir.join("known_hosts");
+    if target.exists() {
+        return Ok(());
+    }
+
+    let source = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".ssh").join("known_hosts"))
+        .filter(|path| path.is_file());
+    if let Some(source) = source {
+        fs::copy(&source, &target).with_context(|| {
+            format!(
+                "Failed to copy SSH known_hosts from {} to {}",
+                source.display(),
+                target.display()
+            )
+        })?;
+    } else {
+        fs::write(&target, "").with_context(|| format!("Failed to write {}", target.display()))?;
+    }
+    Ok(())
+}
+
 fn identity_file_mount(
     config: &Config,
     run_dir: &std::path::Path,
@@ -380,6 +413,16 @@ mod tests {
                 .await
                 .expect("command");
 
+            let run_dir = home.join(".app").join("runs").join(job_id.to_string());
+            assert!(command.iter().any(|part| part == "--env"));
+            assert!(command.iter().any(|part| part.contains(
+                "GIT_SSH_COMMAND=ssh -o UserKnownHostsFile=/workspace/run/ssh/known_hosts"
+            )));
+            assert!(command
+                .iter()
+                .any(|part| part.contains("StrictHostKeyChecking=accept-new")));
+            assert!(run_dir.join("ssh").join("known_hosts").is_file());
+
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt;
@@ -396,7 +439,6 @@ mod tests {
                     .iter()
                     .any(|part| part.contains("target=/etc/group")));
 
-                let run_dir = home.join(".app").join("runs").join(job_id.to_string());
                 let passwd = std::fs::read_to_string(run_dir.join("passwd")).expect("passwd");
                 let group = std::fs::read_to_string(run_dir.join("group")).expect("group");
                 assert!(passwd.contains(&format!(
