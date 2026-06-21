@@ -117,6 +117,8 @@ pub async fn create_git_proxy_grant_for_job(
     db: &Database,
     job_id: Uuid,
 ) -> Result<Option<String>> {
+    let job = db.get_job(job_id).await?;
+    let project = db.get_project_by_id(job.project_id).await?;
     let git_secrets = db
         .list_secret_records()
         .await?
@@ -126,16 +128,17 @@ pub async fn create_git_proxy_grant_for_job(
     if git_secrets.is_empty() {
         return Ok(None);
     }
-    if git_secrets.len() > 1 {
+    let selected = select_git_credential_for_project(&git_secrets, &project)?;
+    let Some(selected) = selected else {
         bail!(
             "Multiple git credentials are stored. Select a project default before launching brokered git jobs."
         );
-    }
+    };
     let vault = secrets::SecretVault::new(config.clone());
     let grant_id = vault
         .grant(
             db,
-            &git_secrets[0].id.to_string(),
+            &selected.id.to_string(),
             Some(job_id),
             Some("git"),
             GIT_PROXY_CAPABILITY,
@@ -144,6 +147,43 @@ pub async fn create_git_proxy_grant_for_job(
         )
         .await?;
     Ok(Some(secrets::encode_grant_token(grant_id)))
+}
+
+fn select_git_credential_for_project<'a>(
+    secrets: &'a [SecretRecord],
+    project: &Project,
+) -> Result<Option<&'a SecretRecord>> {
+    if secrets.is_empty() {
+        return Ok(None);
+    }
+    let matches = secrets
+        .iter()
+        .filter(|secret| secret_matches_project_default(secret, project))
+        .collect::<Vec<_>>();
+    if matches.len() == 1 {
+        return Ok(Some(matches[0]));
+    }
+    if matches.len() > 1 {
+        bail!(
+            "Multiple git credentials are marked as default for project `{}`",
+            project.name
+        );
+    }
+    if secrets.len() == 1 {
+        return Ok(Some(&secrets[0]));
+    }
+    Ok(None)
+}
+
+fn secret_matches_project_default(secret: &SecretRecord, project: &Project) -> bool {
+    let Some(value) = secret
+        .metadata
+        .get("default_for_project")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    value == project.name || value == project.id.to_string()
 }
 
 fn is_git_credential(secret: &SecretRecord) -> bool {
@@ -509,6 +549,20 @@ mod tests {
         }
     }
 
+    fn secret(name: &str, default_for_project: Option<&str>) -> SecretRecord {
+        SecretRecord {
+            id: Uuid::new_v4(),
+            name: name.to_string(),
+            provider: "git".to_string(),
+            kind: "ssh-private-key".to_string(),
+            ciphertext: Vec::new(),
+            encryption: "test".to_string(),
+            metadata: serde_json::json!({ "default_for_project": default_for_project }),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
     #[test]
     fn classifies_git_commands() {
         assert_eq!(
@@ -553,5 +607,30 @@ mod tests {
             "git@github.com:other/*",
             "git@github.com:no-more-care/nomorecare.gg.git"
         ));
+    }
+
+    #[test]
+    fn selects_single_or_project_default_git_credential() {
+        let project = project();
+        let only = vec![secret("only", None)];
+        assert_eq!(
+            select_git_credential_for_project(&only, &project)
+                .expect("single")
+                .expect("selected")
+                .name,
+            "only"
+        );
+
+        let many = vec![
+            secret("other", Some("Other")),
+            secret("selected", Some(&project.name)),
+        ];
+        assert_eq!(
+            select_git_credential_for_project(&many, &project)
+                .expect("project default")
+                .expect("selected")
+                .name,
+            "selected"
+        );
     }
 }
