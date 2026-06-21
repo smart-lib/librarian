@@ -8,12 +8,14 @@ use chrono::{Duration, Utc};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
 use std::io::Write;
+use std::{fs, path::PathBuf};
 use uuid::Uuid;
 
 use crate::{config::Config, db::Database, domain::SecretRecord};
 
 const ENC_DPAPI: &str = "windows-dpapi-v1";
 const ENC_ENV_AES: &str = "env-aes-gcm-v1";
+const ENC_LOCAL_AES: &str = "local-aes-gcm-v1";
 
 #[derive(Clone, Debug)]
 pub struct SecretVault {
@@ -183,10 +185,12 @@ impl SecretVault {
             }
         } else {
             EncryptionStatus {
-                scheme: ENC_ENV_AES.to_string(),
-                encrypted_at_rest: false,
-                note: "Set LIBRARIAN_SECRET_KEY on this platform before storing secrets"
-                    .to_string(),
+                scheme: ENC_LOCAL_AES.to_string(),
+                encrypted_at_rest: true,
+                note: format!(
+                    "AES-GCM uses Librarian's local master key at {}",
+                    local_master_key_path(&self.config).display()
+                ),
             }
         }
     }
@@ -241,7 +245,11 @@ fn encrypt_secret(config: &Config, plaintext: &[u8]) -> Result<EncryptedSecret> 
     }
     #[cfg(not(windows))]
     {
-        encrypt_with_env_key(config, plaintext)
+        if std::env::var("LIBRARIAN_SECRET_KEY").is_ok() {
+            encrypt_with_key(config, plaintext, ENC_ENV_AES, MasterKeySource::Env)
+        } else {
+            encrypt_with_key(config, plaintext, ENC_LOCAL_AES, MasterKeySource::LocalFile)
+        }
     }
 }
 
@@ -258,17 +266,23 @@ fn decrypt_secret(config: &Config, scheme: &str, ciphertext: &[u8]) -> Result<Ve
                 bail!("Windows DPAPI secret cannot be decrypted on this platform")
             }
         }
-        ENC_ENV_AES => decrypt_with_env_key(config, ciphertext),
+        ENC_ENV_AES => decrypt_with_key(config, ciphertext, MasterKeySource::Env),
+        ENC_LOCAL_AES => decrypt_with_key(config, ciphertext, MasterKeySource::LocalFile),
         _ => bail!("Unsupported secret encryption scheme `{scheme}`"),
     }
 }
 
 #[cfg(not(windows))]
-fn encrypt_with_env_key(config: &Config, plaintext: &[u8]) -> Result<EncryptedSecret> {
+fn encrypt_with_key(
+    config: &Config,
+    plaintext: &[u8],
+    scheme: &'static str,
+    source: MasterKeySource,
+) -> Result<EncryptedSecret> {
     use aes_gcm::aead::OsRng;
     use rand::RngCore;
 
-    let key = env_key(config)?;
+    let key = master_key(config, source)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let mut nonce_bytes = [0_u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -279,17 +293,18 @@ fn encrypt_with_env_key(config: &Config, plaintext: &[u8]) -> Result<EncryptedSe
             .encrypt(nonce, plaintext)
             .map_err(|_| anyhow::anyhow!("Failed to encrypt secret"))?,
     );
-    Ok(EncryptedSecret {
-        scheme: ENC_ENV_AES,
-        bytes: out,
-    })
+    Ok(EncryptedSecret { scheme, bytes: out })
 }
 
-fn decrypt_with_env_key(config: &Config, ciphertext: &[u8]) -> Result<Vec<u8>> {
+fn decrypt_with_key(
+    config: &Config,
+    ciphertext: &[u8],
+    source: MasterKeySource,
+) -> Result<Vec<u8>> {
     if ciphertext.len() < 12 {
         bail!("Ciphertext is too short");
     }
-    let key = env_key(config)?;
+    let key = master_key(config, source)?;
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
     let (nonce_bytes, body) = ciphertext.split_at(12);
     cipher
@@ -297,14 +312,60 @@ fn decrypt_with_env_key(config: &Config, ciphertext: &[u8]) -> Result<Vec<u8>> {
         .map_err(|_| anyhow::anyhow!("Failed to decrypt secret"))
 }
 
-fn env_key(config: &Config) -> Result<[u8; 32]> {
-    let raw = std::env::var("LIBRARIAN_SECRET_KEY")
-        .context("LIBRARIAN_SECRET_KEY must be set before storing secrets on this platform")?;
+#[derive(Clone, Copy)]
+enum MasterKeySource {
+    Env,
+    LocalFile,
+}
+
+fn master_key(config: &Config, source: MasterKeySource) -> Result<[u8; 32]> {
+    let raw = match source {
+        MasterKeySource::Env => std::env::var("LIBRARIAN_SECRET_KEY")
+            .context("LIBRARIAN_SECRET_KEY is required to decrypt env-key secrets")?,
+        MasterKeySource::LocalFile => read_or_create_local_master_key(config)?,
+    };
     let mut hasher = Sha256::new();
     hasher.update(config.home.to_string_lossy().as_bytes());
     hasher.update(b"\0");
     hasher.update(raw.as_bytes());
     Ok(hasher.finalize().into())
+}
+
+fn local_master_key_path(config: &Config) -> PathBuf {
+    config.home.join(".cfg").join("secret.key")
+}
+
+fn read_or_create_local_master_key(config: &Config) -> Result<String> {
+    let path = local_master_key_path(config);
+    if path.exists() {
+        return Ok(fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {}", path.display()))?
+            .trim()
+            .to_string());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create {}", parent.display()))?;
+    }
+    let key = generate_local_master_key();
+    fs::write(&path, format!("{key}\n"))
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("Failed to chmod {}", path.display()))?;
+    }
+    Ok(key)
+}
+
+fn generate_local_master_key() -> String {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use rand::RngCore;
+
+    let mut bytes = [0_u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 pub fn encode_grant_token(grant_id: Uuid) -> String {
@@ -363,4 +424,30 @@ fn run_powershell_with_stdin(script: &str, stdin: &[u8]) -> Result<String> {
         );
     }
     Ok(String::from_utf8(output.stdout)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[test]
+    fn local_master_key_is_created_under_cfg() {
+        let home = std::env::current_dir()
+            .expect("cwd")
+            .join(format!(".librarian-test-secret-key-{}", Uuid::new_v4()));
+        let config = Config::load_or_default(Some(home.clone())).expect("config");
+        config.ensure_layout().expect("layout");
+
+        let key = read_or_create_local_master_key(&config).expect("key");
+        assert!(!key.is_empty());
+        assert!(home.join(".cfg").join("secret.key").is_file());
+        assert_eq!(
+            read_or_create_local_master_key(&config).expect("same key"),
+            key
+        );
+
+        std::fs::remove_dir_all(home).ok();
+    }
 }
